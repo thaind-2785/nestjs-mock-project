@@ -307,7 +307,9 @@ and ID, preventing cross-object mutation. Singleton types use position `0`; albu
 reorder validates the complete target-bound ID set and uses a collision-safe bulk or
 temporary-position update atomically. A bounded reconciliation job detects orphan
 metadata/cloud objects. Deactivation preserves media; only hard deletion detaches it.
-See ADR-0003.
+The Draw.io ERD therefore uses a dashed `rooms -> attachments` connector labelled
+`logical ROOM target (no FK)`; it documents the application relation without
+pretending MySQL can enforce it. See ADR-0003.
 
 The first-admin CLI identifies one already-provisioned account using both `user_id`
 and its matching normalized verified email. It rejects missing/inactive/mismatched

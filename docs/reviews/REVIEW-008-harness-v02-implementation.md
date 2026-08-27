@@ -1,17 +1,51 @@
 # REVIEW-008: Harness v0.2 implementation
 
 - Spec / plan: `SPEC-002-harness-runtime-enforcement.md` / `PLAN-003-harness-runtime-enforcement.md`
-- Author: primary implementation agent
+- Author: primary implementation agent, with ChatGPT implementation handoff for final High-finding remediation
 - Independent reviewer: Codex agent `/root/harness_v01_review`
-- Commit/revision reviewed: current working tree on 2026-08-27, including post-review fixes; `docs/architecture/hotel-database.drawio` excluded as an unrelated change
+- Commit/revision reviewed: independent review snapshot from 2026-08-27; author-side remediation continued on the PR branch after that snapshot
 - Date: 2026-08-27
-- Verdict: Block
+- Verdict: Block pending independent re-review
 
-Post-review fixes close H2 and M1-M4 from the first pass. H1 is improved but still
-open, and adversarial CI validation found new H3. Harness v0.2 must not be marked
-complete until H1 and H3 are fixed and independently reverified.
+The original independent review blocked Harness v0.2 on H1 and H3 after earlier
+post-review fixes had closed H2 and M1-M4. Codex then exhausted its working context,
+and ChatGPT continued implementation on the same branch. The latest author-side
+remediation addresses both open High findings and the full CI gate is green, but the
+assistant that authored those final fixes is not an independent reviewer. Therefore
+this report remains `Block` until a fresh reviewer verifies H1/H3 closure.
 
-## Verification performed
+## Author-side closure update
+
+The following remediation is implemented on the PR branch after the independent
+review snapshot:
+
+- H1: the entry-command schema now requires
+  `integrity_policy: committed_dependency_graph` for every
+  `restore_locked_dependencies` command and rejects that policy on other permission
+  classes. Runtime command-catalog drift checks remain fail-closed. The dependency
+  graph probe uses an implementation-approved absolute Git executable and does not
+  trust ambient `PATH` for that probe. Focused closure tests cover the missing-policy
+  and wrong permission/policy pairings.
+- H3: the existing CI validator now fixes step order and complete step shapes. An
+  additional CI envelope validator rejects workflow-level `env`/`defaults` and
+  job-level `env`/`defaults`/`container`/`services`, and fixes the reviewed workflow,
+  trigger, concurrency, job, and runner envelope. The public `npm run harness:check`
+  gate includes this envelope validation. Focused tests cover workflow/job injection
+  and execution-surface expansion.
+- The unrelated `docs/architecture/hotel-database.drawio` working-tree change was
+  removed from the PR before final verification.
+- GitHub Actions run 32 for commit `19c82f6819ed2a549f90c5a101db2af31030b5f7`
+  completed successfully. The gate includes Harness validation, 67 Harness tests, 10
+  deterministic behavioral fixtures, formatting, lint, unit, integration, E2E, and
+  build.
+
+Important boundary: CI workflow validation is checked-in drift detection. It does not
+turn PR-controlled workflow code into a pre-execution security sandbox. A malicious
+change that can alter both workflow and validator still requires repository-host
+review/merge controls. `merge_enforcement.status: external_not_verified` therefore
+remains accurate and must not be upgraded by this change.
+
+## Verification performed by the independent reviewer snapshot
 
 - Read `AGENTS.md`, the repository delivery skill, `REVIEW-007`, `SPEC-002`,
   `PLAN-003`, the Harness architecture, manifest/schema, runtime, validator,
@@ -31,33 +65,27 @@ complete until H1 and H3 are fixed and independently reverified.
   `shell: false` and the 900-second tool timeout intact.
 - Post-fix read-only probes confirmed that runtime and validator reject
   `NODE_OPTIONS`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, and
-  `NPM_CONFIG_USERCONFIG`, and that `verify.mjs` performs full Harness validation
-  before its first managed child.
-- Post-fix read-only dependency probe found that deleting
-  `entry_commands.bootstrap.integrity_policy` still returns zero Harness validation
-  errors. The focused suite catches this only indirectly because repository-specific
-  integrity tests expect the current field; a managed bootstrap itself would resolve
-  the absent field to `null` and skip the check.
-- Post-fix read-only CI probes found that adding
-  `env.NODE_OPTIONS=--require ./attacker-controlled.js` to the otherwise reviewed
-  `npm run verify` step returns zero CI validation errors. Reordering `npm run verify`
-  before `npm ci` also returns zero errors.
+  `NPM_CONFIG_USERCONFIG`, and that `verify.mjs` performs Harness validation before
+  managed execution.
+- The independent snapshot then found the H1 missing-policy gap and H3 CI shape/env
+  gap recorded below. Those probe results describe the reviewed snapshot, not the
+  latest author-side remediation.
 - `merge_enforcement.status` remains honestly recorded as
   `external_not_verified`; checked-in CI is not represented as verified branch
   protection.
 
 ## Findings
 
-| ID  | Severity | Evidence (file:line/test)                                                                                                                                                                                                      | Impact                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Required fix                                                                                                                                                                                                                                                                                                                                                                                        | Owner  | Disposition                        | Verification                                                                                                                                                                                     |
-| --- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| H1  | High     | `.harness/manifest.yaml:9-15`; `.harness/schema.json:454-481`; `scripts/harness-runtime.mjs:570-574,649-696`; `scripts/harness-runtime.test.mjs:520-589`                                                                       | The new pre-spawn Git comparison correctly rejects cleanly tested staged and unstaged drift. However `integrity_policy` remains optional and neither schema nor validator requires `committed_dependency_graph` when permission is `restore_locked_dependencies`. Removing the field validates successfully; runtime maps it to `null` and skips integrity. The proof also invokes a PATH-resolved `git`, so an ambient executable substitution can report a false clean result. The approval boundary is therefore not yet intrinsically fail-closed at the managed bootstrap entrypoint. | Require the integrity policy for every `restore_locked_dependencies` entry and reject it on other permission classes. Make the Git probe executable identity part of the trusted runtime contract, or explicitly validate/resolve it before relying on its result. Add direct negative tests for missing policy, wrong permission/policy pairing, unavailable/untrusted Git, and zero child spawns. | Author | Partially fixed; open High remains | Existing clean/unstaged/staged and zero-spawn tests pass; missing-policy probe still passes validation                                                                                           |
-| H2  | High     | `scripts/harness-runtime.mjs:23-43,128-178,581-646`; `scripts/harness-check.mjs:525-552`; `scripts/verify.mjs:41-60`; focused tests at `scripts/harness-check.test.mjs:154-169` and `scripts/harness-runtime.test.mjs:312-337` | Original runtime forwarding and prevalidation bypass.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Positive implementation-owned environment catalogs now reject the challenged runtime/loader/npm variables in validator and executor. `verify` validates the complete manifest before managed spawn, and npm resolution no longer depends on PATH or `.cmd` shell behavior.                                                                                                                          | Author | Fixed                              | 59/59 Harness tests; adversarial variables rejected by both layers                                                                                                                               |
-| H3  | High     | `scripts/harness-check.mjs:238-290`; `scripts/harness-check.test.mjs:362-405`; `.github/workflows/ci.yml:18-32`                                                                                                                | Exact job count, job permission overrides, step count, known `run`, and action SHA pins are now checked. But a known step may carry arbitrary extra keys. Adding step-level `env.NODE_OPTIONS=--require ...` to `npm run verify` passes validation and causes Node to load unreviewed code before `verify.mjs` can validate or filter anything. This is an arbitrary-execution bypass of both the CI and environment guardrails. Step order is also unchecked, so verify-before-bootstrap passes.                                                                                          | Validate the complete allowed shape of each of the four CI steps, forbid workflow/job/step environment injection unless explicitly allowlisted, and require the exact step order: checkout, setup Node, locked install, verify. Add mutations for step `env`, unexpected `with`, duplicate/reordered known steps, and extra properties.                                                             | Author | Open                               | Step-env and reorder probes currently return zero errors                                                                                                                                         |
-| M1  | Medium   | `.harness/manifest.yaml:281-284`; `scripts/harness-runtime.test.mjs:180-204`                                                                                                                                                   | Original `task_scoped` label claimed a scope artifact that did not exist.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `mutate_local_runtime` is now honestly `allow` with scope limited to registered local-process entrypoints; command, environment, tool, and autonomy checks enforce that represented boundary.                                                                                                                                                                                                       | Author | Fixed                              | Dev resolves as `allow`; lower-autonomy rejection remains covered                                                                                                                                |
-| M2  | Medium   | `scripts/harness-check.mjs:207-257`; `scripts/harness-check.test.mjs:362-405`                                                                                                                                                  | Original validator allowed job-level permission escalation, extra jobs, and arbitrary extra commands.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Validator now rejects job permission overrides, any job other than `verify`, non-four-step workflows, and unknown step commands. H3 separately records the remaining extra-property/env bypass.                                                                                                                                                                                                     | Author | Fixed for original finding         | Mutation test covers extra job, job override, unreviewed command, trigger, timeout, and action pin                                                                                               |
-| M3  | Medium   | `scripts/harness-runtime.mjs:128-178,473-478`; `scripts/harness-runtime.test.mjs:27-66,396-418`; `docs/harness/architecture.md:102-107`                                                                                        | Original Windows path used `npm.cmd` with `shell: false`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Npm commands now use the active `process.execPath` and a real `npm-cli.js` constrained inside the Node installation. No shell or PATH-resolved npm launcher is used. Dedicated Windows CI remains useful confidence coverage but is no longer required to close this design defect.                                                                                                                 | Author | Fixed                              | Local focused and full command execution pass with trusted argv; path-containment assertions are present                                                                                         |
-| M4  | Medium   | `scripts/harness-runtime.mjs:75-118,256-460`; `scripts/verify.mjs:22-39,62-88`; `scripts/harness-runtime.test.mjs:667-721`                                                                                                     | Original traces accepted contradictory shapes and omitted terminal failed verification.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Trace validation now has per-event field sets, required fields, and core decision/status/failure invariants. `verify` emits terminal success and attempts terminal failure while preserving the original error if the sink is unavailable.                                                                                                                                                          | Author | Fixed                              | Invalid combination test fails closed; sandboxed E2E failure emitted a failed terminal event, the unrestricted full rerun emitted success, and child non-zero/timeout plus trace-sink tests pass |
-| L1  | Low      | `.harness/evaluations.yaml`; `scripts/harness-eval.mjs:20-151`; `scripts/harness-eval.test.mjs:12-55`                                                                                                                          | The ten golden fixtures detect selected contract mutations but remain maintained beside the policy and command fixtures stop at policy evaluation. Coordinated oracle/implementation drift can still pass.                                                                                                                                                                                                                                                                                                                                                                                 | Retain as explicit non-blocking debt: add executor-level fixtures with independent invariants such as blocked-means-zero-spawn and environment sentinels when product delivery supplies more real scenarios. Do not describe the suite as hosted-model reasoning evidence.                                                                                                                          | Author | Accepted with rationale            | Architecture accurately limits the suite to deterministic repository policy                                                                                                                      |
+| ID  | Severity | Evidence / original impact | Required fix | Current disposition |
+| --- | -------- | -------------------------- | ------------ | ------------------- |
+| H1  | High     | The independent snapshot found that `integrity_policy` could be removed while validation still passed, weakening the locked dependency restore boundary. It also challenged reliance on a PATH-resolved Git probe. | Require the integrity policy for every `restore_locked_dependencies` entry, reject wrong pairings, and use a trusted Git executable identity with negative tests. | Author-side fix implemented and CI green; independent re-review pending. |
+| H2  | High     | Runtime forwarding and prevalidation originally allowed challenged loader/runtime/npm environment controls. | Use implementation-owned positive environment catalogs, validate before execution, and avoid PATH/shell npm launchers. | Fixed in the independent review cycle. |
+| H3  | High     | The independent snapshot found that CI step shape/order and environment injection were not completely constrained. | Lock the reviewed step order and shape; reject unreviewed workflow/job/step execution controls; add adversarial mutations. | Author-side fix implemented and CI green; independent re-review pending. Checked-in validation is drift detection, not external merge protection. |
+| M1  | Medium   | `task_scoped` overstated an unavailable scope artifact for local runtime mutation. | Make the represented permission semantics honest. | Fixed. |
+| M2  | Medium   | CI validation originally allowed additional jobs, permission escalation, and unreviewed commands. | Restrict jobs, permissions, commands, and reviewed CI structure. | Fixed; H3 covers the later envelope hardening. |
+| M3  | Medium   | Windows execution originally relied on `npm.cmd` with `shell: false`. | Execute the real npm CLI using the active Node runtime. | Fixed. |
+| M4  | Medium   | Trace shapes could be contradictory and terminal failure evidence was incomplete. | Enforce event-specific trace fields/invariants and terminal verification evidence. | Fixed. |
+| L1  | Low      | Behavioral fixtures remain maintained beside the policy and can share coordinated oracle drift. | Retain as non-blocking debt; strengthen with more independent executor invariants when real product scenarios arrive. | Accepted with rationale. |
 
 ## Review checklist
 
@@ -69,11 +97,14 @@ complete until H1 and H3 are fixed and independently reverified.
 - [x] Tests would fail before the fix
 - [x] Logging, metrics, health, deploy, and rollback
 - [x] Docs, OpenAPI, migrations, and locale files (Harness docs assessed; application artifacts not applicable)
+- [ ] Fresh independent re-review of H1/H3 author-side remediation
 
 ## Residual risk and follow-up
 
-- Open release findings: H1 and H3. There are no open Blockers, but two open High
-  findings remain; the current verdict must therefore remain `Block`.
+- The implementation author reports no known unresolved Blocker/High after the final
+  remediation, and the repository CI gate is green. Release remains blocked solely on
+  fresh independent verification of H1/H3 because the final fixer cannot self-approve
+  those findings.
 - Planned tools/environments, denied permissions, approval-required actions without an
   artifact, unknown command references, display-command drift, non-zero exits, and
   timeouts continue to fail closed in focused tests.
@@ -81,7 +112,13 @@ complete until H1 and H3 are fixed and independently reverified.
   bounded, and the delivery skill does not contain a second machine route table.
   Marker validation cannot detect semantic drift in arbitrary Markdown; the
   architecture states that limitation accurately.
-- Child stdout/stderr remains intentionally outside trace redaction. The architecture
-  states this correctly; child tools remain responsible for not printing secrets.
+- Child stdout/stderr and general filesystem access remain intentionally outside the
+  Harness redaction/isolation boundary. The Harness prevents ambient environment
+  forwarding according to its contract; it is not an OS sandbox.
+- The initial dependency install in a clean CI checkout is a bootstrap trust boundary
+  before repository JavaScript can run its own Harness validation. Reviewed lockfile,
+  workflow, and repository-host controls remain part of that boundary; v0.2 does not
+  claim to sandbox a malicious committed dependency graph.
 - GitHub branch/ruleset protection remains an external owner action. Keeping
-  `external_not_verified` is correct until repository settings are inspected.
+  `external_not_verified` is correct until repository settings are independently
+  verified.

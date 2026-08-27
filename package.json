@@ -29,7 +29,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
     "harness:check": "node scripts/harness-check-all.mjs",
     "harness:eval": "node scripts/harness-eval.mjs",
-    "test:harness": "node --test scripts/harness-check.test.mjs scripts/harness-runtime.test.mjs scripts/harness-eval.test.mjs scripts/harness-v02-closure.test.mjs",
+    "test:harness": "node --test scripts/harness-check.test.mjs scripts/harness-runtime.test.mjs scripts/harness-eval.test.mjs scripts/harness-v02-closure.test.mjs scripts/prettier-preview.test.mjs",
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {

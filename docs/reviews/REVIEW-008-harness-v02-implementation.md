@@ -4,17 +4,19 @@
 - Plan: `PLAN-003-harness-runtime-enforcement.md`
 - Author: primary implementation agent; ChatGPT continued the final remediation
   after the primary Codex session exhausted its working context.
-- Independent reviewer: Codex agent `/root/harness_v01_review`
+- Independent reviewers: Codex agents `/root/harness_v01_review` and
+  `/root/harness_v02_rereview`
+- Final implementation revision reviewed: `8ed0473`
 - Review snapshot date: 2026-08-27
-- Verdict: Block pending independent re-review
+- Verdict: Approve
 
 The original independent review blocked Harness v0.2 on H1 and H3. Earlier fixes had
 already closed H2 and M1-M4. ChatGPT then continued implementation on the same branch
 and implemented remediation for both remaining High findings.
 
-The latest author-side code verification is green, but the assistant that authored
-those final fixes is not an independent reviewer. This report therefore remains
-`Block` until a fresh reviewer verifies H1/H3 closure.
+The assistant that authored the final fixes did not self-approve them. A fresh Codex
+reviewer subsequently inspected and challenged revision `8ed0473` and independently
+verified H1/H3 closure. No unresolved Blocker or High finding remains.
 
 ## Author-side closure update
 
@@ -43,6 +45,32 @@ CI workflow validation is checked-in drift detection. It does not turn PR-contro
 workflow code into a pre-execution security sandbox. A malicious change that can alter
 both workflow and validator still requires repository-host review and merge controls.
 `merge_enforcement.status: external_not_verified` therefore remains accurate.
+
+## Independent re-review of final remediation
+
+The fresh reviewer performed the following checks against revision `8ed0473`:
+
+- Inspected the manifest/schema/runtime coupling, dependency integrity probe, both CI
+  validators, the public `harness:check` wrapper, package scripts, CI workflow,
+  closure tests, architecture, spec, plan, and this report.
+- `npm run test:harness` passed 67/67 tests.
+- `npm run harness:check` passed and resolved through
+  `scripts/harness-check-all.mjs`, which invokes both manifest validation and the CI
+  envelope validator.
+- Independent adversarial probes passed four H1 cases and eleven H3 cases. They
+  covered a second restore command without integrity policy, a wrong
+  permission/policy pairing, runtime catalog drift, a poisoned ambient `PATH`,
+  workflow/job environment and defaults injection, job permissions, extra jobs,
+  reordered/expanded steps, container/services injection, and public wrapper wiring.
+- The first full-gate attempt inside the reviewer filesystem sandbox reached E2E and
+  failed because the sandbox denied local socket binding (`listen EPERM`). The required
+  rerun outside that sandbox passed Harness validation, 67 Harness tests, 10
+  behavioral fixtures, formatting, lint, unit, integration, E2E, and build, and
+  emitted a successful terminal verification event.
+- `git diff --check` passed before this review-report update.
+
+The re-review found no new Blocker, High, or Medium issue. L1 remains accepted
+non-blocking debt under the limitation already documented below.
 
 ## Independent review snapshot
 
@@ -75,8 +103,11 @@ Required fix: require the integrity policy for every
 `restore_locked_dependencies` entry, reject wrong permission/policy pairings, use a
 trusted Git executable identity, and add negative tests.
 
-Current disposition: **author-side fix implemented; independent re-review pending**.
-The latest focused tests and green CI exercise the new schema and Git-path controls.
+Current disposition: **Fixed and independently verified at `8ed0473`.** The schema
+requires the integrity policy for every restore-permission command and rejects the
+policy elsewhere. Runtime manifest/catalog drift fails closed, and the actual probe
+completed with a poisoned ambient `PATH` because it selects an approved absolute Git
+executable and forwards no `PATH` to Git.
 
 ### H2 — High — execution-control environment forwarding
 
@@ -95,10 +126,11 @@ controls, including environment injection and ordering drift.
 Required fix: lock reviewed step shapes/order, reject workflow/job/step execution
 surface expansion, and add adversarial mutation tests.
 
-Current disposition: **author-side fix implemented; independent re-review pending**.
-Step-level controls are checked by the original CI validator. Workflow/job envelope
-controls are checked by the added CI policy validator. This remains repository drift
-validation rather than external merge protection.
+Current disposition: **Fixed and independently verified at `8ed0473`.** Step-level
+controls are checked by the original CI validator; workflow/job envelope controls are
+checked by the added CI policy validator; and the public `npm run harness:check`
+entrypoint invokes both. This remains repository drift validation rather than external
+merge protection.
 
 ### M1 — Medium — local runtime permission semantics
 
@@ -136,17 +168,16 @@ scenarios.
 - [x] Negative tests exist for the reviewed enforcement boundaries
 - [x] Logging/trace and rollback boundaries reviewed
 - [x] Harness documentation reviewed for overclaiming
-- [ ] Fresh independent re-review of final H1/H3 remediation
+- [x] Fresh independent re-review of final H1/H3 remediation
 
 Application API compatibility, transactions, migrations, and business concurrency are
 not applicable to this Harness-only change.
 
 ## Residual risk and follow-up
 
-- The implementation author reports no known unresolved Blocker/High after the final
-  remediation, and the full code gate was green before this review-document update.
-  Release remains blocked on fresh independent verification of H1/H3 because the final
-  fixer cannot self-approve those findings.
+- No unresolved Blocker or High remains after independent H1/H3 verification. The
+  Harness milestone may move to plan/spec completion after the owner records this
+  review evidence and performs any required documentation-only closure check.
 - Planned tools/environments, denied permissions, approval-required actions without an
   artifact, unknown command references, display-command drift, non-zero exits, and
   timeouts continue to fail closed in focused tests.

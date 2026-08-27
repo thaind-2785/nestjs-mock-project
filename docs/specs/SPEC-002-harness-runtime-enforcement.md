@@ -292,8 +292,8 @@ fact.
       contracts remain valid and pass.
 - [x] Harness v0.2 architecture/docs describe the implemented guarantees without
       overstating OS isolation, secret redaction, or GitHub merge enforcement.
-- [ ] Independent review has no unresolved Blocker or High finding.
-- [ ] `PLAN-003` is marked complete only after all v0.2 slices and final verification
+- [x] Independent review has no unresolved Blocker or High finding.
+- [x] `PLAN-003` is marked complete only after all v0.2 slices and final verification
       pass.
 - [x] Remaining Harness debt is explicitly classified as non-blocking for product
       implementation.

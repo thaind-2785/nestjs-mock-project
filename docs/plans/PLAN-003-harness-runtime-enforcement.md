@@ -1,7 +1,7 @@
 # PLAN-003: Harness v0.2 completion
 
 - Spec: `docs/specs/SPEC-002-harness-runtime-enforcement.md`
-- Status: In progress
+- Status: Complete
 - Owner: Codex primary agent
 - Reviewer (must be independent): Harness reviewer agent
 
@@ -45,7 +45,7 @@
 | 7     | Deterministic behavioral Harness fixtures cover representative context, permission, refusal/approval, unavailable capability, and handoff-gate expectations                                           | new Harness eval fixtures/runner; package scripts/manifest eval registry      | None                               | fixture mutation and expected-outcome tests            | Complete |
 | 8     | Required v0.2 evaluations and migrated Harness-managed execution are integrated into the existing full repository gate without changing the public `npm run verify` contract                          | `scripts/verify.mjs`, `package.json`, manifest/eval refs                      | Incremental command/eval migration | Harness regression + full verify                       | Complete |
 | 9     | Architecture/spec/plan accurately describe implemented guarantees, limitations, canonical routing, trace/eval lifecycle, and non-blocking debt                                                        | `docs/harness`, spec/plan, ADR if required                                    | None                               | formatting + Harness doc/reference checks              | Complete |
-| 10    | Independent review challenges bypasses, env leakage, fail-open behavior, route drift, eval weakness, trace overclaiming, and manifest/runtime mismatch; all accepted Blocker/High findings are closed | `docs/reviews/REVIEW-008-harness-v02-implementation.md`; implementation fixes | None                               | affected focused tests + full gate                     | Pending  |
+| 10    | Independent review challenges bypasses, env leakage, fail-open behavior, route drift, eval weakness, trace overclaiming, and manifest/runtime mismatch; all accepted Blocker/High findings are closed | `docs/reviews/REVIEW-008-harness-v02-implementation.md`; implementation fixes | None                               | affected focused tests + full gate                     | Complete |
 
 ## Slice execution rules
 
@@ -210,6 +210,11 @@ GitHub branch protection remains external and is not part of the local rollback 
   semantics, exact CI job/step validation, and event-specific terminal traces. npm
   now runs through `process.execPath` plus a trusted in-installation npm CLI path.
   Post-fix `npm run test:harness` passed 59/59 and `npm run verify` passed all layers.
+- Slice 10 final independent re-review at revision `8ed0473`: H1/H3 passed 15
+  adversarial cases in total; `npm run test:harness` passed 67/67,
+  `npm run harness:check` passed through both validators, and the full
+  `npm run verify` gate passed outside the socket-restricted reviewer sandbox. The
+  reviewer found no new Blocker, High, or Medium issue and approved Harness v0.2.
 - Owner feedback added a durable efficiency policy to `AGENTS.md`: batch focused
   checks, compact successful logs, avoid nested gate duplication, and limit full gate
   runs to review/handoff boundaries without weakening Definition of Done.

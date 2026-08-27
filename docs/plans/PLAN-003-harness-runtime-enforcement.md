@@ -1,7 +1,7 @@
 # PLAN-003: Harness v0.2 completion
 
 - Spec: `docs/specs/SPEC-002-harness-runtime-enforcement.md`
-- Status: Draft
+- Status: In progress
 - Owner: Codex primary agent
 - Reviewer (must be independent): Harness reviewer agent
 
@@ -18,6 +18,10 @@
 - `approval_required` must fail closed until an explicit approval mechanism exists.
 - Harness-managed children must not inherit arbitrary `process.env`.
 - Preserve cross-platform Node/npm compatibility and reviewed timeout behavior.
+- Runtime enforcement covers canonical Harness-managed entrypoints/children, not
+  arbitrary commands invoked outside the Harness.
+- Route drift checks compare machine contracts and explicit mirror markers; they do
+  not claim semantic understanding of free-form Markdown.
 - Behavioral evaluations must be deterministic and repository-owned; do not add a
   hosted LLM dependency to CI for v0.2.
 - Context routing must remain progressive; do not solve drift by loading every
@@ -30,18 +34,18 @@
 
 ## Vertical slices
 
-| Slice | Observable outcome | Files/modules | Migration | Tests | Status |
-| ----- | ------------------ | ------------- | --------- | ----- | ------ |
-| 1 | A pure resolver converts a registered command ref into command/tool/permission/environment metadata and rejects unknown/planned references without spawning | focused runtime module under `scripts/`; manifest/schema only if required | None | resolver positive/negative tests | Pending |
-| 2 | Permission and autonomy decisions fail closed before execution, including denied and unsupported approval-required actions; policy names are refined if needed for semantic honesty | runtime policy module/tests; manifest/schema | None | allowed/denied/approval/autonomy tests | Pending |
-| 3 | Harness constructs an explicit cross-platform child environment; undeclared ambient sentinel values do not cross the boundary | runtime environment module/tests; manifest/docs if allowlist is declared | None | ambient-leak and explicit-forwarding tests | Pending |
-| 4 | The executor spawns only a resolved reviewed command with `shell: false`, preserves timeout/non-zero behavior, and cannot be used as an arbitrary shell-command escape hatch | executor module/tests | None | injection, timeout, non-zero, positive execution tests | Pending |
-| 5 | Harness emits machine-readable, secret-safe decision/execution traces that correlate route/task, capability decision, duration/result, and failure class where applicable | executor/observability module/tests; local trace sink | None | event shape, correlation, no-secret-field tests | Pending |
-| 6 | One machine-readable context-routing contract becomes canonical; material drift in duplicated checked routes fails validation/evaluation while progressive loading remains intact | manifest/context routing registry, validator, docs/skill mirrors as needed | Route normalization | route positive/drift/fallback tests | Pending |
-| 7 | Deterministic behavioral Harness fixtures cover representative context, permission, refusal/approval, unavailable capability, and handoff-gate expectations | new Harness eval fixtures/runner; package scripts/manifest eval registry | None | fixture mutation and expected-outcome tests | Pending |
-| 8 | Required v0.2 evaluations and migrated Harness-managed execution are integrated into the existing full repository gate without changing the public `npm run verify` contract | `scripts/verify.mjs`, `package.json`, manifest/eval refs | Incremental command/eval migration | Harness regression + full verify | Pending |
-| 9 | Architecture/spec/plan accurately describe implemented guarantees, limitations, canonical routing, trace/eval lifecycle, and non-blocking debt | `docs/harness`, spec/plan, ADR if required | None | formatting + Harness doc/reference checks | Pending |
-| 10 | Independent review challenges bypasses, env leakage, fail-open behavior, route drift, eval weakness, trace overclaiming, and manifest/runtime mismatch; all accepted Blocker/High findings are closed | `docs/reviews/REVIEW-008-harness-v02-implementation.md`; implementation fixes | None | affected focused tests + full gate | Pending |
+| Slice | Observable outcome                                                                                                                                                                                    | Files/modules                                                                 | Migration                          | Tests                                                  | Status   |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------ | -------- |
+| 1     | A pure resolver converts a registered command ref into command/tool/permission/environment metadata and rejects unknown/planned references without spawning                                           | focused runtime module under `scripts/`; manifest/schema only if required     | None                               | resolver positive/negative tests                       | Complete |
+| 2     | Permission and autonomy decisions fail closed before execution, including denied and unsupported approval-required actions; policy names are refined if needed for semantic honesty                   | runtime policy module/tests; manifest/schema                                  | None                               | allowed/denied/approval/autonomy tests                 | Complete |
+| 3     | Harness constructs an explicit cross-platform child environment; undeclared ambient sentinel values do not cross the boundary                                                                         | runtime environment module/tests; manifest/docs if allowlist is declared      | None                               | ambient-leak and explicit-forwarding tests             | Complete |
+| 4     | The executor spawns only a resolved reviewed command with `shell: false`, preserves timeout/non-zero behavior, and cannot be used as an arbitrary shell-command escape hatch                          | executor module/tests                                                         | None                               | injection, timeout, non-zero, positive execution tests | Complete |
+| 5     | Harness emits machine-readable, secret-safe decision/execution traces that correlate route/task, capability decision, duration/result, and failure class where applicable                             | executor/observability module/tests; local trace sink                         | None                               | event shape, correlation, no-secret-field tests        | Complete |
+| 6     | One machine-readable context-routing contract becomes canonical; material drift in duplicated checked routes fails validation/evaluation while progressive loading remains intact                     | manifest/context routing registry, validator, docs/skill mirrors as needed    | Route normalization                | route positive/drift/fallback tests                    | Complete |
+| 7     | Deterministic behavioral Harness fixtures cover representative context, permission, refusal/approval, unavailable capability, and handoff-gate expectations                                           | new Harness eval fixtures/runner; package scripts/manifest eval registry      | None                               | fixture mutation and expected-outcome tests            | Complete |
+| 8     | Required v0.2 evaluations and migrated Harness-managed execution are integrated into the existing full repository gate without changing the public `npm run verify` contract                          | `scripts/verify.mjs`, `package.json`, manifest/eval refs                      | Incremental command/eval migration | Harness regression + full verify                       | Complete |
+| 9     | Architecture/spec/plan accurately describe implemented guarantees, limitations, canonical routing, trace/eval lifecycle, and non-blocking debt                                                        | `docs/harness`, spec/plan, ADR if required                                    | None                               | formatting + Harness doc/reference checks              | Complete |
+| 10    | Independent review challenges bypasses, env leakage, fail-open behavior, route drift, eval weakness, trace overclaiming, and manifest/runtime mismatch; all accepted Blocker/High findings are closed | `docs/reviews/REVIEW-008-harness-v02-implementation.md`; implementation fixes | None                               | affected focused tests + full gate                     | Pending  |
 
 ## Slice execution rules
 
@@ -159,6 +163,56 @@ removed enforcement, routing, tracing, or evaluation behavior.
 GitHub branch protection remains external and is not part of the local rollback path.
 
 ## Decisions made during implementation
+
+- Accepted `REVIEW-007` as the v0.2 baseline with two narrowed guarantees: no OS-level
+  command control, and no semantic parsing of free-form routing prose.
+- Command execution uses an implementation-owned argv catalog cross-checked against
+  manifest display commands; YAML command text is never passed to a shell.
+- `restore_locked_dependencies` is allowed for exact lockfile restoration, while
+  dependency-graph mutation remains approval-required. L0 is named
+  `observe_and_check` because checks may create ignored artifacts.
+- Child processes receive only the manifest-owned base allowlist, the command-owned
+  forwarding list, and fixed Harness-internal correlation fields. Secret-like names
+  are rejected even when accidentally added to an allowlist.
+- JSON-lines traces use a strict field/value allowlist and correlate the repository
+  verification path with one trace id; child stdout/stderr remains outside that
+  redaction boundary.
+- `context_strategy.routes` is canonical. Human/skill mirrors carry one checked
+  marker and no duplicate route table, so validation checks references/markers rather
+  than claiming semantic Markdown comparison.
+- Behavioral fixtures are repository-owned YAML evaluated by a deterministic offline
+  runner. Mutation tests challenge both policy/route inputs and fixture expectations.
+- `scripts/verify.mjs` delegates every child to the reference-only runtime executor;
+  `npm run verify` remains the unchanged public handoff command.
+
+## Slice verification evidence
+
+- Slices 1-2: `node --test scripts/harness-runtime.test.mjs` passed 8/8 tests;
+  `npm run harness:check` passed after permission/autonomy refinement.
+- Slice 3: `node --test scripts/harness-runtime.test.mjs` passed 10/10 tests;
+  `npm run harness:check` passed with explicit child-environment validation.
+- Slice 4: runtime focused suite passed 14/14 tests, including injection, success,
+  non-zero exit, and timeout behavior.
+- Slice 5: runtime focused suite passed 16/16 tests with correlated allowlisted traces
+  and secret-sentinel exclusion.
+- Slice 6: `npm run test:harness` passed 49/49 tests after route/fallback/mirror checks
+  and the Git intent-to-add evidence regression were fixed.
+- Slice 7: `npm run harness:eval` passed 10/10 fixtures and `npm run test:harness`
+  passed 53/53 tests including route, permission, and expectation mutations.
+- Slice 8: managed `npm run verify` passed with 54 Harness tests, 10 behavioral
+  fixtures, format, lint, unit, integration, E2E, and build. E2E required execution
+  outside the filesystem sandbox because local socket binding is prohibited there.
+- Slice 9: manifest/schema and architecture/spec/plan were synchronized to v0.2;
+  formatting and reference checks are part of the subsequent final gate.
+- Slice 10 review fixes: H1/H2 were accepted and fixed with committed dependency
+  graph integrity checks, implementation-owned environment catalogs, and validation
+  before the first managed spawn. M1/M2/M4 were also fixed by honest registered-entry
+  semantics, exact CI job/step validation, and event-specific terminal traces. npm
+  now runs through `process.execPath` plus a trusted in-installation npm CLI path.
+  Post-fix `npm run test:harness` passed 59/59 and `npm run verify` passed all layers.
+- Owner feedback added a durable efficiency policy to `AGENTS.md`: batch focused
+  checks, compact successful logs, avoid nested gate duplication, and limit full gate
+  runs to review/handoff boundaries without weakening Definition of Done.
 
 Record durable decisions here while the plan is active. Promote architecture-level
 choices to an ADR when they affect future Harness evolution, especially:

@@ -1,4 +1,4 @@
-schema_version: '0.1'
+schema_version: '0.2'
 
 project:
   name: nest-mock-project
@@ -8,7 +8,8 @@ project:
 entry_commands:
   bootstrap:
     command: npm ci
-    permission: install_dependencies
+    integrity_policy: committed_dependency_graph
+    permission: restore_locked_dependencies
     tool_ref: npm
     side_effect: dependency_tree
     environments: [local, ci]
@@ -19,6 +20,7 @@ entry_commands:
     tool_ref: npm
     side_effect: none
     environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, TZ]
   harness_test:
     command: npm run test:harness
     npm_script: test:harness
@@ -26,6 +28,15 @@ entry_commands:
     tool_ref: npm
     side_effect: temporary_files
     environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, TZ]
+  harness_eval:
+    command: npm run harness:eval
+    npm_script: harness:eval
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: none
+    environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, TZ]
   verify:
     command: npm run verify
     npm_script: verify
@@ -33,6 +44,7 @@ entry_commands:
     tool_ref: npm
     side_effect: ignored_artifacts
     environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, TZ]
   dev:
     command: npm run start:dev
     npm_script: start:dev
@@ -40,6 +52,7 @@ entry_commands:
     tool_ref: npm
     side_effect: local_process
     environments: [local]
+    forward_env: [NODE_ENV, PORT]
   build:
     command: npm run build
     npm_script: build
@@ -47,6 +60,47 @@ entry_commands:
     tool_ref: npm
     side_effect: ignored_artifacts
     environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, NODE_ENV, TZ]
+  format_check:
+    command: npm run format:check
+    npm_script: format:check
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: none
+    environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, TZ]
+  lint_check:
+    command: npm run lint:check
+    npm_script: lint:check
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: none
+    environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, TZ]
+  unit_test:
+    command: npm run test:unit
+    npm_script: test:unit
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: ignored_artifacts
+    environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, NODE_ENV, TZ]
+  integration_test:
+    command: npm run test:integration
+    npm_script: test:integration
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: ignored_artifacts
+    environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, NODE_ENV, TZ]
+  e2e_test:
+    command: npm run test:e2e
+    npm_script: test:e2e
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: ignored_artifacts
+    environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, NODE_ENV, TZ]
 
 workflow:
   initial_state: intake
@@ -74,6 +128,15 @@ workflow:
     - { from: reviewing, to: blocked, gate: blocker_policy }
 
 context_strategy:
+  canonical_registry: context_strategy.routes
+  mirror_marker: HARNESS_CONTEXT_ROUTES_V0_2
+  mirrors:
+    - { path: AGENTS.md, role: project_instructions }
+    - { path: docs/README.md, role: handbook_router }
+    - {
+        path: .agents/skills/hotel-backend-delivery/SKILL.md,
+        role: delivery_skill,
+      }
   precedence:
     - current_user_request
     - AGENTS.md
@@ -104,6 +167,51 @@ context_strategy:
         path: docs/quality/test-strategy.md,
         load: implementation_or_review,
       }
+    - {
+        id: accepted_adrs,
+        path: docs/decisions,
+        path_kind: directory,
+        load: persistence_or_architecture,
+      }
+    - { id: roadmap, path: docs/delivery/roadmap.md, load: sequencing }
+    - {
+        id: harness_architecture,
+        path: docs/harness/architecture.md,
+        load: harness_work,
+      }
+  fallback_route_id: repository_baseline
+  fallback_source_ids: [project_rules, handbook_router]
+  routes:
+    - {
+        id: scope_specification,
+        task_classes: [scope, specification],
+        source_ids: [normalized_scope],
+      }
+    - {
+        id: api_product,
+        task_classes: [api, product, integration],
+        source_ids: [normalized_scope, api_catalog, test_strategy],
+      }
+    - {
+        id: persistence_concurrency,
+        task_classes: [persistence, database, migration, concurrency],
+        source_ids: [database_design, accepted_adrs, test_strategy],
+      }
+    - {
+        id: implementation_review,
+        task_classes: [implementation, test, review],
+        source_ids: [test_strategy],
+      }
+    - {
+        id: sequencing,
+        task_classes: [plan, sequencing],
+        source_ids: [roadmap, test_strategy],
+      }
+    - {
+        id: harness_runtime,
+        task_classes: [harness, runtime_policy],
+        source_ids: [harness_architecture, test_strategy],
+      }
   policy: load routed sources progressively; never load every document by default
 
 tool_registry:
@@ -116,7 +224,13 @@ tool_registry:
   - id: npm
     kind: package_and_command_runner
     status: active
-    permissions: [run_local_checks, install_dependencies, mutate_local_runtime]
+    permissions:
+      [
+        run_local_checks,
+        restore_locked_dependencies,
+        install_dependencies,
+        mutate_local_runtime,
+      ]
     timeout_seconds: 900
     implementation_ref: package.json
   - id: git_read
@@ -158,13 +272,15 @@ permission_model:
   actions:
     read_repository: { effect: allow, scope: repository }
     run_local_checks: { effect: allow, scope: non_destructive_commands }
+    restore_locked_dependencies:
+      { effect: allow, scope: exact_committed_lockfile }
     edit_repository: { effect: task_scoped, scope: requested_change }
     mutate_repository_history:
       { effect: approval_required, scope: explicit_targets }
     install_dependencies:
       { effect: approval_required, scope: declared_packages }
     mutate_local_runtime:
-      { effect: task_scoped, scope: named_local_processes_or_compose_services }
+      { effect: allow, scope: registered_local_process_entrypoints }
     mutate_local_data:
       { effect: approval_required, scope: explicit_local_database }
     ci_read_only: { effect: allow, scope: repository_checks }
@@ -232,9 +348,49 @@ memory_model:
     ]
 
 observability:
+  trace_schema_version: '0.2'
+  trace_format: json_lines
+  allowed_fields:
+    [
+      schema_version,
+      timestamp,
+      trace_id,
+      event,
+      route_id,
+      context_source_ids,
+      command_ref,
+      tool_id,
+      permission_id,
+      environment_id,
+      autonomy_level,
+      decision,
+      status,
+      duration_ms,
+      retry_count,
+      exit_code,
+      failure_class,
+    ]
   harness_events:
-    - { id: command_started, status: active, emitter: scripts/verify.mjs }
-    - { id: command_failed, status: active, emitter: scripts/verify.mjs }
+    - {
+        id: policy_decision,
+        status: active,
+        emitter: scripts/harness-runtime.mjs,
+      }
+    - {
+        id: command_started,
+        status: active,
+        emitter: scripts/harness-runtime.mjs,
+      }
+    - {
+        id: command_completed,
+        status: active,
+        emitter: scripts/harness-runtime.mjs,
+      }
+    - {
+        id: command_failed,
+        status: active,
+        emitter: scripts/harness-runtime.mjs,
+      }
     - {
         id: verification_completed,
         status: active,
@@ -255,7 +411,7 @@ observability:
         id: local_command_output,
         status: active,
         retention: terminal_session,
-        implementation_ref: scripts/verify.mjs,
+        implementation_ref: scripts/harness-runtime.mjs,
       }
     - {
         id: github_check_summary,
@@ -279,6 +435,7 @@ observability:
     [authorization, cookie, oauth_code, provider_payload, secret, refresh_token]
 
 evaluation_strategy:
+  fixture_path: .harness/evaluations.yaml
   evaluations:
     - id: harness_manifest
       command_ref: harness_check
@@ -288,6 +445,10 @@ evaluation_strategy:
       command_ref: harness_test
       required: true
       proves: invalid manifests fail deterministically
+    - id: harness_behavior
+      command_ref: harness_eval
+      required: true
+      proves: representative routing policy refusal capability and handoff behavior
     - id: repository_gate
       command_ref: verify
       required: true
@@ -321,7 +482,7 @@ pr_lifecycle:
 autonomy_levels:
   levels:
     - id: L0
-      name: read_only
+      name: observe_and_check
       status: active
       permissions: [read_repository, run_local_checks]
     - id: L1
@@ -335,6 +496,7 @@ autonomy_levels:
         [
           read_repository,
           run_local_checks,
+          restore_locked_dependencies,
           edit_repository,
           mutate_local_runtime,
         ]
@@ -372,6 +534,23 @@ runtime_contract:
   lockfile: package-lock.json
   ci_workflow: .github/workflows/ci.yml
   install_command_ref: bootstrap
+  child_environment:
+    base_allowlist:
+      [
+        PATH,
+        Path,
+        PATHEXT,
+        SystemRoot,
+        ComSpec,
+        WINDIR,
+        HOME,
+        USERPROFILE,
+        APPDATA,
+        LOCALAPPDATA,
+        TMPDIR,
+        TMP,
+        TEMP,
+      ]
   environments:
     local: { status: active, dependencies: [node, npm, git_read] }
     ci: { status: active, dependencies: [node, npm, git_read, github_actions] }

@@ -1,0 +1,112 @@
+schema_version: '0.2'
+
+fixtures:
+  - id: read_review_progressive_context
+    type: context_route
+    task_classes: [review]
+    autonomy_level: L0
+    expected:
+      route_ids: [implementation_review]
+      source_ids: [project_rules, handbook_router, test_strategy]
+      autonomy_permissions: [read_repository, run_local_checks]
+
+  - id: api_product_context
+    type: context_route
+    task_classes: [api]
+    autonomy_level: L1
+    expected:
+      route_ids: [api_product]
+      source_ids:
+        [
+          project_rules,
+          handbook_router,
+          normalized_scope,
+          api_catalog,
+          test_strategy,
+        ]
+      autonomy_permissions: [read_repository, run_local_checks, edit_repository]
+
+  - id: persistence_concurrency_context
+    type: context_route
+    task_classes: [concurrency]
+    autonomy_level: L1
+    expected:
+      route_ids: [persistence_concurrency]
+      source_ids:
+        [
+          project_rules,
+          handbook_router,
+          database_design,
+          accepted_adrs,
+          test_strategy,
+        ]
+      autonomy_permissions: [read_repository, run_local_checks, edit_repository]
+
+  - id: allowed_local_check
+    type: command_policy
+    command_ref: build
+    environment_id: local
+    autonomy_level: L2
+    expected:
+      command_ref: build
+      tool_id: npm
+      permission_id: run_local_checks
+      decision: allow
+      reason_code: allow
+
+  - id: locked_dependency_restore
+    type: command_policy
+    command_ref: bootstrap
+    environment_id: local
+    autonomy_level: L2
+    expected:
+      command_ref: bootstrap
+      tool_id: npm
+      permission_id: restore_locked_dependencies
+      decision: allow
+      reason_code: allow
+
+  - id: dependency_graph_mutation_requires_approval
+    type: command_policy
+    command_ref: bootstrap
+    environment_id: local
+    autonomy_level: L2
+    permission_override: install_dependencies
+    expected:
+      command_ref: bootstrap
+      tool_id: npm
+      permission_id: install_dependencies
+      decision: approval_required
+      reason_code: approval_artifact_unavailable
+
+  - id: secret_read_fails_closed
+    type: command_policy
+    command_ref: bootstrap
+    environment_id: local
+    autonomy_level: L2
+    permission_override: read_secrets
+    expected:
+      command_ref: bootstrap
+      tool_id: npm
+      permission_id: read_secrets
+      decision: reject
+      reason_code: tool_permission_mismatch
+
+  - id: planned_runtime_unavailable
+    type: capability_status
+    tool_id: docker_compose
+    expected: { availability: unavailable, reason_code: planned_tool }
+
+  - id: deployment_provider_not_registered
+    type: capability_status
+    tool_id: deployment_provider
+    expected: { availability: unavailable, reason_code: unknown_tool }
+
+  - id: handoff_requires_full_gate
+    type: handoff_gate
+    hook_id: local_release_gate
+    expected:
+      command_ref: verify
+      status: active
+      failure_policy: block
+      required_by_pr: true

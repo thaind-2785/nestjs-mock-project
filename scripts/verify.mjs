@@ -1,63 +1,88 @@
-import { spawnSync } from 'node:child_process';
-
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-const checkTimeoutMs = 900_000;
+import { randomUUID } from 'node:crypto';
+import { loadHarness, validateHarness } from './harness-check.mjs';
+import {
+  createJsonLineTraceSink,
+  emitHarnessTrace,
+  executeCommand,
+  HarnessPolicyError,
+  selectContext,
+} from './harness-runtime.mjs';
 
 const checks = [
-  ['Harness manifest', npmCommand, ['run', 'harness:check']],
-  [
-    'Formatting',
-    npxCommand,
-    [
-      'prettier',
-      '--check',
-      'src/**/*.ts',
-      'test/**/*.ts',
-      'scripts/**/*.mjs',
-      'docs/**/*.md',
-      '.agents/skills/**/*.md',
-      '.github/**/*.yml',
-      '.harness/manifest.yaml',
-      '.harness/schema.json',
-      '*.md',
-    ],
-  ],
-  [
-    'Lint',
-    npxCommand,
-    ['eslint', '--max-warnings=0', '{src,apps,libs,test}/**/*.ts'],
-  ],
-  ['Unit tests', npmCommand, ['test', '--', '--runInBand']],
-  ['Harness tests', npmCommand, ['run', 'test:harness']],
-  ['Integration tests', npmCommand, ['run', 'test:integration']],
-  ['E2E tests', npmCommand, ['run', 'test:e2e', '--', '--runInBand']],
-  ['Build', npmCommand, ['run', 'build']],
+  'harness_check',
+  'harness_test',
+  'harness_eval',
+  'format_check',
+  'lint_check',
+  'unit_test',
+  'integration_test',
+  'e2e_test',
+  'build',
 ];
+const traceId = randomUUID();
+const traceSink = createJsonLineTraceSink();
+let verificationContextSourceIds;
 
-for (const [name, command, args] of checks) {
-  console.log(`\n[harness] command_started name=${JSON.stringify(name)}`);
-  const result = spawnSync(command, args, {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: 'inherit',
-    shell: false,
-    timeout: checkTimeoutMs,
-    killSignal: 'SIGTERM',
+function emitVerificationCompleted(status, failureClass, exitCode) {
+  emitHarnessTrace(traceSink, {
+    schema_version: '0.2',
+    timestamp: new Date().toISOString(),
+    trace_id: traceId,
+    event: 'verification_completed',
+    route_id: 'repository_verification',
+    context_source_ids: verificationContextSourceIds,
+    status,
+    retry_count: 0,
+    exit_code: exitCode,
+    failure_class: failureClass,
   });
+}
 
-  if (result.error) {
-    console.error(
-      `[harness] command_failed name=${JSON.stringify(name)} reason=${JSON.stringify(result.error.message)}`,
-    );
-    process.exit(1);
-  }
-  if (result.status !== 0) {
-    console.error(
-      `[harness] command_failed name=${JSON.stringify(name)} exit_code=${result.status}`,
-    );
-    process.exit(result.status ?? 1);
+const loaded = loadHarness();
+const validationErrors = validateHarness(
+  loaded.config,
+  loaded.packageJson,
+  loaded.rootDirectory,
+  loaded.schema,
+);
+if (validationErrors.length > 0) {
+  emitVerificationCompleted('failed', 'invalid_harness_config', 1);
+  console.error('Harness validation failed before managed execution:');
+  for (const error of validationErrors) console.error(`- ${error}`);
+  process.exit(1);
+}
+const { config } = loaded;
+const context = selectContext({
+  config,
+  taskClasses: ['harness', 'test'],
+});
+verificationContextSourceIds = context.sourceIds;
+const environmentId = process.env.CI ? 'ci' : 'local';
+
+for (const commandRef of checks) {
+  try {
+    executeCommand({
+      config,
+      commandRef,
+      environmentId,
+      ambientEnvironment: process.env,
+      traceSink,
+      traceId,
+      routeId: 'repository_verification',
+      contextSourceIds: context.sourceIds,
+    });
+  } catch (error) {
+    const failureClass =
+      error instanceof HarnessPolicyError ? error.code : 'unexpected_error';
+    const exitCode = error?.details?.exit_code ?? 1;
+    try {
+      emitVerificationCompleted('failed', failureClass, exitCode);
+    } catch {
+      // The original failure remains authoritative when the trace sink itself fails.
+    }
+    console.error(`[harness] repository verification stopped: ${failureClass}`);
+    process.exit(exitCode);
   }
 }
 
-console.log('\n[harness] verification_completed status=passed');
+emitVerificationCompleted('succeeded', undefined, 0);

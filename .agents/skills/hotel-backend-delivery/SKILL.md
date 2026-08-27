@@ -10,15 +10,15 @@ source of truth that matches the task; do not load every document automatically.
 
 ## Route the task
 
-- For scope or acceptance criteria, read `docs/product/feature-scope.md` and create
-  a spec from `docs/templates/feature-spec.md`.
-- For endpoints or integrations, read `docs/api/endpoint-catalog.md`.
-- For persistence or concurrency, read `docs/architecture/database.md` and accepted
-  ADRs.
-- For sequencing, read `docs/delivery/roadmap.md` and create/update a plan from
-  `docs/templates/implementation-plan.md`.
-- For implementation or review, read `docs/quality/test-strategy.md`. Independent
-  review uses `docs/templates/review-report.md`.
+Harness context contract: `HARNESS_CONTEXT_ROUTES_V0_2`. Classify the task, then use
+the canonical `.harness/manifest.yaml` `context_strategy.routes` registry to select
+progressive context. Do not reproduce or infer an independent route table here.
+
+- Scope/specification work creates or updates a spec from
+  `docs/templates/feature-spec.md` after loading its routed sources.
+- Planning work creates or updates a plan from
+  `docs/templates/implementation-plan.md` after loading its routed sources.
+- Independent review uses `docs/templates/review-report.md`.
 - For a recurring failure, search `docs/logs/error-log.md` before debugging and add
   a concise lesson after the cause and prevention are verified.
 

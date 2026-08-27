@@ -1,6 +1,6 @@
 # SPEC-002: Harness v0.2 completion
 
-- Status: Draft
+- Status: Accepted
 - Owner: Project owner
 - Last updated: 2026-08-27
 - Scope: Required Harness follow-up
@@ -83,6 +83,11 @@ shell text. Conceptually:
 The exact CLI/function shape may be chosen during implementation, but the
 reference-based contract is required.
 
+Runtime enforcement applies to canonical Harness-managed entrypoints and the child
+processes they own. It is not an OS sandbox and cannot prevent a developer from
+invoking an executable directly outside those entrypoints. Documentation and tests
+MUST preserve this boundary instead of claiming repository-wide process control.
+
 ## Business rules and state transitions
 
 Before a Harness-managed process starts:
@@ -106,7 +111,8 @@ Context routing follows these rules:
 2. The canonical route MUST encode progressive loading rather than global loading.
 3. Human docs and the delivery skill MAY explain or mirror routing behavior.
 4. Harness validation MUST detect material drift between canonical routing and any
-   duplicated machine-checkable route declaration.
+   duplicated machine-checkable route declaration or explicit mirror marker. It does
+   not semantically parse arbitrary free-form prose.
 5. Ambiguous or unmatched work MUST fall back to the existing project instruction
    hierarchy rather than silently inventing a route.
 
@@ -230,64 +236,66 @@ fact.
 
 ### Runtime enforcement
 
-- [ ] Given an unknown command reference, execution fails before spawning a child.
-- [ ] Given a command referencing a planned tool or environment, execution fails
+- [x] Given an unknown command reference, execution fails before spawning a child.
+- [x] Given a command referencing a planned tool or environment, execution fails
       before spawn.
-- [ ] Given a denied permission, execution fails before spawn.
-- [ ] Given an approval-required permission with no explicit approval mechanism,
+- [x] Given a denied permission, execution fails before spawn.
+- [x] Given an approval-required permission with no explicit approval mechanism,
       execution fails closed.
-- [ ] Given an autonomy level that does not permit the requested action, execution
+- [x] Given an autonomy level that does not permit the requested action, execution
       fails before spawn.
-- [ ] No arbitrary shell command string can be substituted for a registered command
+- [x] No arbitrary shell command string can be substituted for a registered command
       reference.
-- [ ] Reviewed process timeout/non-zero behavior remains enforced.
+- [x] Reviewed process timeout/non-zero behavior remains enforced.
 
 ### Environment boundary
 
-- [ ] Given a Harness-managed child, an undeclared ambient sentinel environment
+- [x] Given a Harness-managed child, an undeclared ambient sentinel environment
       variable is not visible to that child.
-- [ ] Given an environment variable explicitly permitted by the runtime contract, the
+- [x] Given an environment variable explicitly permitted by the runtime contract, the
       child can read it.
-- [ ] The supported local/CI Node/npm path remains cross-platform after environment
+- [x] The supported local/CI Node/npm path remains cross-platform after environment
       filtering.
 
 ### Structured trace
 
-- [ ] Decision/execution traces contain only allowlisted fields and no environment
+- [x] Decision/execution traces contain only allowlisted fields and no environment
       values or secrets.
-- [ ] A trace can correlate route/task, resolved capability, policy decision, and
+- [x] A trace can correlate route/task, resolved capability, policy decision, and
       terminal result when the full path applies.
-- [ ] Trace failure does not silently convert a rejected policy decision into an
+- [x] Trace failure does not silently convert a rejected policy decision into an
       allowed execution.
 
 ### Behavioral evaluation
 
-- [ ] Repository-owned fixtures cover at least context selection, allowed execution,
+- [x] Repository-owned fixtures cover at least context selection, allowed execution,
       denied/planned capability, approval-required behavior, and required handoff
       verification.
-- [ ] Fixtures run deterministically without a hosted LLM or real provider call.
-- [ ] A mutated routing/permission expectation causes the behavioral suite to fail.
-- [ ] Required behavioral evaluations are included in `npm run verify`.
+- [x] Fixtures run deterministically without a hosted LLM or real provider call.
+- [x] A mutated routing/permission expectation causes the behavioral suite to fail.
+- [x] Required behavioral evaluations are included in `npm run verify`.
 
 ### Context routing consistency
 
-- [ ] One machine-readable routing contract is documented as canonical.
-- [ ] Progressive context-loading behavior is represented in that contract.
-- [ ] A material drift between canonical routing and a duplicated checked route fails
+- [x] One machine-readable routing contract is documented as canonical.
+- [x] Progressive context-loading behavior is represented in that contract.
+- [x] A material drift between canonical routing and a duplicated checked route fails
       Harness validation/evaluation.
-- [ ] The delivery skill remains narrow and does not become a second source of
+- [x] The delivery skill remains narrow and does not become a second source of
       business or production authority.
+- [x] Documentation explicitly limits enforcement to Harness-managed entrypoints and
+      does not overstate OS-level command control.
 
 ### Milestone completion
 
-- [ ] Existing `npm run harness:check`, `npm run test:harness`, and `npm run verify`
+- [x] Existing `npm run harness:check`, `npm run test:harness`, and `npm run verify`
       contracts remain valid and pass.
-- [ ] Harness v0.2 architecture/docs describe the implemented guarantees without
+- [x] Harness v0.2 architecture/docs describe the implemented guarantees without
       overstating OS isolation, secret redaction, or GitHub merge enforcement.
 - [ ] Independent review has no unresolved Blocker or High finding.
 - [ ] `PLAN-003` is marked complete only after all v0.2 slices and final verification
       pass.
-- [ ] Remaining Harness debt is explicitly classified as non-blocking for product
+- [x] Remaining Harness debt is explicitly classified as non-blocking for product
       implementation.
 
 ## Test strategy

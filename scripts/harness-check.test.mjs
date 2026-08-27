@@ -94,6 +94,7 @@ test('rejects empty required collections', () => {
     (config) => (config.entry_commands = {}),
     (config) => (config.workflow.states = []),
     (config) => (config.context_strategy.sources = []),
+    (config) => (config.context_strategy.routes = []),
     (config) => (config.tool_registry = []),
     (config) => (config.permission_model.actions = {}),
     (config) => (config.hook_lifecycle.hooks = []),
@@ -131,6 +132,14 @@ test('rejects a missing npm script and command drift', () => {
   );
 });
 
+test('requires bootstrap dependency integrity in schema and semantics', () => {
+  const config = structuredClone(loaded.config);
+  delete config.entry_commands.bootstrap.integrity_policy;
+  assert.ok(
+    validate(config).some((error) => error.includes('integrity_policy')),
+  );
+});
+
 test('rejects unknown permissions and planned command tools', () => {
   const unknownPermission = structuredClone(loaded.config);
   unknownPermission.entry_commands.verify.permission = 'unknown';
@@ -148,6 +157,23 @@ test('rejects unknown permissions and planned command tools', () => {
       error.includes('references non-active tool "npm"'),
     ),
   );
+});
+
+test('rejects execution-control environment forwarding', () => {
+  for (const environmentName of [
+    'NODE_OPTIONS',
+    'LD_PRELOAD',
+    'DYLD_INSERT_LIBRARIES',
+    'NPM_CONFIG_USERCONFIG',
+  ]) {
+    const config = structuredClone(loaded.config);
+    config.entry_commands.build.forward_env.push(environmentName);
+    assert.ok(
+      validate(config).some((error) =>
+        error.includes('not in the implementation forward allowlist'),
+      ),
+    );
+  }
 });
 
 test('requires implementation evidence for active tools', () => {
@@ -185,11 +211,57 @@ test('requires implementation evidence for active observability', () => {
   );
 });
 
+test('rejects observability registry drift from the runtime trace schema', () => {
+  const fieldDrift = structuredClone(loaded.config);
+  fieldDrift.observability.allowed_fields.pop();
+  assert.ok(
+    validate(fieldDrift).some((error) =>
+      error.includes('must exactly match the runtime trace field allowlist'),
+    ),
+  );
+
+  const eventDrift = structuredClone(loaded.config);
+  eventDrift.observability.harness_events.find(
+    (event) => event.id === 'command_completed',
+  ).status = 'manual';
+  assert.ok(
+    validate(eventDrift).some((error) =>
+      error.includes('must exactly match the runtime trace event registry'),
+    ),
+  );
+});
+
 test('rejects unknown workflow states', () => {
   const config = structuredClone(loaded.config);
   config.workflow.transitions[0].to = 'unknown';
   assert.ok(
     validate(config).some((error) => error.includes('unknown workflow state')),
+  );
+});
+
+test('rejects context source drift, duplicate routing, and stale mirrors', () => {
+  const unknownSource = structuredClone(loaded.config);
+  unknownSource.context_strategy.routes[0].source_ids = ['missing_source'];
+  assert.ok(
+    validate(unknownSource).some((error) =>
+      error.includes('references unknown context source "missing_source"'),
+    ),
+  );
+
+  const duplicateTaskClass = structuredClone(loaded.config);
+  duplicateTaskClass.context_strategy.routes[1].task_classes.push('scope');
+  assert.ok(
+    validate(duplicateTaskClass).some((error) =>
+      error.includes('task class "scope" is assigned to multiple routes'),
+    ),
+  );
+
+  const staleMirror = structuredClone(loaded.config);
+  staleMirror.context_strategy.mirror_marker = 'STALE_CONTEXT_MARKER';
+  assert.ok(
+    validate(staleMirror).some((error) =>
+      error.includes('must contain marker "STALE_CONTEXT_MARKER" exactly once'),
+    ),
   );
 });
 
@@ -310,6 +382,12 @@ test('locks CI triggers, permissions, timeout, command, and action pins', () => 
   unsafe.jobs.verify.steps[0].uses = 'actions/checkout@v4';
   unsafe.jobs.verify.steps.find((step) => step.run === 'npm run verify').run =
     'npm run build';
+  unsafe.jobs.verify.permissions = { contents: 'write' };
+  unsafe.jobs.unreviewed = {
+    'runs-on': 'ubuntu-latest',
+    permissions: { contents: 'write' },
+    steps: [{ run: 'arbitrary-command' }],
+  };
 
   const errors = validateCiWorkflow(unsafe, loaded.config);
   assert.ok(errors.some((error) => error.includes('pull_request')));
@@ -318,5 +396,39 @@ test('locks CI triggers, permissions, timeout, command, and action pins', () => 
   assert.ok(errors.some((error) => error.includes('40-character commit SHA')));
   assert.ok(
     errors.some((error) => error.includes('must run "npm run verify"')),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes('must contain only the reviewed verify job'),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes('job-level permission overrides are forbidden'),
+    ),
+  );
+  assert.ok(
+    errors.some((error) => error.includes('is not a reviewed CI step')),
+  );
+
+  const stepEnvironment = structuredClone(workflow);
+  stepEnvironment.jobs.verify.steps[3].env = {
+    NODE_OPTIONS: '--require ./attacker-controlled.js',
+  };
+  assert.ok(
+    validateCiWorkflow(stepEnvironment, loaded.config).some((error) =>
+      error.includes('must match the reviewed step shape and order'),
+    ),
+  );
+
+  const reordered = structuredClone(workflow);
+  [reordered.jobs.verify.steps[2], reordered.jobs.verify.steps[3]] = [
+    reordered.jobs.verify.steps[3],
+    reordered.jobs.verify.steps[2],
+  ];
+  assert.ok(
+    validateCiWorkflow(reordered, loaded.config).some((error) =>
+      error.includes('must match the reviewed step shape and order'),
+    ),
   );
 });

@@ -38,6 +38,10 @@ done is in `docs/quality/test-strategy.md`.
 
 ## Harness execution
 
+Harness context contract: `HARNESS_CONTEXT_ROUTES_V0_2`. The canonical routing
+registry is `.harness/manifest.yaml` at `context_strategy.routes`; this file explains
+the rule but does not maintain a second route table.
+
 - `.harness/manifest.yaml` is the machine-readable registry for entry commands,
   workflow, tools, permissions, hooks, skills, memory, evaluations, PR lifecycle,
   autonomy, and runtime status. `.harness/schema.json` enforces its shape; its
@@ -111,6 +115,28 @@ done is in `docs/quality/test-strategy.md`.
   test. Never call real Google, Gmail, cloud storage, or payment services in CI.
 - A passing build alone is not sufficient. Review security, data integrity,
   idempotency, concurrency, error handling, and backward compatibility.
+
+## Efficient verification and agent output
+
+Keep required evidence without repeatedly paying for the same signal:
+
+- Batch related edits, then run the smallest focused check once for that batch. Do
+  not rerun an unchanged green check merely to restate evidence.
+- Capture verbose successful command output in a temporary file outside the
+  repository and report only the command, exit status, test counts, and concise
+  summary. Surface the relevant failure tail when a command fails.
+- Do not run `harness:check` or `harness:eval` separately immediately before
+  `npm run verify` unless diagnosing them; the full gate already includes both.
+- For non-trivial work, run the full `npm run verify` gate before independent review
+  and once more after accepted Blocker/High review fixes. Additional full-gate runs
+  require changed gate inputs, a failure investigation, or an explicit user request.
+- Prefer focused tests during vertical slices. E2E/build/full-gate work belongs at
+  the handoff boundaries above, not after every file edit.
+- Specs, plans, and independent reviews remain required for non-trivial work, but do
+  not create or rerun that ceremony for tiny documentation/formatting corrections.
+
+These rules optimize agent latency and token usage; they do not weaken the definition
+of done or permit suppressing failures.
 
 ## Scope control
 

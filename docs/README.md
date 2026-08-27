@@ -1,6 +1,9 @@
 # Engineering handbook
 
 This directory is the durable project memory for humans and coding agents.
+Harness context contract: `HARNESS_CONTEXT_ROUTES_V0_2`. Resolve task classes through
+`.harness/manifest.yaml` at `context_strategy.routes`; this handbook links the selected
+source instead of defining a parallel routing table.
 
 | Need                                       | Source of truth                                                            |
 | ------------------------------------------ | -------------------------------------------------------------------------- |

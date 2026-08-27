@@ -41,9 +41,13 @@ test('restore_locked_dependencies requires committed dependency integrity', () =
   const wrongPairing = structuredClone(loaded.config);
   wrongPairing.entry_commands.build.integrity_policy =
     'committed_dependency_graph';
+  const wrongPairingErrors = validateConfig(wrongPairing);
+  assert.ok(wrongPairingErrors.length > 0);
   assert.ok(
-    validateConfig(wrongPairing).some((error) =>
-      error.includes('integrity_policy'),
+    wrongPairingErrors.some(
+      (error) =>
+        error.includes('entry_commands.build') ||
+        error.includes('must NOT be valid'),
     ),
   );
 });

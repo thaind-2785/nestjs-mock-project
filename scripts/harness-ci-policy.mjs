@@ -1,12 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { parse } from 'yaml';
-import { loadHarness } from './harness-check.mjs';
-
-const scriptDirectory = dirname(fileURLToPath(import.meta.url));
-const defaultRoot = resolve(scriptDirectory, '..');
-
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -61,10 +52,7 @@ export function validateCiWorkflowEnvelope(workflow, config) {
     triggers.push.branches.length !== 1 ||
     triggers.push.branches[0] !== 'main'
   ) {
-    addError(
-      `${rootPath}.on.push`,
-      'must contain only branches: [main]',
-    );
+    addError(`${rootPath}.on.push`, 'must contain only branches: [main]');
   }
 
   const concurrency = workflow?.concurrency;
@@ -84,9 +72,7 @@ export function validateCiWorkflowEnvelope(workflow, config) {
   }
 
   const job = workflow?.jobs?.verify;
-  if (
-    !hasExactKeys(job, ['name', 'runs-on', 'timeout-minutes', 'steps'])
-  ) {
+  if (!hasExactKeys(job, ['name', 'runs-on', 'timeout-minutes', 'steps'])) {
     addError(
       `${rootPath}.jobs.verify`,
       'must contain exactly the reviewed job keys; job-level env/defaults/container/services are forbidden',
@@ -103,37 +89,4 @@ export function validateCiWorkflowEnvelope(workflow, config) {
   }
 
   return errors;
-}
-
-export function runCiPolicyCheck(rootDirectory = defaultRoot) {
-  const loaded = loadHarness(rootDirectory);
-  const workflowPath = resolve(
-    rootDirectory,
-    loaded.config.runtime_contract.ci_workflow,
-  );
-  const workflow = parse(readFileSync(workflowPath, 'utf8'));
-  return validateCiWorkflowEnvelope(workflow, loaded.config);
-}
-
-function runCli() {
-  try {
-    const errors = runCiPolicyCheck();
-    if (errors.length > 0) {
-      console.error('Harness CI policy validation failed:');
-      for (const error of errors) console.error(`- ${error}`);
-      process.exitCode = 1;
-      return;
-    }
-    console.log('Harness CI workflow envelope valid.');
-  } catch (error) {
-    console.error(`Harness CI policy validation failed: ${error.message}`);
-    process.exitCode = 1;
-  }
-}
-
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
-  runCli();
 }

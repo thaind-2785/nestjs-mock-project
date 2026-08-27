@@ -26,7 +26,9 @@ export function validateCiWorkflowEnvelope(workflow, config) {
   const addError = (path, message) => errors.push(`${path}: ${message}`);
   const rootPath = 'runtime_contract.ci_workflow';
 
-  if (!hasExactKeys(workflow, ['name', 'on', 'permissions', 'concurrency', 'jobs'])) {
+  if (
+    !hasExactKeys(workflow, ['name', 'on', 'permissions', 'concurrency', 'jobs'])
+  ) {
     addError(
       rootPath,
       'must contain exactly the reviewed top-level keys and no workflow-level env/defaults injection',

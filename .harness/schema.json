@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/hotel-harness-v0.1.schema.json",
-  "title": "Hotel backend Harness v0.1",
+  "$id": "https://example.invalid/hotel-harness-v0.2.schema.json",
+  "title": "Hotel backend Harness v0.2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -22,7 +22,7 @@
     "runtime_contract"
   ],
   "properties": {
-    "schema_version": { "const": "0.1" },
+    "schema_version": { "const": "0.2" },
     "project": {
       "type": "object",
       "additionalProperties": false,
@@ -99,8 +99,33 @@
     "context_strategy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["precedence", "sources", "policy"],
+      "required": [
+        "canonical_registry",
+        "mirror_marker",
+        "mirrors",
+        "precedence",
+        "sources",
+        "fallback_route_id",
+        "fallback_source_ids",
+        "routes",
+        "policy"
+      ],
       "properties": {
+        "canonical_registry": { "const": "context_strategy.routes" },
+        "mirror_marker": { "$ref": "#/$defs/id" },
+        "mirrors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "role"],
+            "properties": {
+              "path": { "$ref": "#/$defs/repoPath" },
+              "role": { "$ref": "#/$defs/id" }
+            }
+          }
+        },
         "precedence": { "$ref": "#/$defs/idArray" },
         "sources": {
           "type": "array",
@@ -112,7 +137,24 @@
             "properties": {
               "id": { "$ref": "#/$defs/id" },
               "path": { "$ref": "#/$defs/repoPath" },
+              "path_kind": { "enum": ["file", "directory"] },
               "load": { "$ref": "#/$defs/id" }
+            }
+          }
+        },
+        "fallback_route_id": { "$ref": "#/$defs/id" },
+        "fallback_source_ids": { "$ref": "#/$defs/idArray" },
+        "routes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "task_classes", "source_ids"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "task_classes": { "$ref": "#/$defs/idArray" },
+              "source_ids": { "$ref": "#/$defs/idArray" }
             }
           }
         },
@@ -223,8 +265,18 @@
     "observability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["harness_events", "sinks", "redact"],
+      "required": [
+        "trace_schema_version",
+        "trace_format",
+        "allowed_fields",
+        "harness_events",
+        "sinks",
+        "redact"
+      ],
       "properties": {
+        "trace_schema_version": { "const": "0.2" },
+        "trace_format": { "const": "json_lines" },
+        "allowed_fields": { "$ref": "#/$defs/idArray" },
         "harness_events": {
           "type": "array",
           "minItems": 1,
@@ -263,8 +315,9 @@
     "evaluation_strategy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["evaluations", "future_suites"],
+      "required": ["fixture_path", "evaluations", "future_suites"],
       "properties": {
+        "fixture_path": { "$ref": "#/$defs/repoPath" },
         "evaluations": {
           "type": "array",
           "minItems": 1,
@@ -348,6 +401,7 @@
         "lockfile",
         "ci_workflow",
         "install_command_ref",
+        "child_environment",
         "environments"
       ],
       "properties": {
@@ -359,6 +413,14 @@
         "lockfile": { "$ref": "#/$defs/repoPath" },
         "ci_workflow": { "$ref": "#/$defs/repoPath" },
         "install_command_ref": { "$ref": "#/$defs/id" },
+        "child_environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["base_allowlist"],
+          "properties": {
+            "base_allowlist": { "$ref": "#/$defs/envNameArray" }
+          }
+        },
         "environments": {
           "type": "object",
           "minProperties": 1,
@@ -413,8 +475,35 @@
             "local_process"
           ]
         },
-        "environments": { "$ref": "#/$defs/idArray" }
-      }
+        "environments": { "$ref": "#/$defs/idArray" },
+        "forward_env": { "$ref": "#/$defs/envNameArray" },
+        "integrity_policy": { "enum": ["committed_dependency_graph"] }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "permission": { "const": "restore_locked_dependencies" }
+            },
+            "required": ["permission"]
+          },
+          "then": {
+            "type": "object",
+            "required": ["integrity_policy"],
+            "properties": {
+              "integrity_policy": { "const": "committed_dependency_graph" }
+            }
+          },
+          "else": {
+            "type": "object",
+            "not": {
+              "type": "object",
+              "required": ["integrity_policy"]
+            }
+          }
+        }
+      ]
     },
     "tool": {
       "type": "object",
@@ -428,6 +517,15 @@
         "timeout_seconds": { "type": "integer", "minimum": 1 },
         "implementation_ref": { "$ref": "#/$defs/repoPath" },
         "activation_condition": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "envNameArray": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
       }
     }
   }

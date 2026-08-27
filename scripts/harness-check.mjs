@@ -4,6 +4,12 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { parse } from 'yaml';
+import {
+  harnessTraceEventNames,
+  harnessTraceFieldNames,
+  isAllowedChildEnvironmentName,
+  isSecretLikeEnvName,
+} from './harness-runtime.mjs';
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const defaultRoot = resolve(scriptDirectory, '..');
@@ -46,30 +52,45 @@ export function loadTrackedPaths(rootDirectory) {
   };
 
   try {
-    // Materialize the current Git index as the tree that would be
-    // checked out if the index were committed.
-    //
-    // Important:
-    // - git add -N / --intent-to-add entries are excluded.
-    // - actually staged files are included.
-    // - staged deletions are excluded.
-    // - already tracked files remain included.
-    const treeId = execFileSync('git', ['write-tree'], gitOptions).trim();
-
-    const output = execFileSync(
+    const isRepository = execFileSync(
       'git',
-      ['ls-tree', '-r', '--name-only', '-z', treeId],
+      ['rev-parse', '--is-inside-work-tree'],
       gitOptions,
-    );
+    ).trim();
+    if (isRepository !== 'true') throw new Error('not_a_git_repository');
 
-    const paths = new Set(output.split('\0').filter(Boolean));
+    let headPaths = [];
+    try {
+      headPaths = execFileSync(
+        'git',
+        ['ls-tree', '-r', '--name-only', '-z', 'HEAD'],
+        gitOptions,
+      )
+        .split('\0')
+        .filter(Boolean);
+    } catch (error) {
+      // An unborn repository has no HEAD yet; staged material below is still
+      // valid clean-checkout evidence for the parser regression test.
+      if (error?.status !== 128) throw error;
+    }
+    const stagedMaterialPaths = execFileSync(
+      'git',
+      ['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'],
+      gitOptions,
+    )
+      .split('\0')
+      .filter(Boolean);
+
+    // HEAD represents clean-checkout evidence. A newly staged file also has a
+    // material index diff; intent-to-add has neither and is deliberately excluded.
+    const paths = new Set([...headPaths, ...stagedMaterialPaths]);
 
     return { paths, error: null };
   } catch (error) {
     const reason =
       error?.code === 'ETIMEDOUT'
         ? `timed out after ${gitTimeoutMs / 1000} seconds`
-        : `failed with ${error?.code ?? 'unknown error'}`;
+        : `failed with ${error?.code ?? error?.status ?? 'unknown error'}`;
 
     return {
       paths: null,
@@ -184,6 +205,19 @@ export function validateCiWorkflow(workflow, config) {
   }
 
   const job = workflow?.jobs?.verify;
+  const jobIds = Object.keys(workflow?.jobs ?? {});
+  if (jobIds.length !== 1 || jobIds[0] !== 'verify') {
+    addError(
+      'runtime_contract.ci_workflow.jobs',
+      'must contain only the reviewed verify job',
+    );
+  }
+  if (job && 'permissions' in job) {
+    addError(
+      'runtime_contract.ci_workflow.jobs.verify.permissions',
+      'job-level permission overrides are forbidden',
+    );
+  }
   const githubTool = config.tool_registry.find(
     (tool) => tool.id === 'github_actions',
   );
@@ -202,6 +236,54 @@ export function validateCiWorkflow(workflow, config) {
   }
 
   const steps = job?.steps ?? [];
+  if (steps.length !== 4) {
+    addError(
+      'runtime_contract.ci_workflow.jobs.verify.steps',
+      'must contain exactly four reviewed steps',
+    );
+  }
+  for (const [index, step] of steps.entries()) {
+    const reviewed =
+      String(step?.uses ?? '').startsWith('actions/checkout@') ||
+      String(step?.uses ?? '').startsWith('actions/setup-node@') ||
+      step?.run === config.entry_commands.bootstrap.command ||
+      step?.run === config.entry_commands.verify.command;
+    if (!reviewed) {
+      addError(
+        `runtime_contract.ci_workflow.jobs.verify.steps[${index}]`,
+        'is not a reviewed CI step',
+      );
+    }
+  }
+  const exactKeys = (value, allowedKeys) =>
+    isRecord(value) &&
+    Object.keys(value).every((key) => allowedKeys.includes(key)) &&
+    allowedKeys.every((key) => key in value);
+  const exactStepShapes = [
+    (step) =>
+      exactKeys(step, ['name', 'uses']) &&
+      String(step.uses).startsWith('actions/checkout@'),
+    (step) =>
+      exactKeys(step, ['name', 'uses', 'with']) &&
+      String(step.uses).startsWith('actions/setup-node@') &&
+      exactKeys(step.with, ['node-version-file', 'cache']) &&
+      step.with['node-version-file'] === config.runtime_contract.version_file &&
+      step.with.cache === 'npm',
+    (step) =>
+      exactKeys(step, ['name', 'run']) &&
+      step.run === config.entry_commands.bootstrap.command,
+    (step) =>
+      exactKeys(step, ['name', 'run']) &&
+      step.run === config.entry_commands.verify.command,
+  ];
+  for (const [index, matches] of exactStepShapes.entries()) {
+    if (!matches(steps[index])) {
+      addError(
+        `runtime_contract.ci_workflow.jobs.verify.steps[${index}]`,
+        'must match the reviewed step shape and order without extra keys',
+      );
+    }
+  }
   const setupNode = steps.find((step) =>
     String(step?.uses ?? '').startsWith('actions/setup-node@'),
   );
@@ -300,6 +382,11 @@ export function validateHarness(
     ...config.context_strategy.sources.map((source, index) => [
       `context_strategy.sources[${index}].path`,
       source.path,
+      source.path_kind ?? 'file',
+    ]),
+    ...config.context_strategy.mirrors.map((mirror, index) => [
+      `context_strategy.mirrors[${index}].path`,
+      mirror.path,
       'file',
     ]),
     ...config.skill_boundaries.skills.map((skill, index) => [
@@ -318,6 +405,11 @@ export function validateHarness(
       'file',
     ],
     ['runtime_contract.lockfile', config.runtime_contract.lockfile, 'file'],
+    [
+      'evaluation_strategy.fixture_path',
+      config.evaluation_strategy.fixture_path,
+      'file',
+    ],
     [
       'runtime_contract.ci_workflow',
       config.runtime_contract.ci_workflow,
@@ -359,6 +451,24 @@ export function validateHarness(
       ]);
     }
   }
+  if (
+    config.observability.allowed_fields.join('\0') !==
+    harnessTraceFieldNames.join('\0')
+  ) {
+    addError(
+      'observability.allowed_fields',
+      'must exactly match the runtime trace field allowlist',
+    );
+  }
+  const activeHarnessEventIds = config.observability.harness_events
+    .filter((event) => event.status === 'active')
+    .map((event) => event.id);
+  if (activeHarnessEventIds.join('\0') !== harnessTraceEventNames.join('\0')) {
+    addError(
+      'observability.harness_events',
+      'active event ids must exactly match the runtime trace event registry',
+    );
+  }
   for (const [
     path,
     declaredPath,
@@ -382,6 +492,15 @@ export function validateHarness(
   }
 
   for (const [id, command] of Object.entries(commands)) {
+    if (
+      id === 'bootstrap' &&
+      command.integrity_policy !== 'committed_dependency_graph'
+    ) {
+      addError(
+        'entry_commands.bootstrap.integrity_policy',
+        'must enforce committed_dependency_graph',
+      );
+    }
     if (command.npm_script !== undefined) {
       if (!(command.npm_script in packageScripts)) {
         addError(
@@ -440,6 +559,30 @@ export function validateHarness(
           `references non-active environment "${environment}"`,
         );
       }
+    }
+    for (const environmentName of command.forward_env ?? []) {
+      if (
+        isSecretLikeEnvName(environmentName) ||
+        !isAllowedChildEnvironmentName(environmentName, 'forward')
+      ) {
+        addError(
+          `entry_commands.${id}.forward_env`,
+          `name is not in the implementation forward allowlist: "${environmentName}"`,
+        );
+      }
+    }
+  }
+
+  for (const environmentName of config.runtime_contract.child_environment
+    .base_allowlist) {
+    if (
+      isSecretLikeEnvName(environmentName) ||
+      !isAllowedChildEnvironmentName(environmentName, 'base')
+    ) {
+      addError(
+        'runtime_contract.child_environment.base_allowlist',
+        `name is not in the implementation base allowlist: "${environmentName}"`,
+      );
     }
   }
 
@@ -535,6 +678,56 @@ export function validateHarness(
   ]) {
     for (const duplicate of duplicateValues(collectionIds(section[1]))) {
       addError(section[0], `duplicate id "${duplicate}"`);
+    }
+  }
+
+  const contextSourceIds = collectionIds(config.context_strategy.sources);
+  const contextSourceIdSet = new Set(contextSourceIds);
+  for (const duplicate of duplicateValues(contextSourceIds)) {
+    addError('context_strategy.sources', `duplicate id "${duplicate}"`);
+  }
+  for (const duplicate of duplicateValues(
+    collectionIds(config.context_strategy.routes),
+  )) {
+    addError('context_strategy.routes', `duplicate id "${duplicate}"`);
+  }
+  const routedTaskClasses = [];
+  for (const [index, route] of config.context_strategy.routes.entries()) {
+    routedTaskClasses.push(...route.task_classes);
+    for (const sourceId of route.source_ids) {
+      if (!contextSourceIdSet.has(sourceId)) {
+        addError(
+          `context_strategy.routes[${index}].source_ids`,
+          `references unknown context source "${sourceId}"`,
+        );
+      }
+    }
+  }
+  for (const sourceId of config.context_strategy.fallback_source_ids) {
+    if (!contextSourceIdSet.has(sourceId)) {
+      addError(
+        'context_strategy.fallback_source_ids',
+        `references unknown context source "${sourceId}"`,
+      );
+    }
+  }
+  for (const duplicate of duplicateValues(routedTaskClasses)) {
+    addError(
+      'context_strategy.routes',
+      `task class "${duplicate}" is assigned to multiple routes`,
+    );
+  }
+  for (const [index, mirror] of config.context_strategy.mirrors.entries()) {
+    const mirrorPath = resolve(rootDirectory, mirror.path);
+    if (!existsSync(mirrorPath)) continue;
+    const content = readFileSync(mirrorPath, 'utf8');
+    const markerCount =
+      content.split(config.context_strategy.mirror_marker).length - 1;
+    if (markerCount !== 1) {
+      addError(
+        `context_strategy.mirrors[${index}].path`,
+        `must contain marker "${config.context_strategy.mirror_marker}" exactly once`,
+      );
     }
   }
 

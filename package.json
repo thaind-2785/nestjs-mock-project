@@ -24,12 +24,12 @@
     "test:unit": "jest --runInBand",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
-    "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
+    "test:debug": "node --inspect-brk -r tsconfig-paths/register node_modules/.bin/jest --runInBand",
     "test:integration": "jest --config ./test/jest-integration.json --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
-    "harness:check": "node scripts/harness-check.mjs",
+    "harness:check": "node scripts/harness-check-all.mjs",
     "harness:eval": "node scripts/harness-eval.mjs",
-    "test:harness": "node --test scripts/harness-check.test.mjs scripts/harness-runtime.test.mjs scripts/harness-eval.test.mjs",
+    "test:harness": "node --test scripts/harness-check.test.mjs scripts/harness-runtime.test.mjs scripts/harness-eval.test.mjs scripts/harness-v02-closure.test.mjs",
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
@@ -40,7 +40,7 @@
     "rxjs": "^7.8.1"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3.2.0",
+    "@eslint/eslintrc": "^3.2.1",
     "@eslint/js": "^9.18.0",
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",

@@ -56,7 +56,7 @@
           <mxGeometry height="260" width="320" x="1900" y="970" as="geometry" />
         </mxCell>
         <mxCell id="note-core" parent="1" style="shape=note;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" value="&lt;b&gt;Key business rules&lt;/b&gt;&lt;br&gt;1. A room is one physical unit with non-overlapping active bookable windows.&lt;br&gt;2. A stay must fit one active room_time; only CONFIRMED bookings block availability.&lt;br&gt;3. Approval locks the room and checks overlap across all its windows.&lt;br&gt;4. Booking price/currency are immutable snapshots.&lt;br&gt;5. Attachment target is polymorphic and validated by the service." vertex="1">
-          <mxGeometry height="180" width="780" x="40" y="1090" as="geometry" />
+          <mxGeometry height="180" width="780" y="1090" as="geometry" />
         </mxCell>
         <mxCell id="note-review" parent="1" style="shape=note;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" value="&lt;b&gt;Implementation scope&lt;/b&gt;&lt;br&gt;Required core: users, auth, rooms, room_times, amenities, bookings, histories, typed attachments.&lt;br&gt;Optional: reviews and payments. Their tables are created only when the corresponding vertical slice is selected." vertex="1">
           <mxGeometry height="150" width="760" x="920" y="1105" as="geometry" />

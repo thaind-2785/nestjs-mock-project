@@ -37,17 +37,7 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/entryCommand" },
       "properties": {
-        "bootstrap": {
-          "allOf": [
-            { "$ref": "#/$defs/entryCommand" },
-            {
-              "required": ["integrity_policy"],
-              "properties": {
-                "integrity_policy": { "const": "committed_dependency_graph" }
-              }
-            }
-          ]
-        },
+        "bootstrap": { "$ref": "#/$defs/entryCommand" },
         "harness_check": { "$ref": "#/$defs/entryCommand" },
         "harness_test": { "$ref": "#/$defs/entryCommand" },
         "verify": { "$ref": "#/$defs/entryCommand" },
@@ -488,7 +478,32 @@
         "environments": { "$ref": "#/$defs/idArray" },
         "forward_env": { "$ref": "#/$defs/envNameArray" },
         "integrity_policy": { "enum": ["committed_dependency_graph"] }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "permission": { "const": "restore_locked_dependencies" }
+            },
+            "required": ["permission"]
+          },
+          "then": {
+            "type": "object",
+            "required": ["integrity_policy"],
+            "properties": {
+              "integrity_policy": { "const": "committed_dependency_graph" }
+            }
+          },
+          "else": {
+            "type": "object",
+            "not": {
+              "type": "object",
+              "required": ["integrity_policy"]
+            }
+          }
+        }
+      ]
     },
     "tool": {
       "type": "object",

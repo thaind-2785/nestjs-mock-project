@@ -20,55 +20,46 @@ function validateConfig(config) {
 function loadWorkflow() {
   return parse(
     readFileSync(
-      resolve(
-        loaded.rootDirectory,
-        loaded.config.runtime_contract.ci_workflow,
-      ),
+      resolve(loaded.rootDirectory, loaded.config.runtime_contract.ci_workflow),
       'utf8',
     ),
   );
 }
 
-test(
-  'restore_locked_dependencies requires committed dependency integrity',
-  () => {
-    const missingPolicy = structuredClone(loaded.config);
-    delete missingPolicy.entry_commands.bootstrap.integrity_policy;
-    assert.ok(
-      validateConfig(missingPolicy).some((error) =>
-        error.includes('integrity_policy'),
-      ),
-    );
+test('restore_locked_dependencies requires committed dependency integrity', () => {
+  const missingPolicy = structuredClone(loaded.config);
+  delete missingPolicy.entry_commands.bootstrap.integrity_policy;
+  assert.ok(
+    validateConfig(missingPolicy).some((error) =>
+      error.includes('integrity_policy'),
+    ),
+  );
 
-    const wrongPairing = structuredClone(loaded.config);
-    wrongPairing.entry_commands.build.integrity_policy =
-      'committed_dependency_graph';
-    const wrongPairingErrors = validateConfig(wrongPairing);
-    assert.ok(wrongPairingErrors.length > 0);
-    assert.ok(
-      wrongPairingErrors.some(
-        (error) =>
-          error.includes('entry_commands.build') ||
-          error.includes('must NOT be valid'),
-      ),
-    );
-  },
-);
+  const wrongPairing = structuredClone(loaded.config);
+  wrongPairing.entry_commands.build.integrity_policy =
+    'committed_dependency_graph';
+  const wrongPairingErrors = validateConfig(wrongPairing);
+  assert.ok(wrongPairingErrors.length > 0);
+  assert.ok(
+    wrongPairingErrors.some(
+      (error) =>
+        error.includes('entry_commands.build') ||
+        error.includes('must NOT be valid'),
+    ),
+  );
+});
 
-test(
-  'reviewed CI envelope rejects workflow-level environment injection',
-  () => {
-    const workflow = loadWorkflow();
-    workflow.env = {
-      NODE_OPTIONS: '--require ./attacker-controlled.js',
-    };
-    assert.ok(
-      validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
-        error.includes('reviewed top-level keys'),
-      ),
-    );
-  },
-);
+test('reviewed CI envelope rejects workflow-level environment injection', () => {
+  const workflow = loadWorkflow();
+  workflow.env = {
+    NODE_OPTIONS: '--require ./attacker-controlled.js',
+  };
+  assert.ok(
+    validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
+      error.includes('reviewed top-level keys'),
+    ),
+  );
+});
 
 test('reviewed CI envelope rejects workflow defaults', () => {
   const workflow = loadWorkflow();

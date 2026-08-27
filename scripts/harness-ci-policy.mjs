@@ -27,7 +27,13 @@ export function validateCiWorkflowEnvelope(workflow, config) {
   const rootPath = 'runtime_contract.ci_workflow';
 
   if (
-    !hasExactKeys(workflow, ['name', 'on', 'permissions', 'concurrency', 'jobs'])
+    !hasExactKeys(workflow, [
+      'name',
+      'on',
+      'permissions',
+      'concurrency',
+      'jobs',
+    ])
   ) {
     addError(
       rootPath,

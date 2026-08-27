@@ -373,8 +373,8 @@ runtime_contract:
   ci_workflow: .github/workflows/ci.yml
   install_command_ref: bootstrap
   environments:
-    local: { status: active, dependencies: [node, npm] }
-    ci: { status: active, dependencies: [node, npm, github_actions] }
+    local: { status: active, dependencies: [node, npm, git_read] }
+    ci: { status: active, dependencies: [node, npm, git_read, github_actions] }
     compose: { status: planned, phase: 1 }
     staging: { status: planned, phase: 8 }
     production: { status: planned, phase: 8 }

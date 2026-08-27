@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -9,11 +10,12 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import test from 'node:test';
 import { parse } from 'yaml';
 import {
   loadHarness,
+  loadTrackedPaths,
   validateCiWorkflow,
   validateHarness,
   validateRepositoryPath,
@@ -207,6 +209,54 @@ test('rejects missing, absolute, and escaping paths', () => {
   assert.ok(
     validate(escaping).some((error) => error.includes('escape the repository')),
   );
+});
+
+test('rejects a local artifact that is not tracked by Git', () => {
+  const temporaryRoot = resolve(loaded.rootDirectory, '.temp');
+  mkdirSync(temporaryRoot, { recursive: true });
+  const sandbox = mkdtempSync(join(temporaryRoot, 'harness-untracked-'));
+  const localOnlyFile = join(sandbox, 'local-only.md');
+  writeFileSync(localOnlyFile, 'local only');
+
+  try {
+    const config = structuredClone(loaded.config);
+    config.memory_model.records[0].path = relative(
+      loaded.rootDirectory,
+      localOnlyFile,
+    );
+    assert.ok(
+      validate(config).some((error) => error.includes('must be Git-tracked')),
+    );
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('does not treat an intent-to-add file as clean-checkout evidence', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'harness-git-index-'));
+  const repository = join(sandbox, 'repository');
+  mkdirSync(repository);
+  writeFileSync(join(repository, 'artifact.md'), 'artifact');
+
+  try {
+    execFileSync('git', ['init', '--quiet'], {
+      cwd: repository,
+      stdio: 'ignore',
+    });
+    execFileSync('git', ['add', '-N', 'artifact.md'], {
+      cwd: repository,
+      stdio: 'ignore',
+    });
+    assert.equal(loadTrackedPaths(repository).paths.has('artifact.md'), false);
+
+    execFileSync('git', ['add', 'artifact.md'], {
+      cwd: repository,
+      stdio: 'ignore',
+    });
+    assert.equal(loadTrackedPaths(repository).paths.has('artifact.md'), true);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test('rejects symlinks that leave the repository', () => {

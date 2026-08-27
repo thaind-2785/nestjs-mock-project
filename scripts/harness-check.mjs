@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Ajv2020 from 'ajv/dist/2020.js';
@@ -6,6 +7,8 @@ import { parse } from 'yaml';
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const defaultRoot = resolve(scriptDirectory, '..');
+const gitTimeoutMs = 60_000;
+const gitMaxBufferBytes = 16 * 1024 * 1024;
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -31,6 +34,67 @@ function isInside(rootPath, candidatePath) {
     pathFromRoot === '' ||
     (!pathFromRoot.startsWith(`..${sep}`) && pathFromRoot !== '..')
   );
+}
+
+export function loadTrackedPaths(rootDirectory) {
+  const gitOptions = {
+    cwd: rootDirectory,
+    encoding: 'utf8',
+    timeout: gitTimeoutMs,
+    maxBuffer: gitMaxBufferBytes,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  };
+
+  try {
+    // Materialize the current Git index as the tree that would be
+    // checked out if the index were committed.
+    //
+    // Important:
+    // - git add -N / --intent-to-add entries are excluded.
+    // - actually staged files are included.
+    // - staged deletions are excluded.
+    // - already tracked files remain included.
+    const treeId = execFileSync('git', ['write-tree'], gitOptions).trim();
+
+    const output = execFileSync(
+      'git',
+      ['ls-tree', '-r', '--name-only', '-z', treeId],
+      gitOptions,
+    );
+
+    const paths = new Set(output.split('\0').filter(Boolean));
+
+    return { paths, error: null };
+  } catch (error) {
+    const reason =
+      error?.code === 'ETIMEDOUT'
+        ? `timed out after ${gitTimeoutMs / 1000} seconds`
+        : `failed with ${error?.code ?? 'unknown error'}`;
+
+    return {
+      paths: null,
+      error: `cannot read the Git index (${reason}); ensure Git is installed and the repository is a valid checkout`,
+    };
+  }
+}
+
+function isTrackedPath(rootDirectory, declaredPath, trackedPaths) {
+  const repositoryPath = relative(
+    realpathSync(rootDirectory),
+    resolve(realpathSync(rootDirectory), declaredPath),
+  )
+    .split(sep)
+    .join('/');
+
+  for (const trackedPath of trackedPaths) {
+    if (
+      trackedPath === repositoryPath ||
+      trackedPath.startsWith(`${repositoryPath}/`)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function validateRepositoryPath(
@@ -224,8 +288,13 @@ export function validateHarness(
   const packageScripts = isRecord(packageJson?.scripts)
     ? packageJson.scripts
     : {};
+  const gitIndex = loadTrackedPaths(rootDirectory);
+  const trackedPaths = gitIndex.paths;
+  if (gitIndex.error) addError('repository.git_index', gitIndex.error);
 
   const pathChecks = [
+    ['manifest', '.harness/manifest.yaml', 'file'],
+    ['schema', '.harness/schema.json', 'file'],
     ['project.source_of_truth', config.project.source_of_truth, 'file'],
     ['workflow.state_record', config.workflow.state_record, 'directory'],
     ...config.context_strategy.sources.map((source, index) => [
@@ -262,6 +331,7 @@ export function validateHarness(
         `tool_registry[${index}].implementation_ref`,
         tool.implementation_ref,
         'any',
+        tool.implementation_ref !== '.git',
       ]);
     }
   }
@@ -289,13 +359,26 @@ export function validateHarness(
       ]);
     }
   }
-  for (const [path, declaredPath, expectedKind] of pathChecks) {
+  for (const [
+    path,
+    declaredPath,
+    expectedKind,
+    mustBeTracked = true,
+  ] of pathChecks) {
     const pathError = validateRepositoryPath(
       rootDirectory,
       declaredPath,
       expectedKind,
     );
-    if (pathError) addError(path, pathError);
+    if (pathError) {
+      addError(path, pathError);
+    } else if (
+      mustBeTracked &&
+      trackedPaths !== null &&
+      !isTrackedPath(rootDirectory, declaredPath, trackedPaths)
+    ) {
+      addError(path, `must be Git-tracked: ${declaredPath}`);
+    }
   }
 
   for (const [id, command] of Object.entries(commands)) {

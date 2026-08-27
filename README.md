@@ -9,6 +9,7 @@ NestJS starter baseline.
 
 - Node.js 22 (`.nvmrc`)
 - npm 10 or newer
+- Git CLI and a Git checkout (Harness validates committed repository artifacts)
 
 Phase 1 will add MySQL, Redis, MinIO, Mailpit, and Docker Compose. Capabilities marked
 `planned` in [`.harness/manifest.yaml`](.harness/manifest.yaml) are not available yet.

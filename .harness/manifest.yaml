@@ -1,0 +1,380 @@
+schema_version: '0.1'
+
+project:
+  name: nest-mock-project
+  repository_type: nestjs_modular_monolith
+  source_of_truth: AGENTS.md
+
+entry_commands:
+  bootstrap:
+    command: npm ci
+    permission: install_dependencies
+    tool_ref: npm
+    side_effect: dependency_tree
+    environments: [local, ci]
+  harness_check:
+    command: npm run harness:check
+    npm_script: harness:check
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: none
+    environments: [local, ci]
+  harness_test:
+    command: npm run test:harness
+    npm_script: test:harness
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: temporary_files
+    environments: [local, ci]
+  verify:
+    command: npm run verify
+    npm_script: verify
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: ignored_artifacts
+    environments: [local, ci]
+  dev:
+    command: npm run start:dev
+    npm_script: start:dev
+    permission: mutate_local_runtime
+    tool_ref: npm
+    side_effect: local_process
+    environments: [local]
+  build:
+    command: npm run build
+    npm_script: build
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: ignored_artifacts
+    environments: [local, ci]
+
+workflow:
+  initial_state: intake
+  terminal_states: [complete, blocked]
+  state_record: docs/plans
+  states:
+    - { id: intake, evidence: current user requirement }
+    - { id: specified, evidence: accepted feature spec }
+    - { id: planned, evidence: risk-aware implementation plan }
+    - { id: implementing, evidence: scoped code/docs changes }
+    - { id: verifying, evidence: focused and full checks }
+    - { id: reviewing, evidence: independent review report }
+    - { id: complete, evidence: closed findings and green gate }
+    - { id: blocked, evidence: documented external blocker }
+  transitions:
+    - { from: intake, to: specified, gate: accepted_spec }
+    - { from: specified, to: planned, gate: implementation_plan }
+    - { from: planned, to: implementing, gate: scope_confirmed }
+    - { from: implementing, to: verifying, gate: focused_checks }
+    - { from: verifying, to: reviewing, gate: verify }
+    - { from: reviewing, to: implementing, gate: findings_to_fix }
+    - { from: reviewing, to: complete, gate: independent_approval }
+    - { from: implementing, to: blocked, gate: blocker_policy }
+    - { from: verifying, to: blocked, gate: blocker_policy }
+    - { from: reviewing, to: blocked, gate: blocker_policy }
+
+context_strategy:
+  precedence:
+    - current_user_request
+    - AGENTS.md
+    - accepted_adrs
+    - accepted_feature_spec
+    - implementation_plan
+    - other_documentation
+  sources:
+    - { id: project_rules, path: AGENTS.md, load: always }
+    - { id: handbook_router, path: docs/README.md, load: non_trivial_work }
+    - {
+        id: normalized_scope,
+        path: docs/product/feature-scope.md,
+        load: product_work,
+      }
+    - {
+        id: api_catalog,
+        path: docs/api/endpoint-catalog.md,
+        load: api_or_integration,
+      }
+    - {
+        id: database_design,
+        path: docs/architecture/database.md,
+        load: persistence,
+      }
+    - {
+        id: test_strategy,
+        path: docs/quality/test-strategy.md,
+        load: implementation_or_review,
+      }
+  policy: load routed sources progressively; never load every document by default
+
+tool_registry:
+  - id: node
+    kind: runtime
+    status: active
+    permissions: [run_local_checks]
+    timeout_seconds: 900
+    implementation_ref: .nvmrc
+  - id: npm
+    kind: package_and_command_runner
+    status: active
+    permissions: [run_local_checks, install_dependencies, mutate_local_runtime]
+    timeout_seconds: 900
+    implementation_ref: package.json
+  - id: git_read
+    kind: version_control_read
+    status: active
+    permissions: [read_repository]
+    timeout_seconds: 60
+    implementation_ref: .git
+  - id: git_write
+    kind: version_control_write
+    status: active
+    permissions: [mutate_repository_history]
+    timeout_seconds: 120
+    implementation_ref: .git
+  - id: docker_compose
+    kind: local_service_runtime
+    status: planned
+    permissions: [mutate_local_runtime]
+    timeout_seconds: 600
+  - id: typeorm_migrations
+    kind: database_schema
+    status: planned
+    permissions: [mutate_local_data]
+    timeout_seconds: 300
+  - id: github_actions
+    kind: ci
+    status: active
+    permissions: [ci_read_only]
+    timeout_seconds: 1200
+    implementation_ref: .github/workflows/ci.yml
+  - id: custom_mcp
+    kind: external_capability
+    status: planned
+    permissions: [add_external_capability]
+    timeout_seconds: 60
+    activation_condition: only after a demonstrated gap not served by repository CLI or API
+
+permission_model:
+  actions:
+    read_repository: { effect: allow, scope: repository }
+    run_local_checks: { effect: allow, scope: non_destructive_commands }
+    edit_repository: { effect: task_scoped, scope: requested_change }
+    mutate_repository_history:
+      { effect: approval_required, scope: explicit_targets }
+    install_dependencies:
+      { effect: approval_required, scope: declared_packages }
+    mutate_local_runtime:
+      { effect: task_scoped, scope: named_local_processes_or_compose_services }
+    mutate_local_data:
+      { effect: approval_required, scope: explicit_local_database }
+    ci_read_only: { effect: allow, scope: repository_checks }
+    call_real_providers: { effect: approval_required, scope: non_ci_only }
+    deploy_staging: { effect: approval_required, scope: configured_target }
+    deploy_production:
+      { effect: approval_required, scope: human_controlled_workflow }
+    read_secrets: { effect: deny, scope: never_log_or_commit }
+    add_external_capability:
+      { effect: approval_required, scope: reviewed_plugin_or_mcp }
+
+hook_lifecycle:
+  hooks:
+    - id: manifest_changed
+      event: before_review
+      status: active
+      command_ref: harness_check
+      failure_policy: block
+    - id: harness_regression
+      event: before_review
+      status: active
+      command_ref: harness_test
+      failure_policy: block
+    - id: local_release_gate
+      event: before_handoff
+      status: active
+      command_ref: verify
+      failure_policy: block
+    - id: pull_request_gate
+      event: pull_request_open_or_update
+      status: active
+      command_ref: verify
+      failure_policy: block
+
+skill_boundaries:
+  skills:
+    - id: hotel_backend_delivery
+      path: .agents/skills/hotel-backend-delivery/SKILL.md
+      owns: routing to project sources and delivery workflow
+      does_not_own: business decisions, production credentials, deployment approval
+  creation_rule: add a skill only for a repeated specialized workflow with distinct inputs and outputs
+
+memory_model:
+  records:
+    - {
+        id: normalized_scope,
+        path: docs/product/feature-scope.md,
+        lifecycle: owner_approved,
+      }
+    - { id: specs, path: docs/specs, lifecycle: status_and_git_history }
+    - { id: plans, path: docs/plans, lifecycle: updated_per_slice }
+    - { id: decisions, path: docs/decisions, lifecycle: append_or_supersede }
+    - { id: reviews, path: docs/reviews, lifecycle: immutable_evidence }
+    - {
+        id: error_log,
+        path: docs/logs/error-log.md,
+        lifecycle: verified_lessons_only,
+      }
+  prohibited_content:
+    [
+      secrets,
+      raw_provider_tokens,
+      unsanitized_incident_data,
+      speculative_errors,
+    ]
+
+observability:
+  harness_events:
+    - { id: command_started, status: active, emitter: scripts/verify.mjs }
+    - { id: command_failed, status: active, emitter: scripts/verify.mjs }
+    - {
+        id: verification_completed,
+        status: active,
+        emitter: scripts/verify.mjs,
+      }
+    - {
+        id: review_findings_recorded,
+        status: manual,
+        emitter: docs/templates/review-report.md,
+      }
+    - {
+        id: workflow_state_changed,
+        status: manual,
+        emitter: active implementation plan,
+      }
+  sinks:
+    - {
+        id: local_command_output,
+        status: active,
+        retention: terminal_session,
+        implementation_ref: scripts/verify.mjs,
+      }
+    - {
+        id: github_check_summary,
+        status: active,
+        retention: repository_policy,
+        implementation_ref: .github/workflows/ci.yml,
+      }
+    - {
+        id: application_json_logs,
+        status: planned,
+        retention: repository_policy,
+        phase: 1,
+      }
+    - {
+        id: queue_and_cron_metrics,
+        status: planned,
+        retention: repository_policy,
+        phase: 5_to_7,
+      }
+  redact:
+    [authorization, cookie, oauth_code, provider_payload, secret, refresh_token]
+
+evaluation_strategy:
+  evaluations:
+    - id: harness_manifest
+      command_ref: harness_check
+      required: true
+      proves: registry references and policy structure are coherent
+    - id: harness_regression
+      command_ref: harness_test
+      required: true
+      proves: invalid manifests fail deterministically
+    - id: repository_gate
+      command_ref: verify
+      required: true
+      proves: formatting lint tests and build pass together
+  future_suites:
+    [
+      real_dependency_integration,
+      auth_contract,
+      booking_concurrency,
+      deployed_smoke,
+    ]
+
+pr_lifecycle:
+  host: github
+  required_commands: [harness_check, verify]
+  steps:
+    - scope_and_link_spec_plan
+    - locked_dependency_install
+    - required_evaluations
+    - independent_review
+    - disposition_findings
+    - merge
+  merge_blockers:
+    [failed_required_evaluation, unresolved_blocker, unresolved_high]
+  merge_enforcement:
+    status: external_not_verified
+    required_check: Verify repository
+    setup_reference: docs/harness/architecture.md#github-merge-protection
+  deployment: planned_phase_8
+
+autonomy_levels:
+  levels:
+    - id: L0
+      name: read_only
+      status: active
+      permissions: [read_repository, run_local_checks]
+    - id: L1
+      name: plan
+      status: active
+      permissions: [read_repository, run_local_checks, edit_repository]
+    - id: L2
+      name: local_implementation
+      status: active
+      permissions:
+        [
+          read_repository,
+          run_local_checks,
+          edit_repository,
+          mutate_local_runtime,
+        ]
+    - id: L3
+      name: non_production_operations
+      status: planned
+      permissions:
+        [
+          read_repository,
+          run_local_checks,
+          edit_repository,
+          mutate_local_runtime,
+          deploy_staging,
+        ]
+    - id: L4
+      name: production_sensitive
+      status: planned
+      permissions:
+        [
+          read_repository,
+          run_local_checks,
+          edit_repository,
+          deploy_staging,
+          deploy_production,
+        ]
+  default: L2
+  rule: autonomy never overrides an action permission or explicit approval requirement
+
+runtime_contract:
+  node_major: 22
+  node_engine: '>=22 <23'
+  npm_minimum_major: 10
+  npm_engine: '>=10'
+  version_file: .nvmrc
+  lockfile: package-lock.json
+  ci_workflow: .github/workflows/ci.yml
+  install_command_ref: bootstrap
+  environments:
+    local: { status: active, dependencies: [node, npm, git_read] }
+    ci: { status: active, dependencies: [node, npm, git_read, github_actions] }
+    compose: { status: planned, phase: 1 }
+    staging: { status: planned, phase: 8 }
+    production: { status: planned, phase: 8 }

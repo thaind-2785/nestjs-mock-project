@@ -4,7 +4,9 @@ This directory is the durable project memory for humans and coding agents.
 
 | Need                                       | Source of truth                                                            |
 | ------------------------------------------ | -------------------------------------------------------------------------- |
-| Original mentor brief                      | [`../feature.md`](../feature.md)                                           |
+| Executable Harness architecture            | [`harness/architecture.md`](harness/architecture.md)                       |
+| Machine Harness registry                   | [`../.harness/manifest.yaml`](../.harness/manifest.yaml)                   |
+| Harness manifest schema                    | [`../.harness/schema.json`](../.harness/schema.json)                       |
 | Normalized scope and priorities            | [`product/feature-scope.md`](product/feature-scope.md)                     |
 | API, events, cron, workers, CI/CD triggers | [`api/endpoint-catalog.md`](api/endpoint-catalog.md)                       |
 | Runtime/component design                   | [`architecture/system-design.md`](architecture/system-design.md)           |

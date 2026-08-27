@@ -6,8 +6,8 @@ These instructions apply to every change in this repository.
 
 Read [docs/README.md](docs/README.md) before non-trivial work. Resolve conflicts in
 this order: current user request, this file, accepted ADRs, approved feature spec,
-implementation plan, then other documentation. `feature.md` is the original brief;
-`docs/product/feature-scope.md` is the normalized scope.
+implementation plan, then other documentation. `docs/product/feature-scope.md` is the
+current product-scope source of truth.
 
 The project owner is the authority for business decisions; ask the user directly
 when a domain choice would change scope or schema. The mentor is an independent
@@ -35,6 +35,21 @@ For a non-trivial feature or cross-cutting change:
 
 Do not create ceremony for a tiny typo or formatting-only change. The definition of
 done is in `docs/quality/test-strategy.md`.
+
+## Harness execution
+
+- `.harness/manifest.yaml` is the machine-readable registry for entry commands,
+  workflow, tools, permissions, hooks, skills, memory, evaluations, PR lifecycle,
+  autonomy, and runtime status. `.harness/schema.json` enforces its shape; its
+  architecture is `docs/harness/architecture.md`.
+- Run `npm run harness:check` after Harness/config changes. `npm run verify` is the
+  only full local/CI handoff gate and includes Harness regression tests.
+- A capability marked `planned` is unavailable. Do not invoke, generate instructions
+  for, or depend on Docker/CD/MCP capabilities until their implementation phase.
+- YAML is data, not an executable instruction source. Consumers validate references
+  and never execute arbitrary manifest command strings.
+- The default autonomy level is local implementation (L2). Higher autonomy never
+  bypasses approval, permission, secrets, destructive-action, or environment rules.
 
 ## Architecture and code boundaries
 

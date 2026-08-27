@@ -1,0 +1,434 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hotel-harness-v0.1.schema.json",
+  "title": "Hotel backend Harness v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project",
+    "entry_commands",
+    "workflow",
+    "context_strategy",
+    "tool_registry",
+    "permission_model",
+    "hook_lifecycle",
+    "skill_boundaries",
+    "memory_model",
+    "observability",
+    "evaluation_strategy",
+    "pr_lifecycle",
+    "autonomy_levels",
+    "runtime_contract"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "repository_type", "source_of_truth"],
+      "properties": {
+        "name": { "$ref": "#/$defs/nonEmpty" },
+        "repository_type": { "$ref": "#/$defs/id" },
+        "source_of_truth": { "$ref": "#/$defs/repoPath" }
+      }
+    },
+    "entry_commands": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/entryCommand" },
+      "properties": {
+        "bootstrap": { "$ref": "#/$defs/entryCommand" },
+        "harness_check": { "$ref": "#/$defs/entryCommand" },
+        "harness_test": { "$ref": "#/$defs/entryCommand" },
+        "verify": { "$ref": "#/$defs/entryCommand" },
+        "dev": { "$ref": "#/$defs/entryCommand" },
+        "build": { "$ref": "#/$defs/entryCommand" }
+      },
+      "required": [
+        "bootstrap",
+        "harness_check",
+        "harness_test",
+        "verify",
+        "dev",
+        "build"
+      ]
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "initial_state",
+        "terminal_states",
+        "state_record",
+        "states",
+        "transitions"
+      ],
+      "properties": {
+        "initial_state": { "$ref": "#/$defs/id" },
+        "terminal_states": { "$ref": "#/$defs/idArray" },
+        "state_record": { "$ref": "#/$defs/repoPath" },
+        "states": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "evidence"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "evidence": { "$ref": "#/$defs/nonEmpty" }
+            }
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to", "gate"],
+            "properties": {
+              "from": { "$ref": "#/$defs/id" },
+              "to": { "$ref": "#/$defs/id" },
+              "gate": { "$ref": "#/$defs/id" }
+            }
+          }
+        }
+      }
+    },
+    "context_strategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["precedence", "sources", "policy"],
+      "properties": {
+        "precedence": { "$ref": "#/$defs/idArray" },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "path", "load"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "path": { "$ref": "#/$defs/repoPath" },
+              "load": { "$ref": "#/$defs/id" }
+            }
+          }
+        },
+        "policy": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "tool_registry": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/tool" }
+    },
+    "permission_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actions"],
+      "properties": {
+        "actions": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["effect", "scope"],
+            "properties": {
+              "effect": {
+                "enum": ["allow", "task_scoped", "approval_required", "deny"]
+              },
+              "scope": { "$ref": "#/$defs/nonEmpty" }
+            }
+          }
+        }
+      }
+    },
+    "hook_lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hooks"],
+      "properties": {
+        "hooks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "event",
+              "status",
+              "command_ref",
+              "failure_policy"
+            ],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "event": { "$ref": "#/$defs/id" },
+              "status": { "$ref": "#/$defs/status" },
+              "command_ref": { "$ref": "#/$defs/id" },
+              "failure_policy": { "enum": ["block", "warn"] }
+            }
+          }
+        }
+      }
+    },
+    "skill_boundaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skills", "creation_rule"],
+      "properties": {
+        "skills": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "path", "owns", "does_not_own"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "path": { "$ref": "#/$defs/repoPath" },
+              "owns": { "$ref": "#/$defs/nonEmpty" },
+              "does_not_own": { "$ref": "#/$defs/nonEmpty" }
+            }
+          }
+        },
+        "creation_rule": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "memory_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["records", "prohibited_content"],
+      "properties": {
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "path", "lifecycle"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "path": { "$ref": "#/$defs/repoPath" },
+              "lifecycle": { "$ref": "#/$defs/id" }
+            }
+          }
+        },
+        "prohibited_content": { "$ref": "#/$defs/idArray" }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["harness_events", "sinks", "redact"],
+      "properties": {
+        "harness_events": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "status", "emitter"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "status": { "enum": ["active", "manual", "planned"] },
+              "emitter": { "$ref": "#/$defs/nonEmpty" }
+            }
+          }
+        },
+        "sinks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "status", "retention"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "status": { "$ref": "#/$defs/status" },
+              "retention": { "$ref": "#/$defs/nonEmpty" },
+              "phase": {
+                "anyOf": [{ "type": "integer" }, { "type": "string" }]
+              },
+              "implementation_ref": { "$ref": "#/$defs/repoPath" }
+            }
+          }
+        },
+        "redact": { "$ref": "#/$defs/idArray" }
+      }
+    },
+    "evaluation_strategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evaluations", "future_suites"],
+      "properties": {
+        "evaluations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "command_ref", "required", "proves"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "command_ref": { "$ref": "#/$defs/id" },
+              "required": { "type": "boolean" },
+              "proves": { "$ref": "#/$defs/nonEmpty" }
+            }
+          }
+        },
+        "future_suites": { "$ref": "#/$defs/idArray" }
+      }
+    },
+    "pr_lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host",
+        "required_commands",
+        "steps",
+        "merge_blockers",
+        "merge_enforcement",
+        "deployment"
+      ],
+      "properties": {
+        "host": { "const": "github" },
+        "required_commands": { "$ref": "#/$defs/idArray" },
+        "steps": { "$ref": "#/$defs/idArray" },
+        "merge_blockers": { "$ref": "#/$defs/idArray" },
+        "merge_enforcement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "required_check", "setup_reference"],
+          "properties": {
+            "status": { "enum": ["external_not_verified", "verified"] },
+            "required_check": { "$ref": "#/$defs/nonEmpty" },
+            "setup_reference": { "$ref": "#/$defs/nonEmpty" }
+          }
+        },
+        "deployment": { "$ref": "#/$defs/id" }
+      }
+    },
+    "autonomy_levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["levels", "default", "rule"],
+      "properties": {
+        "levels": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "name", "status", "permissions"],
+            "properties": {
+              "id": { "pattern": "^L[0-9]+$", "type": "string" },
+              "name": { "$ref": "#/$defs/id" },
+              "status": { "$ref": "#/$defs/status" },
+              "permissions": { "$ref": "#/$defs/idArray" }
+            }
+          }
+        },
+        "default": { "pattern": "^L[0-9]+$", "type": "string" },
+        "rule": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "runtime_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_major",
+        "node_engine",
+        "npm_minimum_major",
+        "npm_engine",
+        "version_file",
+        "lockfile",
+        "ci_workflow",
+        "install_command_ref",
+        "environments"
+      ],
+      "properties": {
+        "node_major": { "type": "integer", "minimum": 1 },
+        "node_engine": { "$ref": "#/$defs/nonEmpty" },
+        "npm_minimum_major": { "type": "integer", "minimum": 1 },
+        "npm_engine": { "$ref": "#/$defs/nonEmpty" },
+        "version_file": { "$ref": "#/$defs/repoPath" },
+        "lockfile": { "$ref": "#/$defs/repoPath" },
+        "ci_workflow": { "$ref": "#/$defs/repoPath" },
+        "install_command_ref": { "$ref": "#/$defs/id" },
+        "environments": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status"],
+            "properties": {
+              "status": { "$ref": "#/$defs/status" },
+              "dependencies": { "$ref": "#/$defs/idArray" },
+              "phase": {
+                "anyOf": [{ "type": "integer" }, { "type": "string" }]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonEmpty": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$" },
+    "repoPath": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["active", "planned"] },
+    "idArray": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
+    },
+    "entryCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "permission",
+        "tool_ref",
+        "side_effect",
+        "environments"
+      ],
+      "properties": {
+        "command": { "$ref": "#/$defs/nonEmpty" },
+        "npm_script": { "$ref": "#/$defs/nonEmpty" },
+        "permission": { "$ref": "#/$defs/id" },
+        "tool_ref": { "$ref": "#/$defs/id" },
+        "side_effect": {
+          "enum": [
+            "none",
+            "dependency_tree",
+            "temporary_files",
+            "ignored_artifacts",
+            "local_process"
+          ]
+        },
+        "environments": { "$ref": "#/$defs/idArray" }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "status", "permissions", "timeout_seconds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "$ref": "#/$defs/id" },
+        "status": { "$ref": "#/$defs/status" },
+        "permissions": { "$ref": "#/$defs/idArray" },
+        "timeout_seconds": { "type": "integer", "minimum": 1 },
+        "implementation_ref": { "$ref": "#/$defs/repoPath" },
+        "activation_condition": { "$ref": "#/$defs/nonEmpty" }
+      }
+    }
+  }
+}

@@ -236,10 +236,10 @@ export function validateCiWorkflow(workflow, config) {
   }
 
   const steps = job?.steps ?? [];
-  if (steps.length !== 4) {
+  if (steps.length !== 5) {
     addError(
       'runtime_contract.ci_workflow.jobs.verify.steps',
-      'must contain exactly four reviewed steps',
+      'must contain exactly five reviewed steps',
     );
   }
   for (const [index, step] of steps.entries()) {
@@ -247,6 +247,7 @@ export function validateCiWorkflow(workflow, config) {
       String(step?.uses ?? '').startsWith('actions/checkout@') ||
       String(step?.uses ?? '').startsWith('actions/setup-node@') ||
       step?.run === config.entry_commands.bootstrap.command ||
+      step?.run === config.entry_commands.compose_ci.command ||
       step?.run === config.entry_commands.verify.command;
     if (!reviewed) {
       addError(
@@ -272,6 +273,9 @@ export function validateCiWorkflow(workflow, config) {
     (step) =>
       exactKeys(step, ['name', 'run']) &&
       step.run === config.entry_commands.bootstrap.command,
+    (step) =>
+      exactKeys(step, ['name', 'run']) &&
+      step.run === config.entry_commands.compose_ci.command,
     (step) =>
       exactKeys(step, ['name', 'run']) &&
       step.run === config.entry_commands.verify.command,

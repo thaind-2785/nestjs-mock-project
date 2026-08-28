@@ -53,7 +53,7 @@ pinned to explicit reviewed versions during `P1-T03`.
 | `P1-T01` | The API validates environment configuration before listening, uses `/api/v1`, rejects unknown DTO fields, shuts down gracefully, and exposes dependency-free `GET /api/v1/health/live` | `src/config`, `src/health`, `src/main.ts`, `src/app.module.ts`, `.env.example`, package graph | None                                                                         | Config boundary unit tests; bootstrap and liveness E2E                                           | Complete |
 | `P1-T02` | HTTP responses have one server-generated request ID, stable localized errors in EN/VI, structured completion logs, and config-gated Swagger at `/api/docs`                             | `src/common`, `src/i18n` or `src/locales`, bootstrap/docs configuration                       | None                                                                         | Locale/fallback, filter, request-ID and log unit tests; validation/error/Swagger E2E             | Complete |
 | `P1-T03` | MySQL, Redis, MinIO, and Mailpit start locally with reviewed versions, healthchecks, named volumes, and safe example credentials                                                       | `compose.yaml`, `.env.example`, local setup docs                                              | None                                                                         | `docker compose config`; service health smoke; restart/persistence check without volume deletion | Complete |
-| `P1-T04` | The app and CLI share validated TypeORM options, never synchronize schema, and a disposable MySQL integration test proves reversible migration execution                               | `src/database`, TypeORM data source, migration scripts, integration fixtures/config           | Test-only reversible fixture; first production migration deferred to Phase 2 | Config unit tests; real MySQL connection and migration up/down integration tests                 | Pending  |
+| `P1-T04` | The app and CLI share validated TypeORM options, never synchronize schema, and a disposable MySQL integration test proves reversible migration execution                               | `src/database`, `test/fixtures`, migration CLI scripts, integration config                    | Test-only reversible fixture; first production migration deferred to Phase 2 | Config unit tests; real MySQL connection and migration up/down integration tests                 | Complete |
 | `P1-T05` | `GET /api/v1/health/ready` returns `200` only for healthy MySQL/Redis/MinIO and sanitized bounded `503 SERVICE_NOT_READY` otherwise, while liveness stays `200`                        | `src/health`, focused Redis/storage clients or adapters, readiness config                     | None                                                                         | Indicator timeout/failure unit tests; real dependency integration; ready/live E2E failure matrix | Pending  |
 | `P1-T06` | A clean documented local workflow runs focused suites and the unchanged full gate; API/config/Compose/migration docs agree; independent findings are dispositioned                     | test helpers, README/docs, spec/plan/review evidence, verification wiring only if required    | None                                                                         | Full `npm run verify`; Compose prerequisite negative test; independent adversarial review        | Pending  |
 
@@ -83,7 +83,7 @@ Expected focused commands are finalized with their test paths during implementat
 - `docker compose config`
 - `docker compose up -d mysql redis minio mailpit`
 - `docker compose ps`
-- explicit TypeORM migration up/down commands registered in `package.json`
+- explicit test-fixture TypeORM migration up/down commands registered in `package.json`
 - `npm run harness:check` after Harness/package-command registration changes only
 - `npm run verify` once before independent review
 - affected focused checks plus `npm run verify` once after accepted Blocker/High fixes
@@ -212,6 +212,44 @@ diagnostic tail.
 - No application client, readiness endpoint, migration, product schema, real email,
   bucket mutation, `api` container, or `worker` container is introduced by this slice.
 
+## P1-T04 implementation evidence
+
+- Installed and locked `@nestjs/typeorm@11.0.3`, `typeorm@0.3.31`, and `mysql2@3.24.2`;
+  installation reported zero known vulnerabilities. The application `DatabaseModule`
+  owns the database config feature provider, while `AppConfigModule` remains scoped to
+  application configuration.
+- `src/database/database.options.ts` is the shared TypeORM option factory used by the
+  Nest module and the explicit test-fixture CLI data source. It enforces MySQL,
+  `utf8mb4`, bounded connection timeout, `migrationsRun: false`, and
+  `synchronize: false`.
+- Database environment values are validated before a client is created. Local/test
+  defaults match Compose; production requires an explicit `MYSQL_PASSWORD`. Non-secret
+  host, port, database, and user overrides may pass through managed checks without
+  forwarding credentials.
+- The migration fixture and CLI data source live under `test/fixtures/`; commands are
+  explicitly named `migration:test:run` and `migration:test:revert`. The fixture creates
+  only `p1_t04_migration_probe`, uses a namespaced test migration ledger, and is always
+  reverted/cleaned by the integration test. No production migration is added.
+- `MYSQL_PORT=13306 npm run test:integration -- --runTestsByPath
+test/database.integration-spec.ts test/app.integration-spec.ts` passed 2 suites and
+  2 tests against the real MySQL Compose service on this host. The app module connected
+  through TypeORM, and the fixture migrated up/down inside a unique database that was
+  dropped during cleanup; no `p1_t04_*` database remained.
+- `MYSQL_PORT=13306 npm run test:e2e -- --runTestsByPath test/app.e2e-spec.ts` passed
+  1 suite and 11 tests with the database module active. Both migration CLI commands
+  completed successfully against the same service.
+- Final post-review-fix `MYSQL_PORT=13306 npm run verify` completed with exit code `0`:
+  Harness passed 68/68 tests and 10 evaluation fixtures; Compose passed 7/7 tests
+  plus config validation; formatting, lint, unit passed 9 suites/31 tests, integration passed 2
+  suites/2 tests, E2E passed 1 suite/11 tests, and build passed. The full log is
+  retained outside the repository at `/tmp/p1-t04-verify-postreviewfix.log`.
+- CI now starts the digest-pinned MySQL Compose dependency through the reviewed
+  `compose:ci` entrypoint before the shared verify gate, keeping real integration/E2E
+  prerequisites explicit without forwarding any database credential through Harness.
+- Independent review `docs/reviews/REVIEW-012-platform-foundation-p1-t04.md` approved
+  the current revision after all High/Medium/Low findings were fixed and the post-fix
+  full gate passed.
+
 ## Deployment and rollback
 
 - No production deployment occurs in Phase 1.
@@ -257,3 +295,7 @@ diagnostic tail.
   a [published security advisory](https://github.com/minio/minio/security/advisories/GHSA-xh8f-g2qw-gcm7),
   it is digest-pinned, exposed only on loopback, and prohibited as the later production
   object-storage selection.
+- `P1-T04` keeps the application config module application-only; `DatabaseModule`
+  registers the database config feature next to the TypeORM connection. The reversible
+  migration remains under `test/fixtures/` so a future production migration directory
+  cannot be mistaken for a test probe.

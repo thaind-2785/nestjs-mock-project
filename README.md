@@ -22,6 +22,7 @@ Docker Compose is active for local dependency services. Capabilities still marke
 
 ```bash
 npm ci
+npm run compose:smoke
 npm run harness:check
 npm run start:dev
 ```
@@ -69,7 +70,18 @@ npm run compose:smoke
 
 # Inspect service health
 docker compose ps
+
+# Exercise the P1-T04 fixture on a disposable/test database, then revert it
+# (set NODE_ENV=test and MYSQL_DATABASE to a disposable schema first)
+npm run migration:test:run
+npm run migration:test:revert
 ```
+
+The migration commands are test-infrastructure checks only. They create and remove
+`p1_t04_migration_probe` in the configured test database; they are not production
+migration commands. The integration suite creates a unique disposable database and
+drops it during cleanup. Product-domain migrations begin in the owning Phase 2+
+slices.
 
 Local endpoints are MySQL `127.0.0.1:3306`, Redis `127.0.0.1:6379`, MinIO S3
 `http://127.0.0.1:9000`, MinIO Console `http://127.0.0.1:9001`, Mailpit SMTP

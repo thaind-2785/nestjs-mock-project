@@ -44,7 +44,17 @@ entry_commands:
     tool_ref: docker_compose
     side_effect: none
     environments: [local, ci, compose]
-    forward_env: [CI, LANG, LC_ALL, TZ]
+    forward_env:
+      [CI, LANG, LC_ALL, TZ, MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER]
+  compose_ci:
+    command: npm run compose:ci
+    npm_script: compose:ci
+    permission: mutate_local_runtime
+    tool_ref: npm
+    side_effect: local_process
+    environments: [ci]
+    forward_env:
+      [CI, LANG, LC_ALL, TZ, MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER]
   compose_test:
     command: npm run test:compose
     npm_script: test:compose
@@ -60,7 +70,8 @@ entry_commands:
     tool_ref: docker_compose
     side_effect: local_process
     environments: [local, compose]
-    forward_env: [CI, LANG, LC_ALL, TZ]
+    forward_env:
+      [CI, LANG, LC_ALL, TZ, MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER]
   verify:
     command: npm run verify
     npm_script: verify
@@ -68,7 +79,8 @@ entry_commands:
     tool_ref: npm
     side_effect: ignored_artifacts
     environments: [local, ci]
-    forward_env: [CI, LANG, LC_ALL, TZ]
+    forward_env:
+      [CI, LANG, LC_ALL, TZ, MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER]
   dev:
     command: npm run start:dev
     npm_script: start:dev
@@ -116,7 +128,18 @@ entry_commands:
     tool_ref: npm
     side_effect: ignored_artifacts
     environments: [local, ci]
-    forward_env: [CI, LANG, LC_ALL, NODE_ENV, TZ]
+    forward_env:
+      [
+        CI,
+        LANG,
+        LC_ALL,
+        NODE_ENV,
+        TZ,
+        MYSQL_HOST,
+        MYSQL_PORT,
+        MYSQL_DATABASE,
+        MYSQL_USER,
+      ]
   e2e_test:
     command: npm run test:e2e
     npm_script: test:e2e
@@ -124,7 +147,18 @@ entry_commands:
     tool_ref: npm
     side_effect: ignored_artifacts
     environments: [local, ci]
-    forward_env: [CI, LANG, LC_ALL, NODE_ENV, TZ]
+    forward_env:
+      [
+        CI,
+        LANG,
+        LC_ALL,
+        NODE_ENV,
+        TZ,
+        MYSQL_HOST,
+        MYSQL_PORT,
+        MYSQL_DATABASE,
+        MYSQL_USER,
+      ]
 
 workflow:
   initial_state: intake

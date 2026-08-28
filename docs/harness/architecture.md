@@ -102,10 +102,13 @@ to loopback, and named volumes preserve local development state.
 
 `test:compose` and `compose:config` are non-mutating requirements of the local and CI
 verification gate. Configuration validation requires a Compose CLI but does not
-start a Docker daemon workload. `compose:smoke` is a local-only, explicitly mutating
-check: it starts exactly those four dependencies, waits for health, restarts Redis,
-and verifies a uniquely named persistence probe without deleting volumes or stopping
-the stack.
+start a Docker daemon workload. The CI workflow starts only the MySQL dependency
+through the reviewed `compose:ci` entrypoint before `verify` so the real TypeORM
+integration and application E2E tests have their documented prerequisite; the runner
+is disposable. `compose:smoke` remains an
+explicitly mutating local check: it starts exactly the four dependencies, waits for
+health, restarts Redis, and verifies a uniquely named persistence probe without
+deleting volumes or stopping the stack.
 
 Immutable pulls of the four digest-pinned dependency images are part of this local
 boundary. Application-image build/publish, registry mutation, API/worker containers,
@@ -204,7 +207,7 @@ Hooks are visible, bounded, and fail closed:
 - Pull request/push to main installs locked dependencies and runs the same verify
   command in GitHub Actions. Third-party actions are pinned to immutable commits.
 - CI uses read-only repository permissions and never calls real external providers.
-- CI validation permits exactly the reviewed `verify` job and its four known steps;
+- CI validation permits exactly the reviewed `verify` job and its five known steps;
   job-level permission overrides and extra jobs/commands fail validation.
 
 Git hooks are intentionally absent in v0.2: they modify developer workflow and are

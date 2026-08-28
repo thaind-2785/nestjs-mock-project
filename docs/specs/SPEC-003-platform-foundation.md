@@ -110,8 +110,9 @@ Foundation lifecycle rules:
   and `synchronize: false` in every environment.
 - Add a reversible migration fixture used only by integration tests. Do not add a
   production marker table or no-op migration solely to prove the toolchain.
-- Migration commands use the same validated database configuration as the app but run
-  as an explicit process suitable for local use and a later deployment job.
+- Test-fixture migration commands use the same validated database configuration as the
+  app but run as an explicit local process. Production migration commands and runners
+  begin with the owning domain slice and later deployment phase.
 - Integration tests prove fixture migration up/down from an empty disposable database
   and the documented production rollback/forward-fix policy.
 - The users/auth schema begins in the Auth and RBAC phase so its migration, service,
@@ -178,7 +179,7 @@ Foundation lifecycle rules:
 - [ ] Given any required readiness dependency is unavailable or slow, when readiness
       is requested, then it returns `503 SERVICE_NOT_READY` without leaking connection
       details while liveness remains `200`.
-- [ ] Given an empty disposable MySQL database, when the migration integration suite
+- [x] Given an empty disposable MySQL database, when the migration integration suite
       runs, then the reversible fixture migrates up/down with `synchronize: false`;
       no fake production schema object is introduced.
 - [x] Given a clean machine with Docker Compose and the documented environment, when

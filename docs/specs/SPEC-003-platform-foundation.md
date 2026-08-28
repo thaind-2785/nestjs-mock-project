@@ -181,7 +181,7 @@ Foundation lifecycle rules:
 - [ ] Given an empty disposable MySQL database, when the migration integration suite
       runs, then the reversible fixture migrates up/down with `synchronize: false`;
       no fake production schema object is introduced.
-- [ ] Given a clean machine with Docker Compose and the documented environment, when
+- [x] Given a clean machine with Docker Compose and the documented environment, when
       dependency services start, then MySQL, Redis, MinIO, and Mailpit become healthy
       without any real external provider call.
 - [ ] Given Compose prerequisites are absent, when an integration/E2E suite requiring

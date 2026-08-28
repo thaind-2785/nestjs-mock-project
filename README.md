@@ -5,16 +5,18 @@ booking requests, administration, cloud files, email, Worker Threads, cron, and
 CI/CD. Product features are designed but not yet implemented. The API currently
 provides the first platform-foundation slices: validated configuration, strict DTO
 validation, graceful shutdown hooks, request-correlated EN/VI errors, structured
-request logs, OpenAPI documentation, and process liveness under `/api/v1`.
+request logs, OpenAPI documentation, process liveness under `/api/v1`, and local
+MySQL/Redis/MinIO/Mailpit dependency services.
 
 ## Runtime requirements
 
 - Node.js 22 (`.nvmrc`)
 - npm 10 or newer
 - Git CLI and a Git checkout (Harness validates committed repository artifacts)
+- Docker Engine with Docker Compose v2 or newer (plugin or standalone CLI)
 
-Phase 1 will add MySQL, Redis, MinIO, Mailpit, and Docker Compose. Capabilities marked
-`planned` in [`.harness/manifest.yaml`](.harness/manifest.yaml) are not available yet.
+Docker Compose is active for local dependency services. Capabilities still marked
+`planned` in [`.harness/manifest.yaml`](.harness/manifest.yaml) are unavailable.
 
 ## Bootstrap and run
 
@@ -46,6 +48,49 @@ When enabled, Swagger UI is served at `/api/docs` and its JSON document at
 `/api/docs-json`. HTTP completion logs are JSON and contain timestamp, request ID,
 method, normalized route, status, and duration; request/response bodies and headers
 are not logged.
+
+## Local dependency services
+
+Copy `.env.example` to the ignored `.env` file when you need custom local ports or
+credentials. The committed values are development-only examples. Compose publishes
+all ports on `127.0.0.1` and starts dependency services only; the future `api` and
+`worker` containers remain out of scope.
+
+The managed npm commands auto-detect either the `docker compose` plugin or the
+standalone `docker-compose` binary. Manual examples below use plugin syntax; replace
+`docker compose` with `docker-compose` when using the standalone distribution.
+
+```bash
+# Validate resolved Compose syntax without printing environment values
+npm run compose:config
+
+# Start all four services, wait for health, and prove Redis persistence across restart
+npm run compose:smoke
+
+# Inspect service health
+docker compose ps
+```
+
+Local endpoints are MySQL `127.0.0.1:3306`, Redis `127.0.0.1:6379`, MinIO S3
+`http://127.0.0.1:9000`, MinIO Console `http://127.0.0.1:9001`, Mailpit SMTP
+`127.0.0.1:1025`, and Mailpit UI `http://127.0.0.1:8025`; override their host ports
+through `.env` when necessary. MinIO and Mailpit update checks are disabled, so
+starting the stack does not call real storage or mail providers.
+
+```bash
+# Non-destructive lifecycle: both commands preserve named volumes
+docker compose stop
+docker compose start
+
+# Remove containers and the network, but still preserve named volumes
+docker compose down
+```
+
+Never add `--volumes` or run `docker volume rm` as part of normal verification.
+Deleting volumes permanently removes local MySQL, Redis, MinIO, and Mailpit data and
+requires an explicit developer decision. The pinned MinIO Community image is a
+local-only S3 emulator; it is archived and must not be promoted as the production
+object-storage choice.
 
 ## Quality commands
 

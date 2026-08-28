@@ -52,7 +52,7 @@ pinned to explicit reviewed versions during `P1-T03`.
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------- |
 | `P1-T01` | The API validates environment configuration before listening, uses `/api/v1`, rejects unknown DTO fields, shuts down gracefully, and exposes dependency-free `GET /api/v1/health/live` | `src/config`, `src/health`, `src/main.ts`, `src/app.module.ts`, `.env.example`, package graph | None                                                                         | Config boundary unit tests; bootstrap and liveness E2E                                           | Complete |
 | `P1-T02` | HTTP responses have one server-generated request ID, stable localized errors in EN/VI, structured completion logs, and config-gated Swagger at `/api/docs`                             | `src/common`, `src/i18n` or `src/locales`, bootstrap/docs configuration                       | None                                                                         | Locale/fallback, filter, request-ID and log unit tests; validation/error/Swagger E2E             | Complete |
-| `P1-T03` | MySQL, Redis, MinIO, and Mailpit start locally with reviewed versions, healthchecks, named volumes, and safe example credentials                                                       | `compose.yaml`, `.env.example`, local setup docs                                              | None                                                                         | `docker compose config`; service health smoke; restart/persistence check without volume deletion | Pending  |
+| `P1-T03` | MySQL, Redis, MinIO, and Mailpit start locally with reviewed versions, healthchecks, named volumes, and safe example credentials                                                       | `compose.yaml`, `.env.example`, local setup docs                                              | None                                                                         | `docker compose config`; service health smoke; restart/persistence check without volume deletion | Complete |
 | `P1-T04` | The app and CLI share validated TypeORM options, never synchronize schema, and a disposable MySQL integration test proves reversible migration execution                               | `src/database`, TypeORM data source, migration scripts, integration fixtures/config           | Test-only reversible fixture; first production migration deferred to Phase 2 | Config unit tests; real MySQL connection and migration up/down integration tests                 | Pending  |
 | `P1-T05` | `GET /api/v1/health/ready` returns `200` only for healthy MySQL/Redis/MinIO and sanitized bounded `503 SERVICE_NOT_READY` otherwise, while liveness stays `200`                        | `src/health`, focused Redis/storage clients or adapters, readiness config                     | None                                                                         | Indicator timeout/failure unit tests; real dependency integration; ready/live E2E failure matrix | Pending  |
 | `P1-T06` | A clean documented local workflow runs focused suites and the unchanged full gate; API/config/Compose/migration docs agree; independent findings are dispositioned                     | test helpers, README/docs, spec/plan/review evidence, verification wiring only if required    | None                                                                         | Full `npm run verify`; Compose prerequisite negative test; independent adversarial review        | Pending  |
@@ -165,6 +165,53 @@ diagnostic tail.
 - No migration, persistence, external service, authorization, readiness, or CORS
   behavior is introduced by this slice.
 
+## P1-T03 implementation evidence
+
+- Compose contains dependency services only: MySQL, Redis, MinIO, and Mailpit. The
+  future `api` and `worker` containers remain deferred to their owning runtime/image
+  slices.
+- Reviewed immutable image references are `mysql:8.4.11` at
+  `sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb`,
+  `redis:7.4.11-alpine3.21` at
+  `sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf`,
+  `minio/minio:RELEASE.2025-09-07T16-13-09Z` at
+  `sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e`,
+  and `axllent/mailpit:v1.31.0` at
+  `sha256:c96991d9bef73594c246d89ca81411d4e916f03e76a7d2d72fa2ab5dd3c9ce24`.
+- Every published port binds to `127.0.0.1`; every service has an explicit healthcheck,
+  `unless-stopped` restart policy, and named persistent volume. Compose consumes only
+  safe development examples or ignored `.env` overrides.
+- MinIO and Mailpit update checks are disabled so normal startup does not call real
+  storage/mail providers. The archived MinIO Community image is restricted to a
+  local-only S3 emulator and is explicitly excluded from production selection.
+- Managed Compose commands require v2 or newer and resolve either the Docker CLI
+  plugin or compatible standalone binary. `npm run test:compose` passed 7/7 tests,
+  covering the topology contract, plugin preference, standalone fallback, legacy and
+  missing client rejection, and unique persistence-probe keys.
+- `npm run compose:config` passed, and Harness passed 67/67 tests with Docker Compose
+  registered as active. Harness architecture now records the dependency-only active
+  boundary, CI/local config requirements, smoke side effects, and the still-planned
+  application/deployment boundaries.
+- `npm run compose:smoke` started exactly four services, observed 4/4 healthy, created
+  four named volumes, restarted Redis, and verified its unique persistence probe was
+  restored and then removed. No volume deletion occurred; the healthy stack remains
+  available for P1-T04/P1-T05.
+- Pre-review `npm run verify` completed with exit code `0`: Harness passed 67/67 and
+  10 evaluation fixtures; Compose passed 2/2 contract tests plus resolved-config
+  validation; formatting, lint, unit 23/23, integration 1/1, E2E 11/11, and build all
+  passed.
+- Post-review `npm run verify` completed with exit code `0`: Harness passed 67/67 and
+  10 evaluation fixtures; Compose passed 7/7 focused tests plus resolved-config
+  validation; formatting, lint, unit 23/23, integration 1/1, E2E 11/11, and build all
+  passed. The full log is retained outside the repository at
+  `/tmp/p1-t03-post-review-verify.log` for the current handoff.
+- Independent re-review `REVIEW-011` concluded `Approve`. Its Harness-boundary,
+  Compose-version, persistence-key, and registry-pull documentation findings are
+  fixed; the constrained single-node, loopback-only MinIO emulator risk is accepted
+  explicitly and is not a production-storage approval.
+- No application client, readiness endpoint, migration, product schema, real email,
+  bucket mutation, `api` container, or `worker` container is introduced by this slice.
+
 ## Deployment and rollback
 
 - No production deployment occurs in Phase 1.
@@ -205,3 +252,8 @@ diagnostic tail.
 - Swagger exposes UI plus JSON only. Locale catalogs are build assets but not watched
   during normal builds; development restarts pick them up through the existing Nest
   watch cycle.
+- `P1-T03` retains the spec-selected MinIO-compatible local emulator without adding a
+  license/account prerequisite. Because the final Community image is archived and has
+  a [published security advisory](https://github.com/minio/minio/security/advisories/GHSA-xh8f-g2qw-gcm7),
+  it is digest-pinned, exposed only on loopback, and prohibited as the later production
+  object-storage selection.

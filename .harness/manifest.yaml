@@ -37,6 +37,30 @@ entry_commands:
     side_effect: none
     environments: [local, ci]
     forward_env: [CI, LANG, LC_ALL, TZ]
+  compose_config:
+    command: npm run compose:config
+    npm_script: compose:config
+    permission: run_local_checks
+    tool_ref: docker_compose
+    side_effect: none
+    environments: [local, ci, compose]
+    forward_env: [CI, LANG, LC_ALL, TZ]
+  compose_test:
+    command: npm run test:compose
+    npm_script: test:compose
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: none
+    environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, TZ]
+  compose_smoke:
+    command: npm run compose:smoke
+    npm_script: compose:smoke
+    permission: mutate_local_runtime
+    tool_ref: docker_compose
+    side_effect: local_process
+    environments: [local, compose]
+    forward_env: [CI, LANG, LC_ALL, TZ]
   verify:
     command: npm run verify
     npm_script: verify
@@ -247,9 +271,10 @@ tool_registry:
     implementation_ref: .git
   - id: docker_compose
     kind: local_service_runtime
-    status: planned
-    permissions: [mutate_local_runtime]
+    status: active
+    permissions: [run_local_checks, mutate_local_runtime]
     timeout_seconds: 600
+    implementation_ref: compose.yaml
   - id: typeorm_migrations
     kind: database_schema
     status: planned
@@ -552,8 +577,14 @@ runtime_contract:
         TEMP,
       ]
   environments:
-    local: { status: active, dependencies: [node, npm, git_read] }
-    ci: { status: active, dependencies: [node, npm, git_read, github_actions] }
-    compose: { status: planned, phase: 1 }
+    local:
+      { status: active, dependencies: [node, npm, git_read, docker_compose] }
+    ci:
+      {
+        status: active,
+        dependencies: [node, npm, git_read, github_actions, docker_compose],
+      }
+    compose:
+      { status: active, dependencies: [node, npm, git_read, docker_compose] }
     staging: { status: planned, phase: 8 }
     production: { status: planned, phase: 8 }

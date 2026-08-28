@@ -15,6 +15,8 @@
   "scripts": {
     "bootstrap": "npm ci",
     "build": "nest build",
+    "compose:config": "node scripts/compose-config.mjs",
+    "compose:smoke": "node scripts/compose-smoke.mjs",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.mjs\" \"docs/**/*.md\" \".agents/skills/**/*.md\" \".github/**/*.yml\" \".harness/*.yaml\" \".harness/*.json\" \"*.md\"",
     "start": "nest start",
@@ -27,6 +29,7 @@
     "test:unit": "jest --runInBand",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
+    "test:compose": "node --test scripts/compose-cli.test.mjs scripts/compose-contract.test.mjs",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:integration": "jest --config ./test/jest-integration.json --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",

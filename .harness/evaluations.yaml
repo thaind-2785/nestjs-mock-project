@@ -92,9 +92,9 @@ fixtures:
       decision: reject
       reason_code: tool_permission_mismatch
 
-  - id: planned_runtime_unavailable
+  - id: planned_migration_unavailable
     type: capability_status
-    tool_id: docker_compose
+    tool_id: typeorm_migrations
     expected: { availability: unavailable, reason_code: planned_tool }
 
   - id: deployment_provider_not_registered

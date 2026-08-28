@@ -13,6 +13,8 @@ const configuration: ReadinessConfiguration = {
   redis: { host: '127.0.0.1', port: 6379 },
   storage: {
     endpoint: 'http://127.0.0.1:9000',
+    region: 'us-east-1',
+    forcePathStyle: true,
     bucket: 'hotel-assets',
     accessKey: 'hotel_local',
     secretKey: 'local_minio_change_me',

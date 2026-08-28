@@ -11,7 +11,9 @@ export interface ReadinessConfiguration {
     port: number;
   };
   storage: {
-    endpoint: string;
+    endpoint?: string;
+    region: string;
+    forcePathStyle: boolean;
     bucket: string;
     accessKey: string;
     secretKey: string;
@@ -28,10 +30,12 @@ export function createReadinessConfiguration(
       port: environment.REDIS_PORT,
     },
     storage: {
-      endpoint: environment.MINIO_ENDPOINT,
-      bucket: environment.MINIO_BUCKET,
-      accessKey: environment.MINIO_ACCESS_KEY,
-      secretKey: environment.MINIO_SECRET_KEY,
+      endpoint: environment.OBJECT_STORAGE_ENDPOINT,
+      region: environment.OBJECT_STORAGE_REGION,
+      forcePathStyle: environment.OBJECT_STORAGE_FORCE_PATH_STYLE,
+      bucket: environment.OBJECT_STORAGE_BUCKET,
+      accessKey: environment.OBJECT_STORAGE_ACCESS_KEY,
+      secretKey: environment.OBJECT_STORAGE_SECRET_KEY,
     },
   };
 }

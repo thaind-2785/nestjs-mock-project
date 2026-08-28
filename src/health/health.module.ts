@@ -10,6 +10,7 @@ import {
   READINESS_STORAGE_CLIENT,
 } from './readiness.tokens';
 import { ReadinessService } from './readiness.service';
+import { createStorageClientOptions } from './storage-client.options';
 
 @Module({
   imports: [ConfigModule.forFeature(readinessConfig), TerminusModule],
@@ -34,15 +35,7 @@ import { ReadinessService } from './readiness.service';
       provide: READINESS_STORAGE_CLIENT,
       inject: [readinessConfig.KEY],
       useFactory: (configuration: ConfigType<typeof readinessConfig>) =>
-        new S3Client({
-          endpoint: configuration.storage.endpoint,
-          region: 'us-east-1',
-          forcePathStyle: true,
-          credentials: {
-            accessKeyId: configuration.storage.accessKey,
-            secretAccessKey: configuration.storage.secretKey,
-          },
-        }),
+        new S3Client(createStorageClientOptions(configuration.storage)),
     },
   ],
 })

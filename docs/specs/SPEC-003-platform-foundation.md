@@ -1,8 +1,8 @@
 # SPEC-003: Platform foundation
 
-- Status: Accepted
+- Status: Implemented
 - Owner: Project owner
-- Last updated: 2026-08-27
+- Last updated: 2026-08-28
 - Scope: Required
 - Related endpoints / ADRs: `HEALTH-01`, `HEALTH-02`; no new ADR required at draft
   time
@@ -162,7 +162,7 @@ Foundation lifecycle rules:
 
 ## Acceptance criteria
 
-- [ ] Given a required configuration value is missing or invalid, when the API starts,
+- [x] Given a required configuration value is missing or invalid, when the API starts,
       then startup fails before listening and reports the field without its value.
 - [x] Given a valid local configuration, when the API starts, then all routes use the
       `/api/v1` prefix and Swagger is available only according to its config flag.
@@ -185,13 +185,13 @@ Foundation lifecycle rules:
 - [x] Given a clean machine with Docker Compose and the documented environment, when
       dependency services start, then MySQL, Redis, MinIO, and Mailpit become healthy
       without any real external provider call.
-- [ ] Given Compose prerequisites are absent, when an integration/E2E suite requiring
+- [x] Given Compose prerequisites are absent, when an integration/E2E suite requiring
       them runs, then it fails with an actionable message rather than silently
       skipping.
-- [ ] Given the final Phase 1 implementation, when `npm run verify` runs from a clean
+- [x] Given the final Phase 1 implementation, when `npm run verify` runs from a clean
       checkout with documented prerequisites, then Harness checks, formatting, lint,
       unit, integration, E2E, and build all pass.
-- [ ] An independent reviewer finds no unresolved Blocker/High issue, and accepted
+- [x] An independent reviewer finds no unresolved Blocker/High issue, and accepted
       Medium/Low findings have a recorded disposition.
 
 ## Test strategy
@@ -220,6 +220,10 @@ Foundation lifecycle rules:
 - Phase 1 proves migration infrastructure without creating product-domain tables.
 - Exact dependency/image versions are selected and locked in the implementation plan
   after checking compatibility with Node 22 and NestJS 11.
+- Application object-storage configuration uses provider-neutral names. Local defaults
+  target the MinIO emulator; production supplies S3-compatible values without a code
+  or environment-name migration. MinIO-specific names configure only the local
+  Compose container.
 
 ### Decisions intentionally deferred
 

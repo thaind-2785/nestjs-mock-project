@@ -1,7 +1,7 @@
 # PLAN-004: Platform foundation
 
 - Spec: `docs/specs/SPEC-003-platform-foundation.md`
-- Status: In progress
+- Status: Complete
 - Owner: Codex primary agent
 - Reviewer (must be independent): Platform foundation reviewer
 
@@ -55,7 +55,7 @@ pinned to explicit reviewed versions during `P1-T03`.
 | `P1-T03` | MySQL, Redis, MinIO, and Mailpit start locally with reviewed versions, healthchecks, named volumes, and safe example credentials                                                       | `compose.yaml`, `.env.example`, local setup docs                                              | None                                                                         | `docker compose config`; service health smoke; restart/persistence check without volume deletion | Complete |
 | `P1-T04` | The app and CLI share validated TypeORM options, never synchronize schema, and a disposable MySQL integration test proves reversible migration execution                               | `src/database`, `test/fixtures`, migration CLI scripts, integration config                    | Test-only reversible fixture; first production migration deferred to Phase 2 | Config unit tests; real MySQL connection and migration up/down integration tests                 | Complete |
 | `P1-T05` | `GET /api/v1/health/ready` returns `200` only for healthy MySQL/Redis/MinIO and sanitized bounded `503 SERVICE_NOT_READY` otherwise, while liveness stays `200`                        | `src/health`, focused Redis/storage clients or adapters, readiness config                     | None                                                                         | Indicator timeout/failure unit tests; real dependency integration; ready/live E2E failure matrix | Complete |
-| `P1-T06` | A clean documented local workflow runs focused suites and the unchanged full gate; API/config/Compose/migration docs agree; independent findings are dispositioned                     | test helpers, README/docs, spec/plan/review evidence, verification wiring only if required    | None                                                                         | Full `npm run verify`; Compose prerequisite negative test; independent adversarial review        | Pending  |
+| `P1-T06` | A clean documented local workflow runs focused suites and the unchanged full gate; API/config/Compose/migration docs agree; independent findings are dispositioned                     | test helpers, README/docs, spec/plan/review evidence, verification wiring only if required    | None                                                                         | Full `npm run verify`; Compose prerequisite negative test; independent adversarial review        | Complete |
 
 ## Task execution contract
 
@@ -255,9 +255,10 @@ test/database.integration-spec.ts test/app.integration-spec.ts` passed 2 suites 
 
 - Installed and locked `@nestjs/terminus@11.1.1`, `ioredis@5.11.1`, and
   `@aws-sdk/client-s3@3.1120.0`; installation reported zero known vulnerabilities.
-- Readiness configuration validates Redis, MinIO endpoint/bucket/access credentials,
-  and a `100..5000` millisecond per-dependency timeout before clients are created.
-  Production requires explicit MinIO credentials; safe local defaults match Compose.
+- Readiness configuration validates Redis, provider-neutral object-storage
+  endpoint/region/path-style/bucket/access credentials, and a `100..5000`
+  millisecond per-dependency timeout before clients are created. Production requires
+  explicit object-storage credentials; safe local defaults match Compose's MinIO.
 - `GET /api/v1/health/ready` probes MySQL, Redis, and MinIO concurrently. It returns
   `200 { status: "ok", requestId }` only when all are healthy; otherwise it returns
   localized `503 SERVICE_NOT_READY` with only the safe dependency class list.
@@ -276,6 +277,29 @@ test/database.integration-spec.ts test/app.integration-spec.ts` passed 2 suites 
 - Independent review `docs/reviews/REVIEW-013-platform-foundation-p1-t05.md` approved
   the current revision after the CI readiness-dependency and S3 cancellation findings
   were fixed and reverified.
+
+## P1-T06 implementation evidence
+
+- Application-facing storage settings now use `OBJECT_STORAGE_*`; the local MinIO
+  emulator still works through development defaults while production can set an S3
+  region, optional endpoint, and path-style mode without changing code or variable
+  names. The four obsolete application-level `MINIO_*` variables fail startup with a
+  value-free migration message; MinIO container-only variables remain accepted.
+- `createStorageClientOptions` is unit-tested for the local MinIO configuration,
+  cloud S3 without an endpoint, and an explicit S3-compatible endpoint. The CI step
+  now accurately says it starts readiness dependencies for verification.
+- The initial full-gate attempt identified an existing local port mismatch: the
+  running MySQL container was published at `13306` while the shell supplied no
+  `MYSQL_PORT`; no volume or data was changed. With the documented runtime value
+  supplied, the final post-review `MYSQL_PORT=13306 npm run verify` completed with
+  exit `0`: Harness passed 68/68 tests and 10 evaluation fixtures; Compose passed
+  8/8 tests plus config validation; formatting and lint passed; unit passed 11
+  suites/45 tests; integration passed 3 suites/3 tests; E2E passed 1 suite/13 tests;
+  and build passed. Verbose output is retained outside the repository at
+  `/tmp/p1-t06-storage-config-postreview-verify.log`.
+- Independent review `docs/reviews/REVIEW-014-platform-foundation-p1-t06-storage-config.md`
+  identified one Medium and two Low findings. All were fixed, re-reviewed with no
+  remaining finding, and recorded as `Fixed` with an `Approve` verdict.
 
 ## Deployment and rollback
 
@@ -326,3 +350,8 @@ test/database.integration-spec.ts test/app.integration-spec.ts` passed 2 suites 
   registers the database config feature next to the TypeORM connection. The reversible
   migration remains under `test/fixtures/` so a future production migration directory
   cannot be mistaken for a test probe.
+- `P1-T06` standardizes application-facing storage configuration as
+  `OBJECT_STORAGE_*`. MinIO-specific values remain Compose-only; provider-specific
+  production values replace values rather than requiring a code or variable-name
+  migration. The S3 client receives configurable region and path-style behavior, so
+  local MinIO and cloud S3 defaults differ without forks in application code.

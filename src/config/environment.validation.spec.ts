@@ -14,10 +14,12 @@ describe('validateEnvironment', () => {
     expect(environment.MYSQL_PASSWORD).toBe('local_mysql_change_me');
     expect(environment.REDIS_HOST).toBe('127.0.0.1');
     expect(environment.REDIS_PORT).toBe(6379);
-    expect(environment.MINIO_ENDPOINT).toBe('http://127.0.0.1:9000');
-    expect(environment.MINIO_BUCKET).toBe('hotel-assets');
-    expect(environment.MINIO_ACCESS_KEY).toBe('hotel_local');
-    expect(environment.MINIO_SECRET_KEY).toBe('local_minio_change_me');
+    expect(environment.OBJECT_STORAGE_ENDPOINT).toBe('http://127.0.0.1:9000');
+    expect(environment.OBJECT_STORAGE_REGION).toBe('us-east-1');
+    expect(environment.OBJECT_STORAGE_FORCE_PATH_STYLE).toBe(true);
+    expect(environment.OBJECT_STORAGE_BUCKET).toBe('hotel-assets');
+    expect(environment.OBJECT_STORAGE_ACCESS_KEY).toBe('hotel_local');
+    expect(environment.OBJECT_STORAGE_SECRET_KEY).toBe('local_minio_change_me');
     expect(environment.HEALTH_CHECK_TIMEOUT_MS).toBe(1000);
   });
 
@@ -33,10 +35,12 @@ describe('validateEnvironment', () => {
       MYSQL_PASSWORD: 'test-password',
       REDIS_HOST: 'redis.internal',
       REDIS_PORT: '6380',
-      MINIO_ENDPOINT: 'https://minio.internal',
-      MINIO_BUCKET: 'hotel-test-assets',
-      MINIO_ACCESS_KEY: 'minio-test',
-      MINIO_SECRET_KEY: 'minio-test-secret',
+      OBJECT_STORAGE_ENDPOINT: 'https://storage.internal',
+      OBJECT_STORAGE_REGION: 'ap-southeast-1',
+      OBJECT_STORAGE_FORCE_PATH_STYLE: 'false',
+      OBJECT_STORAGE_BUCKET: 'hotel-test-assets',
+      OBJECT_STORAGE_ACCESS_KEY: 'storage-test',
+      OBJECT_STORAGE_SECRET_KEY: 'storage-test-secret',
       HEALTH_CHECK_TIMEOUT_MS: '1500',
     });
 
@@ -50,10 +54,14 @@ describe('validateEnvironment', () => {
     expect(environment.MYSQL_PASSWORD).toBe('test-password');
     expect(environment.REDIS_HOST).toBe('redis.internal');
     expect(environment.REDIS_PORT).toBe(6380);
-    expect(environment.MINIO_ENDPOINT).toBe('https://minio.internal');
-    expect(environment.MINIO_BUCKET).toBe('hotel-test-assets');
-    expect(environment.MINIO_ACCESS_KEY).toBe('minio-test');
-    expect(environment.MINIO_SECRET_KEY).toBe('minio-test-secret');
+    expect(environment.OBJECT_STORAGE_ENDPOINT).toBe(
+      'https://storage.internal',
+    );
+    expect(environment.OBJECT_STORAGE_REGION).toBe('ap-southeast-1');
+    expect(environment.OBJECT_STORAGE_FORCE_PATH_STYLE).toBe(false);
+    expect(environment.OBJECT_STORAGE_BUCKET).toBe('hotel-test-assets');
+    expect(environment.OBJECT_STORAGE_ACCESS_KEY).toBe('storage-test');
+    expect(environment.OBJECT_STORAGE_SECRET_KEY).toBe('storage-test-secret');
     expect(environment.HEALTH_CHECK_TIMEOUT_MS).toBe(1500);
   });
 
@@ -61,11 +69,13 @@ describe('validateEnvironment', () => {
     const environment = validateEnvironment({
       NODE_ENV: 'production',
       MYSQL_PASSWORD: 'production-password',
-      MINIO_ACCESS_KEY: 'production-minio',
-      MINIO_SECRET_KEY: 'production-minio-secret',
+      OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
+      OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
     });
 
     expect(environment.SWAGGER_ENABLED).toBe(false);
+    expect(environment.OBJECT_STORAGE_ENDPOINT).toBeUndefined();
+    expect(environment.OBJECT_STORAGE_FORCE_PATH_STYLE).toBe(false);
   });
 
   it('allows an explicit canonical Swagger override in production', () => {
@@ -73,8 +83,8 @@ describe('validateEnvironment', () => {
       NODE_ENV: 'production',
       SWAGGER_ENABLED: 'true',
       MYSQL_PASSWORD: 'production-password',
-      MINIO_ACCESS_KEY: 'production-minio',
-      MINIO_SECRET_KEY: 'production-minio-secret',
+      OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
+      OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
     });
 
     expect(environment.SWAGGER_ENABLED).toBe(true);
@@ -122,8 +132,8 @@ describe('validateEnvironment', () => {
     expect(() =>
       validateEnvironment({
         NODE_ENV: 'production',
-        MINIO_ACCESS_KEY: 'production-minio',
-        MINIO_SECRET_KEY: 'production-minio-secret',
+        OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
+        OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
       }),
     ).toThrow('Environment validation failed for: MYSQL_PASSWORD');
   });
@@ -135,7 +145,17 @@ describe('validateEnvironment', () => {
         MYSQL_PASSWORD: 'production-password',
       }),
     ).toThrow(
-      'Environment validation failed for: MINIO_ACCESS_KEY, MINIO_SECRET_KEY',
+      'Environment validation failed for: OBJECT_STORAGE_ACCESS_KEY, OBJECT_STORAGE_SECRET_KEY',
+    );
+  });
+
+  it('rejects obsolete application-level MinIO variable names without values', () => {
+    expect(() =>
+      validateEnvironment({
+        MINIO_ENDPOINT: 'http://127.0.0.1:9900',
+      }),
+    ).toThrow(
+      'Environment validation failed for obsolete variables: MINIO_ENDPOINT. Use OBJECT_STORAGE_* instead.',
     );
   });
 
@@ -145,8 +165,8 @@ describe('validateEnvironment', () => {
     ['MYSQL_USER', 'hotel user'],
     ['MYSQL_PASSWORD', ''],
     ['REDIS_PORT', '0'],
-    ['MINIO_ENDPOINT', 'ftp://private-endpoint'],
-    ['MINIO_BUCKET', 'Hotel Assets'],
+    ['OBJECT_STORAGE_ENDPOINT', 'ftp://private-endpoint'],
+    ['OBJECT_STORAGE_BUCKET', 'Hotel Assets'],
     ['HEALTH_CHECK_TIMEOUT_MS', '99'],
   ])('rejects invalid database configuration %s', (field, value) => {
     expect(() => validateEnvironment({ [field]: value })).toThrow(

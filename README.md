@@ -45,9 +45,10 @@ also includes the same server-generated `X-Request-Id`; a client-supplied value 
 ignored. Errors use `{ statusCode, code, message, details?, requestId }`. Send
 `Accept-Language: vi` for Vietnamese; missing or unsupported languages use English.
 
-Readiness is a separate bounded check of MySQL, Redis, and MinIO. It returns `200`
-only when all three pass; a dependency failure or timeout returns localized `503` with
-stable `SERVICE_NOT_READY` and only safe dependency classes in `details.dependencies`.
+Readiness is a separate bounded check of MySQL, Redis, and object storage. It returns
+`200` only when all three pass; a dependency failure or timeout returns localized
+`503` with stable `SERVICE_NOT_READY` and only safe dependency classes in
+`details.dependencies`.
 It never exposes hosts, credentials, raw driver errors, or connection strings.
 
 ```bash
@@ -58,6 +59,14 @@ curl http://localhost:3000/api/v1/health/ready
 `5000` milliseconds (default `1000`). Liveness remains `200` while readiness is
 unavailable, so use `/health/live` for process probes and `/health/ready` for
 deployment traffic.
+
+Application object-storage settings use provider-neutral `OBJECT_STORAGE_*` names.
+Local defaults point to MinIO; production can instead provide S3 (or another
+S3-compatible provider) values. `OBJECT_STORAGE_ENDPOINT` is optional in production
+so the AWS SDK can resolve the standard S3 endpoint from `OBJECT_STORAGE_REGION`;
+set it for an explicitly addressed S3-compatible provider. Set
+`OBJECT_STORAGE_FORCE_PATH_STYLE=false` for normal cloud S3 and `true` for the local
+MinIO default. `MINIO_*` names configure only the local Compose container.
 
 When enabled, Swagger UI is served at `/api/docs` and its JSON document at
 `/api/docs-json`. HTTP completion logs are JSON and contain timestamp, request ID,

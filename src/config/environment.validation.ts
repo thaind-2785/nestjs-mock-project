@@ -13,6 +13,13 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   MYSQL_DATABASE: string;
   MYSQL_USER: string;
   MYSQL_PASSWORD: string;
+  REDIS_HOST: string;
+  REDIS_PORT: number;
+  MINIO_ENDPOINT: string;
+  MINIO_BUCKET: string;
+  MINIO_ACCESS_KEY: string;
+  MINIO_SECRET_KEY: string;
+  HEALTH_CHECK_TIMEOUT_MS: number;
 }
 
 const environmentSchema = Joi.object<EnvironmentVariables>({
@@ -34,6 +41,29 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     then: Joi.string().min(1).required(),
     otherwise: Joi.string().min(1).default('local_mysql_change_me'),
   }),
+  REDIS_HOST: Joi.string().hostname().default('127.0.0.1'),
+  REDIS_PORT: Joi.number().integer().min(1).max(65_535).default(6379),
+  MINIO_ENDPOINT: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .default('http://127.0.0.1:9000'),
+  MINIO_BUCKET: Joi.string()
+    .pattern(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/)
+    .default('hotel-assets'),
+  MINIO_ACCESS_KEY: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(3).required(),
+    otherwise: Joi.string().min(3).default('hotel_local'),
+  }),
+  MINIO_SECRET_KEY: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(8).required(),
+    otherwise: Joi.string().min(8).default('local_minio_change_me'),
+  }),
+  HEALTH_CHECK_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(5_000)
+    .default(1_000),
 }).unknown(true);
 
 export function validateEnvironment(

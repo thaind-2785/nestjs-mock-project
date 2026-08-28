@@ -174,9 +174,9 @@ Foundation lifecycle rules:
       where applicable, and structured completion log.
 - [x] Given the process is serving, when `/api/v1/health/live` is requested, then it
       returns `200` without contacting downstream dependencies.
-- [ ] Given MySQL, Redis, and MinIO are healthy, when `/api/v1/health/ready` is
+- [x] Given MySQL, Redis, and MinIO are healthy, when `/api/v1/health/ready` is
       requested, then it returns `200` within the configured timeout.
-- [ ] Given any required readiness dependency is unavailable or slow, when readiness
+- [x] Given any required readiness dependency is unavailable or slow, when readiness
       is requested, then it returns `503 SERVICE_NOT_READY` without leaking connection
       details while liveness remains `200`.
 - [x] Given an empty disposable MySQL database, when the migration integration suite

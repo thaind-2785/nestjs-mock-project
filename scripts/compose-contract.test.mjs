@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { parse } from 'yaml';
+import { ciReadinessServices } from './compose-ci-policy.mjs';
 
 const compose = parse(readFileSync('compose.yaml', 'utf8'));
 const expectedImages = {
@@ -54,4 +55,11 @@ test('declares persistent volumes and disables external update checks', () => {
     compose.services.minio.environment.MINIO_ROOT_PASSWORD,
     /^\$\{MINIO_ROOT_PASSWORD:-/,
   );
+});
+
+test('starts every readiness dependency before the CI verification gate', () => {
+  assert.deepEqual(ciReadinessServices, ['mysql', 'redis', 'minio']);
+  for (const service of ciReadinessServices) {
+    assert.ok(compose.services[service].healthcheck?.test);
+  }
 });

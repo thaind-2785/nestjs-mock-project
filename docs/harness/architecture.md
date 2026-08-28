@@ -102,10 +102,10 @@ to loopback, and named volumes preserve local development state.
 
 `test:compose` and `compose:config` are non-mutating requirements of the local and CI
 verification gate. Configuration validation requires a Compose CLI but does not
-start a Docker daemon workload. The CI workflow starts only the MySQL dependency
-through the reviewed `compose:ci` entrypoint before `verify` so the real TypeORM
-integration and application E2E tests have their documented prerequisite; the runner
-is disposable. `compose:smoke` remains an
+start a Docker daemon workload. The CI workflow starts MySQL, Redis, and MinIO through
+the reviewed `compose:ci` entrypoint before `verify` so real integration and
+application E2E tests have their documented prerequisites; the runner is disposable.
+`compose:smoke` remains an
 explicitly mutating local check: it starts exactly the four dependencies, waits for
 health, restarts Redis, and verifies a uniquely named persistence probe without
 deleting volumes or stopping the stack.

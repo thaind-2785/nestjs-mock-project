@@ -12,6 +12,13 @@ describe('validateEnvironment', () => {
     expect(environment.MYSQL_DATABASE).toBe('hotel_management');
     expect(environment.MYSQL_USER).toBe('hotel_app');
     expect(environment.MYSQL_PASSWORD).toBe('local_mysql_change_me');
+    expect(environment.REDIS_HOST).toBe('127.0.0.1');
+    expect(environment.REDIS_PORT).toBe(6379);
+    expect(environment.MINIO_ENDPOINT).toBe('http://127.0.0.1:9000');
+    expect(environment.MINIO_BUCKET).toBe('hotel-assets');
+    expect(environment.MINIO_ACCESS_KEY).toBe('hotel_local');
+    expect(environment.MINIO_SECRET_KEY).toBe('local_minio_change_me');
+    expect(environment.HEALTH_CHECK_TIMEOUT_MS).toBe(1000);
   });
 
   it('accepts supported environments and converts the port to a number', () => {
@@ -24,6 +31,13 @@ describe('validateEnvironment', () => {
       MYSQL_DATABASE: 'hotel_test',
       MYSQL_USER: 'hotel_test_user',
       MYSQL_PASSWORD: 'test-password',
+      REDIS_HOST: 'redis.internal',
+      REDIS_PORT: '6380',
+      MINIO_ENDPOINT: 'https://minio.internal',
+      MINIO_BUCKET: 'hotel-test-assets',
+      MINIO_ACCESS_KEY: 'minio-test',
+      MINIO_SECRET_KEY: 'minio-test-secret',
+      HEALTH_CHECK_TIMEOUT_MS: '1500',
     });
 
     expect(environment.NODE_ENV).toBe('test');
@@ -34,12 +48,21 @@ describe('validateEnvironment', () => {
     expect(environment.MYSQL_DATABASE).toBe('hotel_test');
     expect(environment.MYSQL_USER).toBe('hotel_test_user');
     expect(environment.MYSQL_PASSWORD).toBe('test-password');
+    expect(environment.REDIS_HOST).toBe('redis.internal');
+    expect(environment.REDIS_PORT).toBe(6380);
+    expect(environment.MINIO_ENDPOINT).toBe('https://minio.internal');
+    expect(environment.MINIO_BUCKET).toBe('hotel-test-assets');
+    expect(environment.MINIO_ACCESS_KEY).toBe('minio-test');
+    expect(environment.MINIO_SECRET_KEY).toBe('minio-test-secret');
+    expect(environment.HEALTH_CHECK_TIMEOUT_MS).toBe(1500);
   });
 
   it('disables Swagger by default in production', () => {
     const environment = validateEnvironment({
       NODE_ENV: 'production',
       MYSQL_PASSWORD: 'production-password',
+      MINIO_ACCESS_KEY: 'production-minio',
+      MINIO_SECRET_KEY: 'production-minio-secret',
     });
 
     expect(environment.SWAGGER_ENABLED).toBe(false);
@@ -50,6 +73,8 @@ describe('validateEnvironment', () => {
       NODE_ENV: 'production',
       SWAGGER_ENABLED: 'true',
       MYSQL_PASSWORD: 'production-password',
+      MINIO_ACCESS_KEY: 'production-minio',
+      MINIO_SECRET_KEY: 'production-minio-secret',
     });
 
     expect(environment.SWAGGER_ENABLED).toBe(true);
@@ -94,8 +119,23 @@ describe('validateEnvironment', () => {
   });
 
   it('requires an explicit MySQL password in production', () => {
-    expect(() => validateEnvironment({ NODE_ENV: 'production' })).toThrow(
-      'Environment validation failed for: MYSQL_PASSWORD',
+    expect(() =>
+      validateEnvironment({
+        NODE_ENV: 'production',
+        MINIO_ACCESS_KEY: 'production-minio',
+        MINIO_SECRET_KEY: 'production-minio-secret',
+      }),
+    ).toThrow('Environment validation failed for: MYSQL_PASSWORD');
+  });
+
+  it('requires explicit object-storage credentials in production', () => {
+    expect(() =>
+      validateEnvironment({
+        NODE_ENV: 'production',
+        MYSQL_PASSWORD: 'production-password',
+      }),
+    ).toThrow(
+      'Environment validation failed for: MINIO_ACCESS_KEY, MINIO_SECRET_KEY',
     );
   });
 
@@ -104,6 +144,10 @@ describe('validateEnvironment', () => {
     ['MYSQL_DATABASE', 'hotel database'],
     ['MYSQL_USER', 'hotel user'],
     ['MYSQL_PASSWORD', ''],
+    ['REDIS_PORT', '0'],
+    ['MINIO_ENDPOINT', 'ftp://private-endpoint'],
+    ['MINIO_BUCKET', 'Hotel Assets'],
+    ['HEALTH_CHECK_TIMEOUT_MS', '99'],
   ])('rejects invalid database configuration %s', (field, value) => {
     expect(() => validateEnvironment({ [field]: value })).toThrow(
       `Environment validation failed for: ${field}`,

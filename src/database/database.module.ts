@@ -12,6 +12,7 @@ import { databaseConfig } from '../config/database.config';
       useFactory: (configuration: ConfigType<typeof databaseConfig>) => ({
         ...createTypeOrmOptions(configuration),
         autoLoadEntities: true,
+        manualInitialization: true,
         retryAttempts: 1,
         retryDelay: 0,
       }),

@@ -11,6 +11,7 @@ import {
 } from './../src/bootstrap';
 import { HttpRequestCompletedLog } from './../src/common/http/request-context';
 import { swaggerJsonPath, swaggerPath } from './../src/common/openapi/swagger';
+import { ReadinessService } from './../src/health/readiness.service';
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -39,13 +40,22 @@ describe('Application bootstrap (e2e)', () => {
   let app: INestApplication<App>;
   let requestLogs: unknown[];
 
-  async function createTestApplication(
-    options: ApplicationBootstrapOptions = {},
-  ): Promise<INestApplication<App>> {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
+  async function createTestApplication({
+    readinessService,
+    ...options
+  }: ApplicationBootstrapOptions & {
+    readinessService?: Pick<ReadinessService, 'getUnavailableDependencies'>;
+  } = {}): Promise<INestApplication<App>> {
+    const moduleBuilder = Test.createTestingModule({
       imports: [AppModule],
       controllers: [BootstrapValidationController],
-    }).compile();
+    });
+    if (readinessService) {
+      moduleBuilder
+        .overrideProvider(ReadinessService)
+        .useValue(readinessService);
+    }
+    const moduleFixture: TestingModule = await moduleBuilder.compile();
 
     const testApp = moduleFixture.createNestApplication();
     configureApplication(testApp, options);
@@ -77,6 +87,59 @@ describe('Application bootstrap (e2e)', () => {
       status: 'ok',
       requestId: response.headers['x-request-id'],
     });
+  });
+
+  it('returns ready only when every required dependency is healthy', async () => {
+    await app.close();
+    app = await createTestApplication({
+      readinessService: {
+        getUnavailableDependencies: jest.fn().mockResolvedValue([]),
+      },
+      requestLogger: {
+        log: (record: unknown) => requestLogs.push(record),
+      },
+      swaggerEnabled: true,
+    });
+
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/health/ready')
+      .expect(200);
+
+    expect(response.body).toEqual({
+      status: 'ok',
+      requestId: response.headers['x-request-id'],
+    });
+  });
+
+  it('returns a localized sanitized 503 while liveness remains available', async () => {
+    await app.close();
+    app = await createTestApplication({
+      readinessService: {
+        getUnavailableDependencies: jest.fn().mockResolvedValue(['storage']),
+      },
+      requestLogger: {
+        log: (record: unknown) => requestLogs.push(record),
+      },
+      swaggerEnabled: true,
+    });
+
+    const readyResponse = await request(app.getHttpServer())
+      .get('/api/v1/health/ready')
+      .set('Accept-Language', 'vi')
+      .expect(503);
+    const liveResponse = await request(app.getHttpServer())
+      .get('/api/v1/health/live')
+      .expect(200);
+
+    expect(readyResponse.body).toEqual({
+      statusCode: 503,
+      code: 'SERVICE_NOT_READY',
+      message: 'Dịch vụ hiện không khả dụng.',
+      requestId: readyResponse.headers['x-request-id'],
+      details: { dependencies: ['storage'] },
+    });
+    expect(JSON.stringify(readyResponse.body)).not.toContain('127.0.0.1');
+    expect((liveResponse.body as { status: unknown }).status).toBe('ok');
   });
 
   it('rejects undeclared DTO properties with sanitized stable details', async () => {
@@ -244,6 +307,7 @@ describe('Application bootstrap (e2e)', () => {
     };
 
     expect(documentBody.paths).toHaveProperty('/api/v1/health/live');
+    expect(documentBody.paths).toHaveProperty('/api/v1/health/ready');
     expect(documentBody.components?.schemas).toHaveProperty('ErrorResponseDto');
 
     await app.close();

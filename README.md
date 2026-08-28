@@ -45,6 +45,20 @@ also includes the same server-generated `X-Request-Id`; a client-supplied value 
 ignored. Errors use `{ statusCode, code, message, details?, requestId }`. Send
 `Accept-Language: vi` for Vietnamese; missing or unsupported languages use English.
 
+Readiness is a separate bounded check of MySQL, Redis, and MinIO. It returns `200`
+only when all three pass; a dependency failure or timeout returns localized `503` with
+stable `SERVICE_NOT_READY` and only safe dependency classes in `details.dependencies`.
+It never exposes hosts, credentials, raw driver errors, or connection strings.
+
+```bash
+curl http://localhost:3000/api/v1/health/ready
+```
+
+`HEALTH_CHECK_TIMEOUT_MS` bounds each concurrent dependency probe from `100` to
+`5000` milliseconds (default `1000`). Liveness remains `200` while readiness is
+unavailable, so use `/health/live` for process probes and `/health/ready` for
+deployment traffic.
+
 When enabled, Swagger UI is served at `/api/docs` and its JSON document at
 `/api/docs-json`. HTTP completion logs are JSON and contain timestamp, request ID,
 method, normalized route, status, and duration; request/response bodies and headers

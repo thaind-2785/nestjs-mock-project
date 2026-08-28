@@ -54,7 +54,7 @@ pinned to explicit reviewed versions during `P1-T03`.
 | `P1-T02` | HTTP responses have one server-generated request ID, stable localized errors in EN/VI, structured completion logs, and config-gated Swagger at `/api/docs`                             | `src/common`, `src/i18n` or `src/locales`, bootstrap/docs configuration                       | None                                                                         | Locale/fallback, filter, request-ID and log unit tests; validation/error/Swagger E2E             | Complete |
 | `P1-T03` | MySQL, Redis, MinIO, and Mailpit start locally with reviewed versions, healthchecks, named volumes, and safe example credentials                                                       | `compose.yaml`, `.env.example`, local setup docs                                              | None                                                                         | `docker compose config`; service health smoke; restart/persistence check without volume deletion | Complete |
 | `P1-T04` | The app and CLI share validated TypeORM options, never synchronize schema, and a disposable MySQL integration test proves reversible migration execution                               | `src/database`, `test/fixtures`, migration CLI scripts, integration config                    | Test-only reversible fixture; first production migration deferred to Phase 2 | Config unit tests; real MySQL connection and migration up/down integration tests                 | Complete |
-| `P1-T05` | `GET /api/v1/health/ready` returns `200` only for healthy MySQL/Redis/MinIO and sanitized bounded `503 SERVICE_NOT_READY` otherwise, while liveness stays `200`                        | `src/health`, focused Redis/storage clients or adapters, readiness config                     | None                                                                         | Indicator timeout/failure unit tests; real dependency integration; ready/live E2E failure matrix | Pending  |
+| `P1-T05` | `GET /api/v1/health/ready` returns `200` only for healthy MySQL/Redis/MinIO and sanitized bounded `503 SERVICE_NOT_READY` otherwise, while liveness stays `200`                        | `src/health`, focused Redis/storage clients or adapters, readiness config                     | None                                                                         | Indicator timeout/failure unit tests; real dependency integration; ready/live E2E failure matrix | Complete |
 | `P1-T06` | A clean documented local workflow runs focused suites and the unchanged full gate; API/config/Compose/migration docs agree; independent findings are dispositioned                     | test helpers, README/docs, spec/plan/review evidence, verification wiring only if required    | None                                                                         | Full `npm run verify`; Compose prerequisite negative test; independent adversarial review        | Pending  |
 
 ## Task execution contract
@@ -243,12 +243,39 @@ test/database.integration-spec.ts test/app.integration-spec.ts` passed 2 suites 
   plus config validation; formatting, lint, unit passed 9 suites/31 tests, integration passed 2
   suites/2 tests, E2E passed 1 suite/11 tests, and build passed. The full log is
   retained outside the repository at `/tmp/p1-t04-verify-postreviewfix.log`.
-- CI now starts the digest-pinned MySQL Compose dependency through the reviewed
-  `compose:ci` entrypoint before the shared verify gate, keeping real integration/E2E
-  prerequisites explicit without forwarding any database credential through Harness.
+- CI starts the digest-pinned MySQL, Redis, and MinIO Compose dependencies through the
+  reviewed `compose:ci` entrypoint before the shared verify gate, keeping real
+  integration/E2E prerequisites explicit without forwarding any credential through
+  Harness.
 - Independent review `docs/reviews/REVIEW-012-platform-foundation-p1-t04.md` approved
   the current revision after all High/Medium/Low findings were fixed and the post-fix
   full gate passed.
+
+## P1-T05 implementation evidence
+
+- Installed and locked `@nestjs/terminus@11.1.1`, `ioredis@5.11.1`, and
+  `@aws-sdk/client-s3@3.1120.0`; installation reported zero known vulnerabilities.
+- Readiness configuration validates Redis, MinIO endpoint/bucket/access credentials,
+  and a `100..5000` millisecond per-dependency timeout before clients are created.
+  Production requires explicit MinIO credentials; safe local defaults match Compose.
+- `GET /api/v1/health/ready` probes MySQL, Redis, and MinIO concurrently. It returns
+  `200 { status: "ok", requestId }` only when all are healthy; otherwise it returns
+  localized `503 SERVICE_NOT_READY` with only the safe dependency class list.
+  Liveness does not invoke readiness checks.
+- TypeORM is manually initialized by the bounded MySQL probe rather than during module
+  bootstrap, preserving dependency-independent liveness when MySQL is unavailable.
+  The initialized data source and S3 client are closed through application shutdown.
+- Focused unit tests passed 2 suites/25 tests; readiness integration plus existing
+  database/module integration passed 3 suites/3 tests against real MySQL, Redis, and
+  MinIO; E2E passed 1 suite/13 tests for ready/live and localized safe failures.
+- Post-review-fix `MYSQL_PORT=13306 npm run verify` completed with exit code `0`:
+  Harness passed 68/68 tests and 10 evaluation fixtures; Compose passed 8/8 tests
+  plus config validation; formatting, lint, unit passed 10 suites/41 tests, integration passed 3
+  suites/3 tests, E2E passed 1 suite/13 tests, and build passed. The full log is
+  retained outside the repository at `/tmp/p1-t05-verify-post-review-fix.log`.
+- Independent review `docs/reviews/REVIEW-013-platform-foundation-p1-t05.md` approved
+  the current revision after the CI readiness-dependency and S3 cancellation findings
+  were fixed and reverified.
 
 ## Deployment and rollback
 

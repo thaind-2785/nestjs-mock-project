@@ -2,8 +2,10 @@
 
 NestJS backend course project for hotel room discovery, Google-only authentication,
 booking requests, administration, cloud files, email, Worker Threads, cron, and
-CI/CD. Product features are designed but not yet implemented; the current API is the
-NestJS starter baseline.
+CI/CD. Product features are designed but not yet implemented. The API currently
+provides the first platform-foundation slice: validated application configuration,
+strict DTO validation, graceful shutdown hooks, the `/api/v1` prefix, and process
+liveness.
 
 ## Runtime requirements
 
@@ -22,8 +24,20 @@ npm run harness:check
 npm run start:dev
 ```
 
-The current server listens on `PORT` (default `3000`). Start environment values from
-`.env.example`; never commit credentials.
+Start environment values from `.env.example`; never commit credentials. `NODE_ENV`
+accepts `development`, `test`, or `production` and defaults to `development`. `PORT`
+accepts integers from `1` through `65535` and defaults to `3000`. Invalid values stop
+startup before the HTTP listener opens, and validation errors report field names
+without echoing values.
+
+All application routes use `/api/v1`. Process liveness is dependency-free:
+
+```bash
+curl http://localhost:3000/api/v1/health/live
+```
+
+The response is `{ "status": "ok" }`. Request correlation is added by `P1-T02`, so
+the liveness payload does not include `requestId` yet.
 
 ## Quality commands
 

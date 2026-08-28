@@ -48,14 +48,14 @@ pinned to explicit reviewed versions during `P1-T03`.
 
 ## Vertical slices
 
-| Slice    | Observable outcome                                                                                                                                                                     | Files/modules                                                                                 | Migration                                                                    | Tests                                                                                            | Status  |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------- |
-| `P1-T01` | The API validates environment configuration before listening, uses `/api/v1`, rejects unknown DTO fields, shuts down gracefully, and exposes dependency-free `GET /api/v1/health/live` | `src/config`, `src/health`, `src/main.ts`, `src/app.module.ts`, `.env.example`, package graph | None                                                                         | Config boundary unit tests; bootstrap and liveness E2E                                           | Pending |
-| `P1-T02` | HTTP responses have one server-generated request ID, stable localized errors in EN/VI, structured completion logs, and config-gated Swagger at `/api/docs`                             | `src/common`, `src/i18n` or `src/locales`, bootstrap/docs configuration                       | None                                                                         | Locale/fallback, filter, request-ID and log unit tests; validation/error/Swagger E2E             | Pending |
-| `P1-T03` | MySQL, Redis, MinIO, and Mailpit start locally with reviewed versions, healthchecks, named volumes, and safe example credentials                                                       | `compose.yaml`, `.env.example`, local setup docs                                              | None                                                                         | `docker compose config`; service health smoke; restart/persistence check without volume deletion | Pending |
-| `P1-T04` | The app and CLI share validated TypeORM options, never synchronize schema, and a disposable MySQL integration test proves reversible migration execution                               | `src/database`, TypeORM data source, migration scripts, integration fixtures/config           | Test-only reversible fixture; first production migration deferred to Phase 2 | Config unit tests; real MySQL connection and migration up/down integration tests                 | Pending |
-| `P1-T05` | `GET /api/v1/health/ready` returns `200` only for healthy MySQL/Redis/MinIO and sanitized bounded `503 SERVICE_NOT_READY` otherwise, while liveness stays `200`                        | `src/health`, focused Redis/storage clients or adapters, readiness config                     | None                                                                         | Indicator timeout/failure unit tests; real dependency integration; ready/live E2E failure matrix | Pending |
-| `P1-T06` | A clean documented local workflow runs focused suites and the unchanged full gate; API/config/Compose/migration docs agree; independent findings are dispositioned                     | test helpers, README/docs, spec/plan/review evidence, verification wiring only if required    | None                                                                         | Full `npm run verify`; Compose prerequisite negative test; independent adversarial review        | Pending |
+| Slice    | Observable outcome                                                                                                                                                                     | Files/modules                                                                                 | Migration                                                                    | Tests                                                                                            | Status   |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------- |
+| `P1-T01` | The API validates environment configuration before listening, uses `/api/v1`, rejects unknown DTO fields, shuts down gracefully, and exposes dependency-free `GET /api/v1/health/live` | `src/config`, `src/health`, `src/main.ts`, `src/app.module.ts`, `.env.example`, package graph | None                                                                         | Config boundary unit tests; bootstrap and liveness E2E                                           | Complete |
+| `P1-T02` | HTTP responses have one server-generated request ID, stable localized errors in EN/VI, structured completion logs, and config-gated Swagger at `/api/docs`                             | `src/common`, `src/i18n` or `src/locales`, bootstrap/docs configuration                       | None                                                                         | Locale/fallback, filter, request-ID and log unit tests; validation/error/Swagger E2E             | Pending  |
+| `P1-T03` | MySQL, Redis, MinIO, and Mailpit start locally with reviewed versions, healthchecks, named volumes, and safe example credentials                                                       | `compose.yaml`, `.env.example`, local setup docs                                              | None                                                                         | `docker compose config`; service health smoke; restart/persistence check without volume deletion | Pending  |
+| `P1-T04` | The app and CLI share validated TypeORM options, never synchronize schema, and a disposable MySQL integration test proves reversible migration execution                               | `src/database`, TypeORM data source, migration scripts, integration fixtures/config           | Test-only reversible fixture; first production migration deferred to Phase 2 | Config unit tests; real MySQL connection and migration up/down integration tests                 | Pending  |
+| `P1-T05` | `GET /api/v1/health/ready` returns `200` only for healthy MySQL/Redis/MinIO and sanitized bounded `503 SERVICE_NOT_READY` otherwise, while liveness stays `200`                        | `src/health`, focused Redis/storage clients or adapters, readiness config                     | None                                                                         | Indicator timeout/failure unit tests; real dependency integration; ready/live E2E failure matrix | Pending  |
+| `P1-T06` | A clean documented local workflow runs focused suites and the unchanged full gate; API/config/Compose/migration docs agree; independent findings are dispositioned                     | test helpers, README/docs, spec/plan/review evidence, verification wiring only if required    | None                                                                         | Full `npm run verify`; Compose prerequisite negative test; independent adversarial review        | Pending  |
 
 ## Task execution contract
 
@@ -106,6 +106,31 @@ diagnostic tail.
 - Update `SPEC-003` to `Implemented`, this plan to `Complete`, and create the
   independent review report only after evidence satisfies the Definition of Done.
 
+## P1-T01 implementation evidence
+
+- Locked versions: `@nestjs/config@4.0.4`, `joi@18.2.5`,
+  `class-validator@0.15.1`, and `class-transformer@0.5.1`. The selected config
+  package is compatible with NestJS 11 and the repository's CommonJS Jest runtime;
+  package installation reported zero known vulnerabilities.
+- Application-only configuration preserves safe scaffold defaults
+  (`NODE_ENV=development`, `PORT=3000`) while rejecting unsupported environments
+  and ports outside `1..65535`. Required dependency configuration remains owned by
+  `P1-T03` through `P1-T05`.
+- `npm run test:unit -- --runTestsByPath src/config/environment.validation.spec.ts src/bootstrap.spec.ts`
+  passed 2 suites and 7 tests.
+- `npm run test:e2e -- --runTestsByPath test/app.e2e-spec.ts` passed 1 suite and 3
+  tests, covering the global prefix, dependency-free liveness, unknown-field
+  rejection, and explicit-only DTO conversion.
+- `npm run verify` completed with exit code `0`: formatting and lint passed; unit
+  passed 3 suites/8 tests; integration passed 1 suite/1 test; E2E passed 1 suite/3
+  tests; Harness checks/evaluation and the build passed.
+- Independent review `REVIEW-009` returned `Approve` with no Blocker, High, Medium,
+  or Low findings. Real downstream-client shutdown cleanup remains in the owning
+  `P1-T04`/`P1-T05` slices and is not a residual blocker for this dependency-free
+  task.
+- No migration, external service, readiness check, localization, request
+  correlation, or Swagger behavior is introduced by this slice.
+
 ## Deployment and rollback
 
 - No production deployment occurs in Phase 1.
@@ -134,3 +159,6 @@ diagnostic tail.
   delivery is asynchronous.
 - Exact dependency and image versions, focused command paths, verification counts,
   and any temporary implementation choices are recorded here as each task completes.
+- `P1-T01` keeps safe defaults for the two application bootstrap variables. Missing
+  dependency variables become startup errors only when their owning adapters are
+  added; this keeps `P1-T01` independently runnable without placeholder secrets.

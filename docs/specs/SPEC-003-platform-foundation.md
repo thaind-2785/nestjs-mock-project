@@ -1,8 +1,8 @@
 # SPEC-003: Platform foundation
 
-- Status: Accepted
+- Status: Implemented
 - Owner: Project owner
-- Last updated: 2026-08-27
+- Last updated: 2026-08-28
 - Scope: Required
 - Related endpoints / ADRs: `HEALTH-01`, `HEALTH-02`; no new ADR required at draft
   time
@@ -110,8 +110,9 @@ Foundation lifecycle rules:
   and `synchronize: false` in every environment.
 - Add a reversible migration fixture used only by integration tests. Do not add a
   production marker table or no-op migration solely to prove the toolchain.
-- Migration commands use the same validated database configuration as the app but run
-  as an explicit process suitable for local use and a later deployment job.
+- Test-fixture migration commands use the same validated database configuration as the
+  app but run as an explicit local process. Production migration commands and runners
+  begin with the owning domain slice and later deployment phase.
 - Integration tests prove fixture migration up/down from an empty disposable database
   and the documented production rollback/forward-fix policy.
 - The users/auth schema begins in the Auth and RBAC phase so its migration, service,
@@ -161,36 +162,36 @@ Foundation lifecycle rules:
 
 ## Acceptance criteria
 
-- [ ] Given a required configuration value is missing or invalid, when the API starts,
+- [x] Given a required configuration value is missing or invalid, when the API starts,
       then startup fails before listening and reports the field without its value.
-- [ ] Given a valid local configuration, when the API starts, then all routes use the
+- [x] Given a valid local configuration, when the API starts, then all routes use the
       `/api/v1` prefix and Swagger is available only according to its config flag.
-- [ ] Given English, Vietnamese, missing, and unsupported language headers, when a
+- [x] Given English, Vietnamese, missing, and unsupported language headers, when a
       localized validation/error response is returned, then `en`/`vi` behave as
       configured, fallback is English, and the stable error code does not change.
-- [ ] Given any HTTP request, when a response or error completes, then one
+- [x] Given any HTTP request, when a response or error completes, then one
       server-generated request ID is present consistently in the header, error body
       where applicable, and structured completion log.
-- [ ] Given the process is serving, when `/api/v1/health/live` is requested, then it
+- [x] Given the process is serving, when `/api/v1/health/live` is requested, then it
       returns `200` without contacting downstream dependencies.
-- [ ] Given MySQL, Redis, and MinIO are healthy, when `/api/v1/health/ready` is
+- [x] Given MySQL, Redis, and MinIO are healthy, when `/api/v1/health/ready` is
       requested, then it returns `200` within the configured timeout.
-- [ ] Given any required readiness dependency is unavailable or slow, when readiness
+- [x] Given any required readiness dependency is unavailable or slow, when readiness
       is requested, then it returns `503 SERVICE_NOT_READY` without leaking connection
       details while liveness remains `200`.
-- [ ] Given an empty disposable MySQL database, when the migration integration suite
+- [x] Given an empty disposable MySQL database, when the migration integration suite
       runs, then the reversible fixture migrates up/down with `synchronize: false`;
       no fake production schema object is introduced.
-- [ ] Given a clean machine with Docker Compose and the documented environment, when
+- [x] Given a clean machine with Docker Compose and the documented environment, when
       dependency services start, then MySQL, Redis, MinIO, and Mailpit become healthy
       without any real external provider call.
-- [ ] Given Compose prerequisites are absent, when an integration/E2E suite requiring
+- [x] Given Compose prerequisites are absent, when an integration/E2E suite requiring
       them runs, then it fails with an actionable message rather than silently
       skipping.
-- [ ] Given the final Phase 1 implementation, when `npm run verify` runs from a clean
+- [x] Given the final Phase 1 implementation, when `npm run verify` runs from a clean
       checkout with documented prerequisites, then Harness checks, formatting, lint,
       unit, integration, E2E, and build all pass.
-- [ ] An independent reviewer finds no unresolved Blocker/High issue, and accepted
+- [x] An independent reviewer finds no unresolved Blocker/High issue, and accepted
       Medium/Low findings have a recorded disposition.
 
 ## Test strategy
@@ -219,6 +220,10 @@ Foundation lifecycle rules:
 - Phase 1 proves migration infrastructure without creating product-domain tables.
 - Exact dependency/image versions are selected and locked in the implementation plan
   after checking compatibility with Node 22 and NestJS 11.
+- Application object-storage configuration uses provider-neutral names. Local defaults
+  target the MinIO emulator; production supplies S3-compatible values without a code
+  or environment-name migration. MinIO-specific names configure only the local
+  Compose container.
 
 ### Decisions intentionally deferred
 

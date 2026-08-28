@@ -37,9 +37,18 @@ const safeBaseEnvironmentNames = new Set(
   ].map((name) => name.toUpperCase()),
 );
 const safeForwardEnvironmentNames = new Set(
-  ['CI', 'LANG', 'LC_ALL', 'TZ', 'NODE_ENV', 'PORT'].map((name) =>
-    name.toUpperCase(),
-  ),
+  [
+    'CI',
+    'LANG',
+    'LC_ALL',
+    'TZ',
+    'NODE_ENV',
+    'PORT',
+    'MYSQL_HOST',
+    'MYSQL_PORT',
+    'MYSQL_DATABASE',
+    'MYSQL_USER',
+  ].map((name) => name.toUpperCase()),
 );
 export const harnessTraceFieldNames = Object.freeze([
   'schema_version',
@@ -168,6 +177,10 @@ export const commandCatalog = Object.freeze({
   harness_check: npmCommand(['run', 'harness:check']),
   harness_test: npmCommand(['run', 'test:harness']),
   harness_eval: npmCommand(['run', 'harness:eval']),
+  compose_test: npmCommand(['run', 'test:compose']),
+  compose_config: npmCommand(['run', 'compose:config']),
+  compose_ci: npmCommand(['run', 'compose:ci']),
+  compose_smoke: npmCommand(['run', 'compose:smoke']),
   verify: npmCommand(['run', 'verify']),
   dev: npmCommand(['run', 'start:dev']),
   build: npmCommand(['run', 'build']),

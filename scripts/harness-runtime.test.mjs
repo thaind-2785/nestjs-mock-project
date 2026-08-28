@@ -306,6 +306,32 @@ test('forwards only explicit child environment values', () => {
   assert.equal('UNDECLARED_VALUE' in childEnvironment, false);
 });
 
+test('forwards non-secret database overrides but never credentials', () => {
+  const resolved = resolveCommand({
+    config: loaded.config,
+    commandRef: 'integration_test',
+    environmentId: 'ci',
+  });
+  const childEnvironment = buildChildEnvironment({
+    config: loaded.config,
+    resolvedCommand: resolved,
+    ambientEnvironment: {
+      PATH: '/synthetic/bin',
+      MYSQL_HOST: 'db.example.test',
+      MYSQL_PORT: '13306',
+      MYSQL_DATABASE: 'p1_t04_ci',
+      MYSQL_USER: 'custom_user',
+      MYSQL_PASSWORD: 'must-not-cross',
+    },
+  });
+
+  assert.equal(childEnvironment.MYSQL_HOST, 'db.example.test');
+  assert.equal(childEnvironment.MYSQL_PORT, '13306');
+  assert.equal(childEnvironment.MYSQL_DATABASE, 'p1_t04_ci');
+  assert.equal(childEnvironment.MYSQL_USER, 'custom_user');
+  assert.equal('MYSQL_PASSWORD' in childEnvironment, false);
+});
+
 test('rejects unsafe allowlists, missing PATH, and unknown internal values', () => {
   const resolved = resolveCommand({
     config: loaded.config,

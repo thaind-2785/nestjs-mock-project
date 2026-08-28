@@ -1,7 +1,7 @@
 # PLAN-004: Platform foundation
 
 - Spec: `docs/specs/SPEC-003-platform-foundation.md`
-- Status: In progress
+- Status: Complete
 - Owner: Codex primary agent
 - Reviewer (must be independent): Platform foundation reviewer
 
@@ -48,14 +48,14 @@ pinned to explicit reviewed versions during `P1-T03`.
 
 ## Vertical slices
 
-| Slice    | Observable outcome                                                                                                                                                                     | Files/modules                                                                                 | Migration                                                                    | Tests                                                                                            | Status  |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------- |
-| `P1-T01` | The API validates environment configuration before listening, uses `/api/v1`, rejects unknown DTO fields, shuts down gracefully, and exposes dependency-free `GET /api/v1/health/live` | `src/config`, `src/health`, `src/main.ts`, `src/app.module.ts`, `.env.example`, package graph | None                                                                         | Config boundary unit tests; bootstrap and liveness E2E                                           | Pending |
-| `P1-T02` | HTTP responses have one server-generated request ID, stable localized errors in EN/VI, structured completion logs, and config-gated Swagger at `/api/docs`                             | `src/common`, `src/i18n` or `src/locales`, bootstrap/docs configuration                       | None                                                                         | Locale/fallback, filter, request-ID and log unit tests; validation/error/Swagger E2E             | Pending |
-| `P1-T03` | MySQL, Redis, MinIO, and Mailpit start locally with reviewed versions, healthchecks, named volumes, and safe example credentials                                                       | `compose.yaml`, `.env.example`, local setup docs                                              | None                                                                         | `docker compose config`; service health smoke; restart/persistence check without volume deletion | Pending |
-| `P1-T04` | The app and CLI share validated TypeORM options, never synchronize schema, and a disposable MySQL integration test proves reversible migration execution                               | `src/database`, TypeORM data source, migration scripts, integration fixtures/config           | Test-only reversible fixture; first production migration deferred to Phase 2 | Config unit tests; real MySQL connection and migration up/down integration tests                 | Pending |
-| `P1-T05` | `GET /api/v1/health/ready` returns `200` only for healthy MySQL/Redis/MinIO and sanitized bounded `503 SERVICE_NOT_READY` otherwise, while liveness stays `200`                        | `src/health`, focused Redis/storage clients or adapters, readiness config                     | None                                                                         | Indicator timeout/failure unit tests; real dependency integration; ready/live E2E failure matrix | Pending |
-| `P1-T06` | A clean documented local workflow runs focused suites and the unchanged full gate; API/config/Compose/migration docs agree; independent findings are dispositioned                     | test helpers, README/docs, spec/plan/review evidence, verification wiring only if required    | None                                                                         | Full `npm run verify`; Compose prerequisite negative test; independent adversarial review        | Pending |
+| Slice    | Observable outcome                                                                                                                                                                     | Files/modules                                                                                 | Migration                                                                    | Tests                                                                                            | Status   |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------- |
+| `P1-T01` | The API validates environment configuration before listening, uses `/api/v1`, rejects unknown DTO fields, shuts down gracefully, and exposes dependency-free `GET /api/v1/health/live` | `src/config`, `src/health`, `src/main.ts`, `src/app.module.ts`, `.env.example`, package graph | None                                                                         | Config boundary unit tests; bootstrap and liveness E2E                                           | Complete |
+| `P1-T02` | HTTP responses have one server-generated request ID, stable localized errors in EN/VI, structured completion logs, and config-gated Swagger at `/api/docs`                             | `src/common`, `src/i18n` or `src/locales`, bootstrap/docs configuration                       | None                                                                         | Locale/fallback, filter, request-ID and log unit tests; validation/error/Swagger E2E             | Complete |
+| `P1-T03` | MySQL, Redis, MinIO, and Mailpit start locally with reviewed versions, healthchecks, named volumes, and safe example credentials                                                       | `compose.yaml`, `.env.example`, local setup docs                                              | None                                                                         | `docker compose config`; service health smoke; restart/persistence check without volume deletion | Complete |
+| `P1-T04` | The app and CLI share validated TypeORM options, never synchronize schema, and a disposable MySQL integration test proves reversible migration execution                               | `src/database`, `test/fixtures`, migration CLI scripts, integration config                    | Test-only reversible fixture; first production migration deferred to Phase 2 | Config unit tests; real MySQL connection and migration up/down integration tests                 | Complete |
+| `P1-T05` | `GET /api/v1/health/ready` returns `200` only for healthy MySQL/Redis/MinIO and sanitized bounded `503 SERVICE_NOT_READY` otherwise, while liveness stays `200`                        | `src/health`, focused Redis/storage clients or adapters, readiness config                     | None                                                                         | Indicator timeout/failure unit tests; real dependency integration; ready/live E2E failure matrix | Complete |
+| `P1-T06` | A clean documented local workflow runs focused suites and the unchanged full gate; API/config/Compose/migration docs agree; independent findings are dispositioned                     | test helpers, README/docs, spec/plan/review evidence, verification wiring only if required    | None                                                                         | Full `npm run verify`; Compose prerequisite negative test; independent adversarial review        | Complete |
 
 ## Task execution contract
 
@@ -83,7 +83,7 @@ Expected focused commands are finalized with their test paths during implementat
 - `docker compose config`
 - `docker compose up -d mysql redis minio mailpit`
 - `docker compose ps`
-- explicit TypeORM migration up/down commands registered in `package.json`
+- explicit test-fixture TypeORM migration up/down commands registered in `package.json`
 - `npm run harness:check` after Harness/package-command registration changes only
 - `npm run verify` once before independent review
 - affected focused checks plus `npm run verify` once after accepted Blocker/High fixes
@@ -105,6 +105,201 @@ diagnostic tail.
   readiness dependencies, and the distinction between liveness and readiness.
 - Update `SPEC-003` to `Implemented`, this plan to `Complete`, and create the
   independent review report only after evidence satisfies the Definition of Done.
+
+## P1-T01 implementation evidence
+
+- Locked versions: `@nestjs/config@4.0.4`, `joi@18.2.5`,
+  `class-validator@0.15.1`, and `class-transformer@0.5.1`. The selected config
+  package is compatible with NestJS 11 and the repository's CommonJS Jest runtime;
+  package installation reported zero known vulnerabilities.
+- Application-only configuration preserves safe scaffold defaults
+  (`NODE_ENV=development`, `PORT=3000`) while rejecting unsupported environments
+  and ports outside `1..65535`. Required dependency configuration remains owned by
+  `P1-T03` through `P1-T05`.
+- `npm run test:unit -- --runTestsByPath src/config/environment.validation.spec.ts src/bootstrap.spec.ts`
+  passed 2 suites and 7 tests.
+- `npm run test:e2e -- --runTestsByPath test/app.e2e-spec.ts` passed 1 suite and 3
+  tests, covering the global prefix, dependency-free liveness, unknown-field
+  rejection, and explicit-only DTO conversion.
+- `npm run verify` completed with exit code `0`: formatting and lint passed; unit
+  passed 3 suites/8 tests; integration passed 1 suite/1 test; E2E passed 1 suite/3
+  tests; Harness checks/evaluation and the build passed.
+- Independent review `REVIEW-009` returned `Approve` with no Blocker, High, Medium,
+  or Low findings. Real downstream-client shutdown cleanup remains in the owning
+  `P1-T04`/`P1-T05` slices and is not a residual blocker for this dependency-free
+  task.
+- No migration, external service, readiness check, localization, request
+  correlation, or Swagger behavior is introduced by this slice.
+
+## P1-T02 implementation evidence
+
+- Locked versions: `nestjs-i18n@10.8.5` and `@nestjs/swagger@11.4.7`. Both expose
+  CommonJS entrypoints compatible with the repository runtime; Swagger declares
+  NestJS `^11.0.1` peers, and package installation reported zero known
+  vulnerabilities.
+- `SWAGGER_ENABLED` is validated as a boolean, defaults enabled in development/test
+  and disabled in production, and gates both `/api/docs` and `/api/docs-json`.
+- Request correlation ignores client IDs, generates one UUID, returns it through
+  `X-Request-Id`, reuses it in errors/liveness, and emits one sanitized completion
+  record with a normalized route and no headers or bodies.
+- Localized global errors use stable codes plus English/Vietnamese messages. DTO
+  validation details contain only field paths and constraint codes, never raw values
+  or validator prose.
+- `npm run test:unit -- --runTestsByPath src/config/environment.validation.spec.ts src/config/app.config.spec.ts src/bootstrap.spec.ts src/common/http/request-context.spec.ts src/common/errors/error-descriptor.spec.ts src/common/errors/application-exception.filter.spec.ts src/common/openapi/swagger.spec.ts`
+  passed 7 suites and 22 tests.
+- `npm run test:e2e -- --runTestsByPath test/app.e2e-spec.ts` passed 1 suite and 10
+  tests before review and 11 tests after review fixes, covering request correlation,
+  error/fallback locales, stable validation, oversized-payload handling, completion
+  logs, and enabled/disabled Swagger.
+- Focused TypeScript, lint, and build checks passed; the build copies both locale
+  catalogs into `dist/locales` without enabling file watchers.
+- Independent review findings were addressed by mapping the trusted body-parser
+  boundary to localized `413 PAYLOAD_TOO_LARGE`, disabling Scarf install analytics at
+  the root package, and rejecting non-canonical uppercase Swagger booleans. Focused
+  regression tests pin all three behaviors.
+- Post-fix `npm run verify` completed with exit code `0`: Harness ran 67 tests;
+  formatting, lint, and build passed; unit ran 8 suites/23 tests, integration ran 1
+  suite/1 test, and E2E ran 1 suite/11 tests.
+- Independent re-review `REVIEW-010` concluded `Approve`; all three findings are
+  fixed and no unresolved or newly introduced finding remains for this slice.
+- No migration, persistence, external service, authorization, readiness, or CORS
+  behavior is introduced by this slice.
+
+## P1-T03 implementation evidence
+
+- Compose contains dependency services only: MySQL, Redis, MinIO, and Mailpit. The
+  future `api` and `worker` containers remain deferred to their owning runtime/image
+  slices.
+- Reviewed immutable image references are `mysql:8.4.11` at
+  `sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb`,
+  `redis:7.4.11-alpine3.21` at
+  `sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf`,
+  `minio/minio:RELEASE.2025-09-07T16-13-09Z` at
+  `sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e`,
+  and `axllent/mailpit:v1.31.0` at
+  `sha256:c96991d9bef73594c246d89ca81411d4e916f03e76a7d2d72fa2ab5dd3c9ce24`.
+- Every published port binds to `127.0.0.1`; every service has an explicit healthcheck,
+  `unless-stopped` restart policy, and named persistent volume. Compose consumes only
+  safe development examples or ignored `.env` overrides.
+- MinIO and Mailpit update checks are disabled so normal startup does not call real
+  storage/mail providers. The archived MinIO Community image is restricted to a
+  local-only S3 emulator and is explicitly excluded from production selection.
+- Managed Compose commands require v2 or newer and resolve either the Docker CLI
+  plugin or compatible standalone binary. `npm run test:compose` passed 7/7 tests,
+  covering the topology contract, plugin preference, standalone fallback, legacy and
+  missing client rejection, and unique persistence-probe keys.
+- `npm run compose:config` passed, and Harness passed 67/67 tests with Docker Compose
+  registered as active. Harness architecture now records the dependency-only active
+  boundary, CI/local config requirements, smoke side effects, and the still-planned
+  application/deployment boundaries.
+- `npm run compose:smoke` started exactly four services, observed 4/4 healthy, created
+  four named volumes, restarted Redis, and verified its unique persistence probe was
+  restored and then removed. No volume deletion occurred; the healthy stack remains
+  available for P1-T04/P1-T05.
+- Pre-review `npm run verify` completed with exit code `0`: Harness passed 67/67 and
+  10 evaluation fixtures; Compose passed 2/2 contract tests plus resolved-config
+  validation; formatting, lint, unit 23/23, integration 1/1, E2E 11/11, and build all
+  passed.
+- Post-review `npm run verify` completed with exit code `0`: Harness passed 67/67 and
+  10 evaluation fixtures; Compose passed 7/7 focused tests plus resolved-config
+  validation; formatting, lint, unit 23/23, integration 1/1, E2E 11/11, and build all
+  passed. The full log is retained outside the repository at
+  `/tmp/p1-t03-post-review-verify.log` for the current handoff.
+- Independent re-review `REVIEW-011` concluded `Approve`. Its Harness-boundary,
+  Compose-version, persistence-key, and registry-pull documentation findings are
+  fixed; the constrained single-node, loopback-only MinIO emulator risk is accepted
+  explicitly and is not a production-storage approval.
+- No application client, readiness endpoint, migration, product schema, real email,
+  bucket mutation, `api` container, or `worker` container is introduced by this slice.
+
+## P1-T04 implementation evidence
+
+- Installed and locked `@nestjs/typeorm@11.0.3`, `typeorm@0.3.31`, and `mysql2@3.24.2`;
+  installation reported zero known vulnerabilities. The application `DatabaseModule`
+  owns the database config feature provider, while `AppConfigModule` remains scoped to
+  application configuration.
+- `src/database/database.options.ts` is the shared TypeORM option factory used by the
+  Nest module and the explicit test-fixture CLI data source. It enforces MySQL,
+  `utf8mb4`, bounded connection timeout, `migrationsRun: false`, and
+  `synchronize: false`.
+- Database environment values are validated before a client is created. Local/test
+  defaults match Compose; production requires an explicit `MYSQL_PASSWORD`. Non-secret
+  host, port, database, and user overrides may pass through managed checks without
+  forwarding credentials.
+- The migration fixture and CLI data source live under `test/fixtures/`; commands are
+  explicitly named `migration:test:run` and `migration:test:revert`. The fixture creates
+  only `p1_t04_migration_probe`, uses a namespaced test migration ledger, and is always
+  reverted/cleaned by the integration test. No production migration is added.
+- `MYSQL_PORT=13306 npm run test:integration -- --runTestsByPath
+test/database.integration-spec.ts test/app.integration-spec.ts` passed 2 suites and
+  2 tests against the real MySQL Compose service on this host. The app module connected
+  through TypeORM, and the fixture migrated up/down inside a unique database that was
+  dropped during cleanup; no `p1_t04_*` database remained.
+- `MYSQL_PORT=13306 npm run test:e2e -- --runTestsByPath test/app.e2e-spec.ts` passed
+  1 suite and 11 tests with the database module active. Both migration CLI commands
+  completed successfully against the same service.
+- Final post-review-fix `MYSQL_PORT=13306 npm run verify` completed with exit code `0`:
+  Harness passed 68/68 tests and 10 evaluation fixtures; Compose passed 7/7 tests
+  plus config validation; formatting, lint, unit passed 9 suites/31 tests, integration passed 2
+  suites/2 tests, E2E passed 1 suite/11 tests, and build passed. The full log is
+  retained outside the repository at `/tmp/p1-t04-verify-postreviewfix.log`.
+- CI starts the digest-pinned MySQL, Redis, and MinIO Compose dependencies through the
+  reviewed `compose:ci` entrypoint before the shared verify gate, keeping real
+  integration/E2E prerequisites explicit without forwarding any credential through
+  Harness.
+- Independent review `docs/reviews/REVIEW-012-platform-foundation-p1-t04.md` approved
+  the current revision after all High/Medium/Low findings were fixed and the post-fix
+  full gate passed.
+
+## P1-T05 implementation evidence
+
+- Installed and locked `@nestjs/terminus@11.1.1`, `ioredis@5.11.1`, and
+  `@aws-sdk/client-s3@3.1120.0`; installation reported zero known vulnerabilities.
+- Readiness configuration validates Redis, provider-neutral object-storage
+  endpoint/region/path-style/bucket/access credentials, and a `100..5000`
+  millisecond per-dependency timeout before clients are created. Production requires
+  explicit object-storage credentials; safe local defaults match Compose's MinIO.
+- `GET /api/v1/health/ready` probes MySQL, Redis, and MinIO concurrently. It returns
+  `200 { status: "ok", requestId }` only when all are healthy; otherwise it returns
+  localized `503 SERVICE_NOT_READY` with only the safe dependency class list.
+  Liveness does not invoke readiness checks.
+- TypeORM is manually initialized by the bounded MySQL probe rather than during module
+  bootstrap, preserving dependency-independent liveness when MySQL is unavailable.
+  The initialized data source and S3 client are closed through application shutdown.
+- Focused unit tests passed 2 suites/25 tests; readiness integration plus existing
+  database/module integration passed 3 suites/3 tests against real MySQL, Redis, and
+  MinIO; E2E passed 1 suite/13 tests for ready/live and localized safe failures.
+- Post-review-fix `MYSQL_PORT=13306 npm run verify` completed with exit code `0`:
+  Harness passed 68/68 tests and 10 evaluation fixtures; Compose passed 8/8 tests
+  plus config validation; formatting, lint, unit passed 10 suites/41 tests, integration passed 3
+  suites/3 tests, E2E passed 1 suite/13 tests, and build passed. The full log is
+  retained outside the repository at `/tmp/p1-t05-verify-post-review-fix.log`.
+- Independent review `docs/reviews/REVIEW-013-platform-foundation-p1-t05.md` approved
+  the current revision after the CI readiness-dependency and S3 cancellation findings
+  were fixed and reverified.
+
+## P1-T06 implementation evidence
+
+- Application-facing storage settings now use `OBJECT_STORAGE_*`; the local MinIO
+  emulator still works through development defaults while production can set an S3
+  region, optional endpoint, and path-style mode without changing code or variable
+  names. The four obsolete application-level `MINIO_*` variables fail startup with a
+  value-free migration message; MinIO container-only variables remain accepted.
+- `createStorageClientOptions` is unit-tested for the local MinIO configuration,
+  cloud S3 without an endpoint, and an explicit S3-compatible endpoint. The CI step
+  now accurately says it starts readiness dependencies for verification.
+- The initial full-gate attempt identified an existing local port mismatch: the
+  running MySQL container was published at `13306` while the shell supplied no
+  `MYSQL_PORT`; no volume or data was changed. With the documented runtime value
+  supplied, the final post-review `MYSQL_PORT=13306 npm run verify` completed with
+  exit `0`: Harness passed 68/68 tests and 10 evaluation fixtures; Compose passed
+  8/8 tests plus config validation; formatting and lint passed; unit passed 11
+  suites/45 tests; integration passed 3 suites/3 tests; E2E passed 1 suite/13 tests;
+  and build passed. Verbose output is retained outside the repository at
+  `/tmp/p1-t06-storage-config-postreview-verify.log`.
+- Independent review `docs/reviews/REVIEW-014-platform-foundation-p1-t06-storage-config.md`
+  identified one Medium and two Low findings. All were fixed, re-reviewed with no
+  remaining finding, and recorded as `Fixed` with an `Approve` verdict.
 
 ## Deployment and rollback
 
@@ -134,3 +329,29 @@ diagnostic tail.
   delivery is asynchronous.
 - Exact dependency and image versions, focused command paths, verification counts,
   and any temporary implementation choices are recorded here as each task completes.
+- `P1-T01` keeps safe defaults for the two application bootstrap variables. Missing
+  dependency variables become startup errors only when their owning adapters are
+  added; this keeps `P1-T01` independently runnable without placeholder secrets.
+- `P1-T02` uses the NestJS built-in JSON `ConsoleLogger`; completion records use a
+  fixed `unmatched` route label when no normalized route template exists, preventing
+  arbitrary URL identifiers from entering logs.
+- Validation `details` are deliberately machine-readable field/constraint-code pairs.
+  Only the top-level human message is localized, so clients branch on stable codes
+  and do not parse translated prose.
+- Swagger exposes UI plus JSON only. Locale catalogs are build assets but not watched
+  during normal builds; development restarts pick them up through the existing Nest
+  watch cycle.
+- `P1-T03` retains the spec-selected MinIO-compatible local emulator without adding a
+  license/account prerequisite. Because the final Community image is archived and has
+  a [published security advisory](https://github.com/minio/minio/security/advisories/GHSA-xh8f-g2qw-gcm7),
+  it is digest-pinned, exposed only on loopback, and prohibited as the later production
+  object-storage selection.
+- `P1-T04` keeps the application config module application-only; `DatabaseModule`
+  registers the database config feature next to the TypeORM connection. The reversible
+  migration remains under `test/fixtures/` so a future production migration directory
+  cannot be mistaken for a test probe.
+- `P1-T06` standardizes application-facing storage configuration as
+  `OBJECT_STORAGE_*`. MinIO-specific values remain Compose-only; provider-specific
+  production values replace values rather than requiring a code or variable-name
+  migration. The S3 client receives configurable region and path-style behavior, so
+  local MinIO and cloud S3 defaults differ without forks in application code.

@@ -1,0 +1,14 @@
+{
+  "badRequest": "Yêu cầu không hợp lệ.",
+  "conflict": "Yêu cầu xung đột với trạng thái hiện tại của tài nguyên.",
+  "forbidden": "Bạn không có quyền thực hiện thao tác này.",
+  "internalServerError": "Đã xảy ra lỗi không mong muốn.",
+  "methodNotAllowed": "Phương thức không được hỗ trợ.",
+  "notFound": "Không tìm thấy tài nguyên.",
+  "payloadTooLarge": "Dữ liệu yêu cầu vượt quá giới hạn cho phép.",
+  "serviceUnavailable": "Dịch vụ hiện không khả dụng.",
+  "tooManyRequests": "Có quá nhiều yêu cầu.",
+  "unauthorized": "Yêu cầu xác thực.",
+  "unprocessableEntity": "Không thể xử lý yêu cầu.",
+  "validationFailed": "Dữ liệu yêu cầu không hợp lệ."
+}

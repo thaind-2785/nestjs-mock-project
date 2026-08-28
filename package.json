@@ -4,6 +4,9 @@
   "description": "",
   "author": "",
   "private": true,
+  "scarfSettings": {
+    "enabled": false
+  },
   "license": "UNLICENSED",
   "engines": {
     "node": ">=22 <23",
@@ -12,6 +15,11 @@
   "scripts": {
     "bootstrap": "npm ci",
     "build": "nest build",
+    "compose:config": "node scripts/compose-config.mjs",
+    "compose:ci": "node scripts/compose-ci.mjs",
+    "compose:smoke": "node scripts/compose-smoke.mjs",
+    "migration:test:run": "typeorm-ts-node-commonjs migration:run -d test/fixtures/database-data-source.ts",
+    "migration:test:revert": "typeorm-ts-node-commonjs migration:revert -d test/fixtures/database-data-source.ts",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.mjs\" \"docs/**/*.md\" \".agents/skills/**/*.md\" \".github/**/*.yml\" \".harness/*.yaml\" \".harness/*.json\" \"*.md\"",
     "start": "nest start",
@@ -24,6 +32,7 @@
     "test:unit": "jest --runInBand",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
+    "test:compose": "node --test scripts/compose-cli.test.mjs scripts/compose-contract.test.mjs",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:integration": "jest --config ./test/jest-integration.json --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
@@ -33,11 +42,23 @@
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1120.0",
     "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "4.0.4",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/swagger": "11.4.7",
+    "@nestjs/terminus": "11.1.1",
+    "@nestjs/typeorm": "11.0.3",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "ioredis": "5.11.1",
+    "joi": "^18.2.5",
+    "mysql2": "3.24.2",
+    "nestjs-i18n": "10.8.5",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "typeorm": "0.3.31"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

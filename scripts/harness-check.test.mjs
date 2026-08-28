@@ -181,7 +181,7 @@ test('requires implementation evidence for active tools', () => {
   const docker = config.tool_registry.find(
     (tool) => tool.id === 'docker_compose',
   );
-  docker.status = 'active';
+  delete docker.implementation_ref;
 
   assert.ok(
     validate(config).some((error) =>

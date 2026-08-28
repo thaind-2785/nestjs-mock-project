@@ -69,6 +69,9 @@ flowchart TB
 | `npm run test:e2e`         | E2E test layer                             | Local test socket                     |
 | `npm run build`            | Compile the application                    | Ignored build artifacts               |
 | `npm run start:dev`        | Run current API locally                    | Starts a local process                |
+| `npm run test:compose`     | Validate the dependency-stack contract     | None                                  |
+| `npm run compose:config`   | Resolve and validate `compose.yaml`        | None                                  |
+| `npm run compose:smoke`    | Exercise dependency health and persistence | Starts/restarts four local services   |
 
 Adding another canonical entry command requires a package script or the single
 allowlisted bootstrap command, a tool reference, permission, side-effect category,
@@ -88,6 +91,29 @@ implementation-owned argv catalog and is never passed to a shell. Unknown refere
 planned tools/environments, denied actions, autonomy mismatches, and
 `approval_required` without an approval artifact fail before spawn. Timeout and
 non-zero exit fail the calling gate.
+
+### Docker Compose boundary
+
+The `docker_compose` tool is active only for the dependency-only local stack in
+`compose.yaml`: MySQL, Redis, MinIO, and Mailpit. The resolver requires Compose v2 or
+newer and supports both `docker compose` and the compatible standalone
+`docker-compose` command. Images are pinned by tag and digest, published ports bind
+to loopback, and named volumes preserve local development state.
+
+`test:compose` and `compose:config` are non-mutating requirements of the local and CI
+verification gate. Configuration validation requires a Compose CLI but does not
+start a Docker daemon workload. The CI workflow starts MySQL, Redis, and MinIO through
+the reviewed `compose:ci` entrypoint before `verify` so real integration and
+application E2E tests have their documented prerequisites; the runner is disposable.
+`compose:smoke` remains an
+explicitly mutating local check: it starts exactly the four dependencies, waits for
+health, restarts Redis, and verifies a uniquely named persistence probe without
+deleting volumes or stopping the stack.
+
+Immutable pulls of the four digest-pinned dependency images are part of this local
+boundary. Application-image build/publish, registry mutation, API/worker containers,
+staging/production deployment, and TypeORM migration execution remain outside it and
+retain planned status.
 
 `bootstrap` has an additional `committed_dependency_graph` precondition. Before
 `npm ci`, a fixed read-only Git probe requires both `package.json` and
@@ -181,7 +207,7 @@ Hooks are visible, bounded, and fail closed:
 - Pull request/push to main installs locked dependencies and runs the same verify
   command in GitHub Actions. Third-party actions are pinned to immutable commits.
 - CI uses read-only repository permissions and never calls real external providers.
-- CI validation permits exactly the reviewed `verify` job and its four known steps;
+- CI validation permits exactly the reviewed `verify` job and its five known steps;
   job-level permission overrides and extra jobs/commands fail validation.
 
 Git hooks are intentionally absent in v0.2: they modify developer workflow and are
@@ -251,8 +277,9 @@ external provider behavior, or GitHub merge protection. The latter remains
 
 Remaining Harness work is non-blocking product-phase debt: add new routes, fixtures,
 tools, approval artifacts, or remote observability only after a demonstrated product
-delivery need. Docker, deployment, MCP, and application telemetry retain their
-existing planned status.
+delivery need. Dependency-only local Docker Compose is active; application
+containerization, deployment, MCP, TypeORM migrations, and application telemetry
+retain their existing planned status.
 
 ## Efficient evidence policy
 
@@ -266,6 +293,14 @@ For non-trivial delivery the normal budget is one full gate before independent r
 and one after accepted Blocker/High fixes. A changed gate input, failure investigation,
 or explicit user request can justify another run. This reduces latency and transcript
 size without changing the release-quality handoff gate or hiding failures.
+
+During implementation iterations, agents should reuse the current spec/plan and run
+only the smallest focused check for a coherent edit batch. Full verification and
+independent review belong at handoff, not after every edit. Standalone
+`harness:check`/`harness:eval` runs are reserved for Harness/config changes or
+diagnosis; they are not repeated immediately before `npm run verify`, which already
+contains those checks. Tiny documentation, formatting, and one-line corrections do
+not require new delivery artifacts or a full gate.
 
 ## Artifact ownership and generation policy
 

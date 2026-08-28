@@ -36,6 +36,25 @@ For a non-trivial feature or cross-cutting change:
 Do not create ceremony for a tiny typo or formatting-only change. The definition of
 done is in `docs/quality/test-strategy.md`.
 
+## Delivery modes and verification cost
+
+Classify the work before choosing checks. During an implementation iteration, reuse
+the existing spec and plan, make a coherent batch of edits, and run only the
+smallest focused checks that cover that batch. Do not run the full gate, independent
+review, or standalone Harness checks after every edit. In particular, do not run
+`harness:check` or `harness:eval` separately immediately before `npm run verify`.
+
+Switch to handoff mode when the slice is ready for review, PR, or CI. For a
+non-trivial slice, run `npm run verify` once, obtain independent review, and close
+all findings before handoff. Run another full gate only after a changed gate input,
+a failure investigation, an accepted Blocker/High fix, or an explicit user request.
+Changes to Harness/config still require `npm run harness:check` after that change;
+this exception is a targeted regression check, not a reason to repeat the full gate
+throughout implementation.
+
+For tiny documentation, formatting, or one-line corrections, use the smallest
+relevant check and do not create a new spec, plan, review, or full-gate run.
+
 ## Harness execution
 
 Harness context contract: `HARNESS_CONTEXT_ROUTES_V0_2`. The canonical routing

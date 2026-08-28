@@ -31,5 +31,8 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Start readiness dependencies for verification
+        run: npm run compose:ci
+
       - name: Run Harness and project gate
         run: npm run verify

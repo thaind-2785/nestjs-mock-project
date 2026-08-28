@@ -1,0 +1,14 @@
+{
+  "badRequest": "Bad request.",
+  "conflict": "The request conflicts with the current resource state.",
+  "forbidden": "You do not have permission to perform this action.",
+  "internalServerError": "An unexpected error occurred.",
+  "methodNotAllowed": "Method not allowed.",
+  "notFound": "Resource not found.",
+  "payloadTooLarge": "Request payload is too large.",
+  "serviceUnavailable": "Service is unavailable.",
+  "tooManyRequests": "Too many requests.",
+  "unauthorized": "Authentication is required.",
+  "unprocessableEntity": "The request could not be processed.",
+  "validationFailed": "Request validation failed."
+}

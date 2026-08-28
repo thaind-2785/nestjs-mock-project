@@ -163,15 +163,15 @@ Foundation lifecycle rules:
 
 - [ ] Given a required configuration value is missing or invalid, when the API starts,
       then startup fails before listening and reports the field without its value.
-- [ ] Given a valid local configuration, when the API starts, then all routes use the
+- [x] Given a valid local configuration, when the API starts, then all routes use the
       `/api/v1` prefix and Swagger is available only according to its config flag.
-- [ ] Given English, Vietnamese, missing, and unsupported language headers, when a
+- [x] Given English, Vietnamese, missing, and unsupported language headers, when a
       localized validation/error response is returned, then `en`/`vi` behave as
       configured, fallback is English, and the stable error code does not change.
-- [ ] Given any HTTP request, when a response or error completes, then one
+- [x] Given any HTTP request, when a response or error completes, then one
       server-generated request ID is present consistently in the header, error body
       where applicable, and structured completion log.
-- [ ] Given the process is serving, when `/api/v1/health/live` is requested, then it
+- [x] Given the process is serving, when `/api/v1/health/live` is requested, then it
       returns `200` without contacting downstream dependencies.
 - [ ] Given MySQL, Redis, and MinIO are healthy, when `/api/v1/health/ready` is
       requested, then it returns `200` within the configured timeout.

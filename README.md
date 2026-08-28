@@ -3,9 +3,9 @@
 NestJS backend course project for hotel room discovery, Google-only authentication,
 booking requests, administration, cloud files, email, Worker Threads, cron, and
 CI/CD. Product features are designed but not yet implemented. The API currently
-provides the first platform-foundation slice: validated application configuration,
-strict DTO validation, graceful shutdown hooks, the `/api/v1` prefix, and process
-liveness.
+provides the first platform-foundation slices: validated configuration, strict DTO
+validation, graceful shutdown hooks, request-correlated EN/VI errors, structured
+request logs, OpenAPI documentation, and process liveness under `/api/v1`.
 
 ## Runtime requirements
 
@@ -28,7 +28,8 @@ Start environment values from `.env.example`; never commit credentials. `NODE_EN
 accepts `development`, `test`, or `production` and defaults to `development`. `PORT`
 accepts integers from `1` through `65535` and defaults to `3000`. Invalid values stop
 startup before the HTTP listener opens, and validation errors report field names
-without echoing values.
+without echoing values. `SWAGGER_ENABLED` defaults to `true` for development/test and
+`false` for production; set it explicitly to override that environment default.
 
 All application routes use `/api/v1`. Process liveness is dependency-free:
 
@@ -36,8 +37,15 @@ All application routes use `/api/v1`. Process liveness is dependency-free:
 curl http://localhost:3000/api/v1/health/live
 ```
 
-The response is `{ "status": "ok" }`. Request correlation is added by `P1-T02`, so
-the liveness payload does not include `requestId` yet.
+The response is `{ "status": "ok", "requestId": "<server UUID>" }`. Every response
+also includes the same server-generated `X-Request-Id`; a client-supplied value is
+ignored. Errors use `{ statusCode, code, message, details?, requestId }`. Send
+`Accept-Language: vi` for Vietnamese; missing or unsupported languages use English.
+
+When enabled, Swagger UI is served at `/api/docs` and its JSON document at
+`/api/docs-json`. HTTP completion logs are JSON and contain timestamp, request ID,
+method, normalized route, status, and duration; request/response bodies and headers
+are not logged.
 
 ## Quality commands
 

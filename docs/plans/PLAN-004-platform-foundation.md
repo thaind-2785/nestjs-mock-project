@@ -51,7 +51,7 @@ pinned to explicit reviewed versions during `P1-T03`.
 | Slice    | Observable outcome                                                                                                                                                                     | Files/modules                                                                                 | Migration                                                                    | Tests                                                                                            | Status   |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------- |
 | `P1-T01` | The API validates environment configuration before listening, uses `/api/v1`, rejects unknown DTO fields, shuts down gracefully, and exposes dependency-free `GET /api/v1/health/live` | `src/config`, `src/health`, `src/main.ts`, `src/app.module.ts`, `.env.example`, package graph | None                                                                         | Config boundary unit tests; bootstrap and liveness E2E                                           | Complete |
-| `P1-T02` | HTTP responses have one server-generated request ID, stable localized errors in EN/VI, structured completion logs, and config-gated Swagger at `/api/docs`                             | `src/common`, `src/i18n` or `src/locales`, bootstrap/docs configuration                       | None                                                                         | Locale/fallback, filter, request-ID and log unit tests; validation/error/Swagger E2E             | Pending  |
+| `P1-T02` | HTTP responses have one server-generated request ID, stable localized errors in EN/VI, structured completion logs, and config-gated Swagger at `/api/docs`                             | `src/common`, `src/i18n` or `src/locales`, bootstrap/docs configuration                       | None                                                                         | Locale/fallback, filter, request-ID and log unit tests; validation/error/Swagger E2E             | Complete |
 | `P1-T03` | MySQL, Redis, MinIO, and Mailpit start locally with reviewed versions, healthchecks, named volumes, and safe example credentials                                                       | `compose.yaml`, `.env.example`, local setup docs                                              | None                                                                         | `docker compose config`; service health smoke; restart/persistence check without volume deletion | Pending  |
 | `P1-T04` | The app and CLI share validated TypeORM options, never synchronize schema, and a disposable MySQL integration test proves reversible migration execution                               | `src/database`, TypeORM data source, migration scripts, integration fixtures/config           | Test-only reversible fixture; first production migration deferred to Phase 2 | Config unit tests; real MySQL connection and migration up/down integration tests                 | Pending  |
 | `P1-T05` | `GET /api/v1/health/ready` returns `200` only for healthy MySQL/Redis/MinIO and sanitized bounded `503 SERVICE_NOT_READY` otherwise, while liveness stays `200`                        | `src/health`, focused Redis/storage clients or adapters, readiness config                     | None                                                                         | Indicator timeout/failure unit tests; real dependency integration; ready/live E2E failure matrix | Pending  |
@@ -131,6 +131,40 @@ diagnostic tail.
 - No migration, external service, readiness check, localization, request
   correlation, or Swagger behavior is introduced by this slice.
 
+## P1-T02 implementation evidence
+
+- Locked versions: `nestjs-i18n@10.8.5` and `@nestjs/swagger@11.4.7`. Both expose
+  CommonJS entrypoints compatible with the repository runtime; Swagger declares
+  NestJS `^11.0.1` peers, and package installation reported zero known
+  vulnerabilities.
+- `SWAGGER_ENABLED` is validated as a boolean, defaults enabled in development/test
+  and disabled in production, and gates both `/api/docs` and `/api/docs-json`.
+- Request correlation ignores client IDs, generates one UUID, returns it through
+  `X-Request-Id`, reuses it in errors/liveness, and emits one sanitized completion
+  record with a normalized route and no headers or bodies.
+- Localized global errors use stable codes plus English/Vietnamese messages. DTO
+  validation details contain only field paths and constraint codes, never raw values
+  or validator prose.
+- `npm run test:unit -- --runTestsByPath src/config/environment.validation.spec.ts src/config/app.config.spec.ts src/bootstrap.spec.ts src/common/http/request-context.spec.ts src/common/errors/error-descriptor.spec.ts src/common/errors/application-exception.filter.spec.ts src/common/openapi/swagger.spec.ts`
+  passed 7 suites and 22 tests.
+- `npm run test:e2e -- --runTestsByPath test/app.e2e-spec.ts` passed 1 suite and 10
+  tests before review and 11 tests after review fixes, covering request correlation,
+  error/fallback locales, stable validation, oversized-payload handling, completion
+  logs, and enabled/disabled Swagger.
+- Focused TypeScript, lint, and build checks passed; the build copies both locale
+  catalogs into `dist/locales` without enabling file watchers.
+- Independent review findings were addressed by mapping the trusted body-parser
+  boundary to localized `413 PAYLOAD_TOO_LARGE`, disabling Scarf install analytics at
+  the root package, and rejecting non-canonical uppercase Swagger booleans. Focused
+  regression tests pin all three behaviors.
+- Post-fix `npm run verify` completed with exit code `0`: Harness ran 67 tests;
+  formatting, lint, and build passed; unit ran 8 suites/23 tests, integration ran 1
+  suite/1 test, and E2E ran 1 suite/11 tests.
+- Independent re-review `REVIEW-010` concluded `Approve`; all three findings are
+  fixed and no unresolved or newly introduced finding remains for this slice.
+- No migration, persistence, external service, authorization, readiness, or CORS
+  behavior is introduced by this slice.
+
 ## Deployment and rollback
 
 - No production deployment occurs in Phase 1.
@@ -162,3 +196,12 @@ diagnostic tail.
 - `P1-T01` keeps safe defaults for the two application bootstrap variables. Missing
   dependency variables become startup errors only when their owning adapters are
   added; this keeps `P1-T01` independently runnable without placeholder secrets.
+- `P1-T02` uses the NestJS built-in JSON `ConsoleLogger`; completion records use a
+  fixed `unmatched` route label when no normalized route template exists, preventing
+  arbitrary URL identifiers from entering logs.
+- Validation `details` are deliberately machine-readable field/constraint-code pairs.
+  Only the top-level human message is localized, so clients branch on stable codes
+  and do not parse translated prose.
+- Swagger exposes UI plus JSON only. Locale catalogs are build assets but not watched
+  during normal builds; development restarts pick them up through the existing Nest
+  watch cycle.

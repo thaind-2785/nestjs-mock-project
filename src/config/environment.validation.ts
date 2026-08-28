@@ -7,6 +7,7 @@ export type NodeEnvironment = (typeof nodeEnvironments)[number];
 export interface EnvironmentVariables extends Record<string, unknown> {
   NODE_ENV: NodeEnvironment;
   PORT: number;
+  SWAGGER_ENABLED: boolean;
 }
 
 const environmentSchema = Joi.object<EnvironmentVariables>({
@@ -14,6 +15,7 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .valid(...nodeEnvironments)
     .default('development'),
   PORT: Joi.number().integer().min(1).max(65_535).default(3000),
+  SWAGGER_ENABLED: Joi.boolean().sensitive(true).optional(),
 }).unknown(true);
 
 export function validateEnvironment(
@@ -38,5 +40,10 @@ export function validateEnvironment(
     );
   }
 
-  return validationResult.value;
+  return {
+    ...validationResult.value,
+    SWAGGER_ENABLED:
+      validationResult.value.SWAGGER_ENABLED ??
+      validationResult.value.NODE_ENV !== 'production',
+  };
 }

@@ -291,6 +291,14 @@ and one after accepted Blocker/High fixes. A changed gate input, failure investi
 or explicit user request can justify another run. This reduces latency and transcript
 size without changing the release-quality handoff gate or hiding failures.
 
+During implementation iterations, agents should reuse the current spec/plan and run
+only the smallest focused check for a coherent edit batch. Full verification and
+independent review belong at handoff, not after every edit. Standalone
+`harness:check`/`harness:eval` runs are reserved for Harness/config changes or
+diagnosis; they are not repeated immediately before `npm run verify`, which already
+contains those checks. Tiny documentation, formatting, and one-line corrections do
+not require new delivery artifacts or a full gate.
+
 ## Artifact ownership and generation policy
 
 | Artifact                       | Ownership                                             |

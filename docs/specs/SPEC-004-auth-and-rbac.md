@@ -1,6 +1,6 @@
 # SPEC-004: Google authentication and RBAC
 
-- Status: Accepted
+- Status: Implemented
 - Owner: Codex primary agent
 - Last updated: 2026-09-03
 - Scope: Required
@@ -150,22 +150,22 @@ forward fix instead of dropping identity/account data.
 
 ## Acceptance criteria
 
-- [ ] A first valid Google callback creates exactly one user/identity/session and a
+- [x] A first valid Google callback creates exactly one user/identity/session and a
       returning subject reuses the same user.
-- [ ] Invalid/replayed/cross-browser OAuth state and invalid Google claims are denied
+- [x] Invalid/replayed/cross-browser OAuth state and invalid Google claims are denied
       without account/session creation or sensitive errors.
-- [ ] Concurrent refresh attempts allow one rotation; token reuse revokes the
+- [x] Concurrent refresh attempts allow one rotation; token reuse revokes the
       session, and its access JWT is denied immediately.
-- [ ] Logout and user inactivation immediately deny outstanding access JWTs, including
+- [x] Logout and user inactivation immediately deny outstanding access JWTs, including
       when Redis misses or is unavailable.
-- [ ] `/me` and admin routes enforce identity, active status, and role; responses do
+- [x] `/me` and admin routes enforce identity, active status, and role; responses do
       not expose authentication metadata.
-- [ ] Admin status changes are audited and cannot deactivate self or the last active
+- [x] Admin status changes are audited and cannot deactivate self or the last active
       admin.
-- [ ] First-admin promotion is verified, idempotent, and atomically audited.
-- [ ] Migration up/down is proven in a disposable MySQL database with
+- [x] First-admin promotion is verified, idempotent, and atomically audited.
+- [x] Migration up/down is proven in a disposable MySQL database with
       `synchronize: false`.
-- [ ] Unit, contract, integration, E2E, full verification, and independent review
+- [x] Unit, contract, integration, E2E, full verification, and independent review
       complete with no unresolved Blocker/High finding.
 
 ## Test strategy

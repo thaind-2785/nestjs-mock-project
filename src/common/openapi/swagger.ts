@@ -19,12 +19,16 @@ export function configureSwagger(
     .setDescription('HTTP API for the hotel management system.')
     .setVersion('1.0')
     .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' })
-    .addCookieAuth(refreshCookieName, {
-      type: 'apiKey',
-      in: 'cookie',
-      name: refreshCookieName,
-      description: 'Rotating HttpOnly refresh cookie set by Google login',
-    })
+    .addCookieAuth(
+      refreshCookieName,
+      {
+        type: 'apiKey',
+        in: 'cookie',
+        name: refreshCookieName,
+        description: 'Rotating HttpOnly refresh cookie set by Google login',
+      },
+      refreshCookieName,
+    )
     .build();
   const document = SwaggerModule.createDocument(app, configuration, {
     extraModels: [ErrorResponseDto],

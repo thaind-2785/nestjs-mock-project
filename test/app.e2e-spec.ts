@@ -342,10 +342,13 @@ describe('Application bootstrap (e2e)', () => {
       documentBody.paths['/api/v1/admin/users'].get?.parameters?.map(
         (parameter) => parameter.name,
       ),
-    ).toEqual(expect.arrayContaining(['query', 'role', 'status', 'page', 'pageSize']));
-    expect(
-      documentBody.components?.schemas?.UpdateUserStatusDto.properties,
-    ).toEqual(expect.objectContaining({ status: expect.any(Object), reason: expect.any(Object) }));
+    ).toEqual(
+      expect.arrayContaining(['query', 'role', 'status', 'page', 'pageSize']),
+    );
+    const statusUpdateProperties =
+      documentBody.components?.schemas?.UpdateUserStatusDto.properties;
+    expect(statusUpdateProperties).toHaveProperty('status');
+    expect(statusUpdateProperties).toHaveProperty('reason');
 
     await app.close();
     app = await createTestApplication({

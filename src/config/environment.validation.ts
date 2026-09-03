@@ -126,7 +126,7 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
       if (
         !value.startsWith('/') ||
         value.startsWith('//') ||
-        /[\\\u0000-\u001F\u007F]/.test(value)
+        hasUnsafeRelativeUriCharacter(value)
       ) {
         return helpers.error('string.relativeUri');
       }
@@ -222,4 +222,14 @@ export function validateEnvironment(
       validationResult.value.SWAGGER_ENABLED ??
       validationResult.value.NODE_ENV !== 'production',
   };
+}
+
+function hasUnsafeRelativeUriCharacter(value: string): boolean {
+  return (
+    value.includes('\\') ||
+    [...value].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint === undefined || codePoint <= 31 || codePoint === 127;
+    })
+  );
 }

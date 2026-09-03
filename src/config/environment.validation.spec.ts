@@ -189,9 +189,7 @@ describe('validateEnvironment', () => {
     (successRedirectUri) => {
       expect(() =>
         validateEnvironment({ AUTH_SUCCESS_REDIRECT_URI: successRedirectUri }),
-      ).toThrow(
-        'Environment validation failed for: AUTH_SUCCESS_REDIRECT_URI',
-      );
+      ).toThrow('Environment validation failed for: AUTH_SUCCESS_REDIRECT_URI');
     },
   );
 

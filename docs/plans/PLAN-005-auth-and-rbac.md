@@ -1,7 +1,7 @@
 # PLAN-005: Google authentication and RBAC
 
 - Spec: `docs/specs/SPEC-004-auth-and-rbac.md`
-- Status: In progress
+- Status: Complete
 - Owner: Codex primary agent
 - Reviewer (must be independent): Phase 2 auth reviewer
 
@@ -31,13 +31,13 @@ package is needed.
 
 ## Vertical slices
 
-| Slice    | Observable outcome                                                                                                       | Files/modules                                                                          | Migration                  | Tests                                                            | Status      |
-| -------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------- | ----------- |
-| `P2-T01` | Validated auth config, locked dependencies, entities, and reversible users/auth schema exist                             | `src/config`, `src/users/entities`, `src/auth/entities`, `src/database`, package graph | Create five Phase 2 tables | Config/entity unit; migration integration                        | In progress |
-| `P2-T02` | App JWTs, opaque rotating sessions, Redis OAuth transactions/revocations, and cookie policy work independently of Google | `src/auth` token/session/store services                                                | None                       | Token/session/store unit and MySQL/Redis concurrency integration | Pending     |
-| `P2-T03` | Browser-bound Google start/callback performs validated JIT login and Swagger handoff                                     | `src/auth/google`, auth controller/service                                             | None                       | Google contract/unit; callback/JIT E2E                           | Pending     |
-| `P2-T04` | Deny-by-default guards, `/me`, admin users/status, and audited first-admin CLI work                                      | `src/auth`, `src/users`, `scripts`/CLI entry                                           | Uses Phase 2 tables        | Guard/service/CLI unit; RBAC/status integration/E2E              | Pending     |
-| `P2-T05` | Public contract/docs agree and Phase 2 meets its exit gate                                                               | Swagger, locales, README, spec/plan/review                                             | Verify migration state     | Focused regression plus full gate                                | Pending     |
+| Slice    | Observable outcome                                                                                                       | Files/modules                                                                          | Migration                  | Tests                                                            | Status   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------- | -------- |
+| `P2-T01` | Validated auth config, locked dependencies, entities, and reversible users/auth schema exist                             | `src/config`, `src/users/entities`, `src/auth/entities`, `src/database`, package graph | Create five Phase 2 tables | Config/entity unit; migration integration                        | Complete |
+| `P2-T02` | App JWTs, opaque rotating sessions, Redis OAuth transactions/revocations, and cookie policy work independently of Google | `src/auth` token/session/store services                                                | None                       | Token/session/store unit and MySQL/Redis concurrency integration | Complete |
+| `P2-T03` | Browser-bound Google start/callback performs validated JIT login and Swagger handoff                                     | `src/auth/google`, auth controller/service                                             | None                       | Google contract/unit; callback/JIT E2E                           | Complete |
+| `P2-T04` | Deny-by-default guards, `/me`, admin users/status, and audited first-admin CLI work                                      | `src/auth`, `src/users`, `scripts`/CLI entry                                           | Uses Phase 2 tables        | Guard/service/CLI unit; RBAC/status integration/E2E              | Complete |
+| `P2-T05` | Public contract/docs agree and Phase 2 meets its exit gate                                                               | Swagger, locales, README, spec/plan/review                                             | Verify migration state     | Focused regression plus full gate                                | Complete |
 
 ## Verification commands
 
@@ -76,3 +76,30 @@ package is needed.
   navigation-only landing URI and never carries a token.
 - Same-site cookies are the selected Phase 2 deployment contract. Cross-site cookies
   require the additional CORS/CSRF security slice before configuration can enable it.
+
+## Implementation evidence
+
+- The locked Phase 2 package set is `@nestjs/jwt@11.0.2`,
+  `google-auth-library@11.0.2`, `cookie-parser@1.4.7`, and
+  `@types/cookie-parser@1.4.10`.
+- The delivered implementation covers P2-T01 through P2-T04: validated auth config;
+  the five-table users/auth migration and TypeORM entities; opaque refresh-token
+  hashing and locked rotation; Redis OAuth transactions and positive revocation;
+  Google code/PKCE/ID-token verification through a mockable boundary; deny-by-default
+  guards, `/me`, admin status auditing, and the idempotent first-admin CLI.
+- P2-T05 reconciles the OpenAPI bearer and `hotel_refresh` cookie schemes, EN/VI
+  errors, README/operator configuration, API catalog, accepted ADR, spec, plan, and
+  independent review.
+- The initial handoff gate exposed three pre-existing quality defects in the committed
+  implementation: two Prettier deviations, a lint-forbidden control-character regex,
+  and an OpenAPI refresh-cookie security-name mismatch. They were corrected without
+  changing the authentication protocol. Focused config unit tests passed 26/26;
+  Swagger/bootstrap E2E passed 13/13.
+- Final `MYSQL_PORT=13306 npm run verify` passed: Harness 68/68 tests plus 10
+  evaluation fixtures; Compose 8/8 tests; unit 14 suites/65 tests; integration 4
+  suites/16 tests; E2E 2 suites/16 tests; formatting, lint, and build all passed.
+  Verbose output is retained outside the repository at
+  `/tmp/p2-auth-postfix-verify.log`.
+- Independent review `docs/reviews/REVIEW-015-phase2-auth-and-rbac.md` found no
+  Blocker or High issue. Its delivery-state finding is fixed and re-reviewed before
+  handoff.

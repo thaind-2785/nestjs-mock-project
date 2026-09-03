@@ -32,9 +32,11 @@ relevant spec/plan/ADR/log. Report what passed, what remains, and any residual r
 
 ## Git and PR handoff
 
-For a completed implementation slice, treat commit, push, and a reviewable PR as
-the normal handoff. Use a dedicated feature branch and a PR targeting `main`; do
-not add unrelated work to an in-review PR.
+For a completed implementation slice, present the completed checks and ask the
+project owner once whether to commit and create or update a PR. After an affirmative
+reply, complete the handoff without another conversational confirmation. Use a
+dedicated feature branch and a PR targeting `main`; do not add unrelated work to an
+in-review PR.
 
 - Commit only the scoped, verified changes with a concise conventional message, then
   push the branch.
@@ -46,3 +48,5 @@ not add unrelated work to an in-review PR.
 - Do not merge, force-push, alter another PR, or include user-owned dirty changes.
   Stop for direction if the change is not ready for review or a branch/PR target is
   ambiguous.
+- A platform permission prompt is separate from the owner's conversational approval;
+  honor it when the runtime requires it.

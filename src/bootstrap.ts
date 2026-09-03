@@ -5,6 +5,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { ConfigType } from '@nestjs/config';
+import cookieParser from 'cookie-parser';
 import { createValidationException } from './common/errors/validation-errors';
 import { RequestContextMiddleware } from './common/http/request-context';
 import { configureSwagger } from './common/openapi/swagger';
@@ -26,6 +27,7 @@ export function configureApplication(
     options.requestLogger ?? new Logger('HTTP'),
   );
 
+  app.use(cookieParser());
   app.use(requestContext.use.bind(requestContext));
   app.setGlobalPrefix(apiGlobalPrefix);
   app.useGlobalPipes(

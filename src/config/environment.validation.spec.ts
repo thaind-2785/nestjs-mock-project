@@ -1,5 +1,13 @@
 import { validateEnvironment } from './environment.validation';
 
+const productionAuthEnvironment = {
+  GOOGLE_CLIENT_ID: 'google-production-client',
+  GOOGLE_CLIENT_SECRET: 'google-production-secret',
+  GOOGLE_REDIRECT_URI:
+    'https://api.hotel.example.com/api/v1/auth/google/callback',
+  JWT_ACCESS_SECRET: 'production_jwt_secret_at_least_32_chars',
+};
+
 describe('validateEnvironment', () => {
   it('applies safe application defaults', () => {
     const environment = validateEnvironment({});
@@ -21,6 +29,10 @@ describe('validateEnvironment', () => {
     expect(environment.OBJECT_STORAGE_ACCESS_KEY).toBe('hotel_local');
     expect(environment.OBJECT_STORAGE_SECRET_KEY).toBe('local_minio_change_me');
     expect(environment.HEALTH_CHECK_TIMEOUT_MS).toBe(1000);
+    expect(environment.GOOGLE_AUTH_ENABLED).toBe(false);
+    expect(environment.AUTH_SUCCESS_REDIRECT_URI).toBe('/api/docs');
+    expect(environment.AUTH_ACCESS_TTL_SECONDS).toBe(900);
+    expect(environment.AUTH_REFRESH_TTL_SECONDS).toBe(2_592_000);
   });
 
   it('accepts supported environments and converts the port to a number', () => {
@@ -71,6 +83,7 @@ describe('validateEnvironment', () => {
       MYSQL_PASSWORD: 'production-password',
       OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
       OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
+      ...productionAuthEnvironment,
     });
 
     expect(environment.SWAGGER_ENABLED).toBe(false);
@@ -85,6 +98,7 @@ describe('validateEnvironment', () => {
       MYSQL_PASSWORD: 'production-password',
       OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
       OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
+      ...productionAuthEnvironment,
     });
 
     expect(environment.SWAGGER_ENABLED).toBe(true);
@@ -134,6 +148,7 @@ describe('validateEnvironment', () => {
         NODE_ENV: 'production',
         OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
         OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
+        ...productionAuthEnvironment,
       }),
     ).toThrow('Environment validation failed for: MYSQL_PASSWORD');
   });
@@ -143,11 +158,42 @@ describe('validateEnvironment', () => {
       validateEnvironment({
         NODE_ENV: 'production',
         MYSQL_PASSWORD: 'production-password',
+        ...productionAuthEnvironment,
       }),
     ).toThrow(
       'Environment validation failed for: OBJECT_STORAGE_ACCESS_KEY, OBJECT_STORAGE_SECRET_KEY',
     );
   });
+
+  it('requires Google and JWT configuration when Google auth is enabled', () => {
+    expect(() => validateEnvironment({ GOOGLE_AUTH_ENABLED: 'true' })).toThrow(
+      'Environment validation failed for: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI',
+    );
+  });
+
+  it('accepts explicit local Google auth configuration', () => {
+    const environment = validateEnvironment({
+      GOOGLE_AUTH_ENABLED: 'true',
+      GOOGLE_CLIENT_ID: 'local-google-client',
+      GOOGLE_CLIENT_SECRET: 'local-google-secret',
+      GOOGLE_REDIRECT_URI: 'http://localhost:3000/api/v1/auth/google/callback',
+      AUTH_SUCCESS_REDIRECT_URI: '/api/docs',
+    });
+
+    expect(environment.GOOGLE_AUTH_ENABLED).toBe(true);
+    expect(environment.GOOGLE_REDIRECT_URI).toContain('/auth/google/callback');
+  });
+
+  it.each(['/\\evil.example/path', '//evil.example/path', '/line\nbreak'])(
+    'rejects unsafe auth success redirect %s',
+    (successRedirectUri) => {
+      expect(() =>
+        validateEnvironment({ AUTH_SUCCESS_REDIRECT_URI: successRedirectUri }),
+      ).toThrow(
+        'Environment validation failed for: AUTH_SUCCESS_REDIRECT_URI',
+      );
+    },
+  );
 
   it('rejects obsolete application-level MinIO variable names without values', () => {
     expect(() =>

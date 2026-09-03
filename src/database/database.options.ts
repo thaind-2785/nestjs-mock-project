@@ -16,6 +16,7 @@ export function createTypeOrmOptions(
     password: configuration.password,
     database: configuration.database,
     charset: 'utf8mb4',
+    timezone: 'Z',
     entities: overrides.entities ?? [],
     migrations: overrides.migrations ?? [],
     migrationsTableName: overrides.migrationsTableName ?? 'migrations',

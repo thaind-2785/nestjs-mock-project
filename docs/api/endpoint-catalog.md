@@ -147,3 +147,11 @@ room_times.room_id=:roomId`; mismatch returns the same not-found response. Windo
   inactive users, is a no-op if that exact user is already `ADMIN`, and atomically
   records a `user_role_history` audit entry on promotion. It never reassigns an
   existing admin or infers application role from a Google profile.
+- Phase 2 uses same-origin browser handoff: the callback sets the HttpOnly refresh
+  cookie and redirects to a configured relative landing path (`/api/docs` locally).
+  Calling `POST /auth/refresh` rotates that cookie and returns
+  `{ accessToken, tokenType: "Bearer", expiresIn: 900 }`; the landing URI itself
+  never provides credentials.
+- Admin status changes require a non-empty reason, append history in the same
+  transaction, and revoke all target sessions on inactivation. An admin cannot
+  deactivate itself or the last active admin.

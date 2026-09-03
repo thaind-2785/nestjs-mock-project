@@ -19,7 +19,7 @@ describe('configureApplication', () => {
     configureApplication(app);
 
     expect(setGlobalPrefix).toHaveBeenCalledWith(apiGlobalPrefix);
-    expect(use).toHaveBeenCalledTimes(1);
+    expect(use).toHaveBeenCalledTimes(2);
     expect(useGlobalPipes).toHaveBeenCalledTimes(1);
     expect(enableShutdownHooks).toHaveBeenCalledTimes(1);
   });

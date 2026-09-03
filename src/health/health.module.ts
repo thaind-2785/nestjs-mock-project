@@ -4,6 +4,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import Redis from 'ioredis';
 import { TerminusModule } from '@nestjs/terminus';
 import { readinessConfig } from '../config/readiness.config';
+import { DatabaseModule } from '../database/database.module';
 import { HealthController } from './health.controller';
 import {
   READINESS_REDIS_FACTORY,
@@ -13,7 +14,11 @@ import { ReadinessService } from './readiness.service';
 import { createStorageClientOptions } from './storage-client.options';
 
 @Module({
-  imports: [ConfigModule.forFeature(readinessConfig), TerminusModule],
+  imports: [
+    ConfigModule.forFeature(readinessConfig),
+    DatabaseModule,
+    TerminusModule,
+  ],
   controllers: [HealthController],
   providers: [
     ReadinessService,

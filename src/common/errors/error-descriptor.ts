@@ -2,16 +2,24 @@ import { HttpException, HttpStatus } from '@nestjs/common';
 import { ApplicationException } from './application.exception';
 
 export const errorMessageKeys = {
+  authenticationFailed: 'errors.authenticationFailed',
+  authorizationUnavailable: 'errors.authorizationUnavailable',
   badRequest: 'errors.badRequest',
   conflict: 'errors.conflict',
   forbidden: 'errors.forbidden',
   internalServerError: 'errors.internalServerError',
+  identityConflict: 'errors.identityConflict',
+  lastAdminDeactivationForbidden: 'errors.lastAdminDeactivationForbidden',
   methodNotAllowed: 'errors.methodNotAllowed',
   notFound: 'errors.notFound',
   payloadTooLarge: 'errors.payloadTooLarge',
+  selfDeactivationForbidden: 'errors.selfDeactivationForbidden',
+  sessionInvalid: 'errors.sessionInvalid',
   serviceUnavailable: 'errors.serviceUnavailable',
   tooManyRequests: 'errors.tooManyRequests',
   unauthorized: 'errors.unauthorized',
+  userInactive: 'errors.userInactive',
+  userNotFound: 'errors.userNotFound',
   unprocessableEntity: 'errors.unprocessableEntity',
   validationFailed: 'errors.validationFailed',
 } as const;

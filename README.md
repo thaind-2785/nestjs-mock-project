@@ -2,11 +2,10 @@
 
 NestJS backend course project for hotel room discovery, Google-only authentication,
 booking requests, administration, cloud files, email, Worker Threads, cron, and
-CI/CD. Product features are designed but not yet implemented. The API currently
-provides the first platform-foundation slices: validated configuration, strict DTO
-validation, graceful shutdown hooks, request-correlated EN/VI errors, structured
-request logs, OpenAPI documentation, process liveness under `/api/v1`, and local
-MySQL/Redis/MinIO/Mailpit dependency services.
+CI/CD. The API currently provides the platform foundation plus Phase 2 Google-only
+authentication and RBAC: Google JIT users, rotating application sessions, JWT
+guards, `/me`, audited user activation/deactivation, and first-admin bootstrap.
+Local MySQL/Redis/MinIO/Mailpit dependencies remain managed through Compose.
 
 ## Runtime requirements
 
@@ -126,6 +125,56 @@ Deleting volumes permanently removes local MySQL, Redis, MinIO, and Mailpit data
 requires an explicit developer decision. The pinned MinIO Community image is a
 local-only S3 emulator; it is archived and must not be promoted as the production
 object-storage choice.
+
+## Authentication and RBAC
+
+Phase 2 uses Google Authorization Code flow, but application authorization never
+uses a Google token directly. The callback validates Google identity, creates an
+internal user/session, and stores the opaque application refresh token in an
+HttpOnly cookie. `POST /api/v1/auth/refresh` rotates that cookie and returns the
+short-lived application access JWT used with `Authorization: Bearer <token>`.
+
+To enable a real local Google login, create OAuth web credentials in Google Cloud,
+register this exact Authorized redirect URI, and place credentials only in the
+ignored `.env` file:
+
+```dotenv
+GOOGLE_AUTH_ENABLED=true
+GOOGLE_CLIENT_ID=<local client id>
+GOOGLE_CLIENT_SECRET=<local client secret>
+GOOGLE_REDIRECT_URI=http://localhost:3000/api/v1/auth/google/callback
+AUTH_SUCCESS_REDIRECT_URI=/api/docs
+```
+
+Never commit the real values. Start the API, then navigate the browser directly to
+`http://localhost:3000/api/v1/auth/google`. After Google returns and the backend sets
+the refresh cookie, the browser lands on Swagger. Invoke
+`POST /api/v1/auth/refresh`, copy `accessToken` into Swagger's **Authorize** bearer
+dialog, then exercise `GET /api/v1/me` and the protected APIs. Do not start the OAuth
+redirect with `fetch`; use top-level browser navigation.
+
+Run the production users/auth migration separately from application startup:
+
+```bash
+npm run migration:run
+npm run migration:revert # local/pre-dependent-schema rollback only
+```
+
+After an active user has logged in once, bootstrap the first administrator with the
+database port/environment used by the API:
+
+```bash
+npm run auth:bootstrap-admin -- \
+  --user-id 1 \
+  --email admin@example.com \
+  --reason "Initial administrator"
+```
+
+The command requires the matching normalized verified email, rejects inactive or
+missing users, is idempotent for the same administrator, and writes role audit
+history atomically. Admin status changes require a reason, cannot deactivate the
+calling admin, cannot remove the last active admin, and immediately revoke the
+target user's sessions.
 
 ## Quality commands
 

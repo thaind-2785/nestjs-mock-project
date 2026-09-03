@@ -1,13 +1,22 @@
-## Scope
+## Reviewer summary
 
-- Spec:
-- Plan:
-- In scope:
-- Out of scope:
+- Problem / outcome:
+- Main changes:
+  -
+- Not changed / explicitly out of scope:
+
+## Delivery references
+
+- Spec: `docs/specs/...` (or `N/A — explain why`)
+- Plan: `docs/plans/...` (or `N/A — explain why`)
+- ADR / migration / API contract affected: `N/A` or links
 
 ## Observable change
 
-Describe behavior, contract, schema, operations, or documentation changed.
+Give the reviewer a short way to verify the behavior manually. Include expected
+result, affected role, and API route when relevant.
+
+1.
 
 ## Risk and rollback
 
@@ -17,10 +26,19 @@ Describe behavior, contract, schema, operations, or documentation changed.
 
 ## Verification evidence
 
-- [ ] Focused tests
-- [ ] `npm run harness:check`
-- [ ] `npm run verify`
-- [ ] API/schema/ADR/i18n docs updated where applicable
+Only check a box after the command has completed successfully. Record the actual
+command and concise result; do not rely on a green build alone.
+
+| Check                                                         | Command / evidence      | Result |
+| ------------------------------------------------------------- | ----------------------- | ------ |
+| Focused check for this change                                 |                         |        |
+| Full local gate (required for non-trivial implementation)     | `npm run verify`        |        |
+| Harness/config regression (only if Harness or config changed) | `npm run harness:check` | `N/A`  |
+| GitHub Actions **Verify repository**                          | Link to the run         |        |
+
+- [ ] Relevant tests cover success and meaningful failure paths.
+- [ ] API/schema/ADR/i18n/operational docs were updated, or are `N/A` with reason.
+- [ ] Migration was tested and rollback/forward-fix is documented, or is `N/A`.
 
 ## Independent review
 
@@ -28,3 +46,9 @@ Describe behavior, contract, schema, operations, or documentation changed.
 - Report:
 - [ ] No unresolved blocker/high finding
 - [ ] Medium/low findings have a recorded disposition
+
+## Reviewer handoff
+
+- [ ] Scope and observable behavior are clear.
+- [ ] Verification evidence above is sufficient for this risk level.
+- [ ] Residual risk and follow-up are explicitly accepted.

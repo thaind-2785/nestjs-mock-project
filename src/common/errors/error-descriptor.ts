@@ -2,6 +2,9 @@ import { HttpException, HttpStatus } from '@nestjs/common';
 import { ApplicationException } from './application.exception';
 
 export const errorMessageKeys = {
+  amenityCodeConflict: 'errors.amenityCodeConflict',
+  amenityInUse: 'errors.amenityInUse',
+  amenityNotFound: 'errors.amenityNotFound',
   authenticationFailed: 'errors.authenticationFailed',
   authorizationUnavailable: 'errors.authorizationUnavailable',
   badRequest: 'errors.badRequest',
@@ -13,6 +16,14 @@ export const errorMessageKeys = {
   methodNotAllowed: 'errors.methodNotAllowed',
   notFound: 'errors.notFound',
   payloadTooLarge: 'errors.payloadTooLarge',
+  roomHasHistory: 'errors.roomHasHistory',
+  roomNotFound: 'errors.roomNotFound',
+  roomNumberConflict: 'errors.roomNumberConflict',
+  roomReferenceNotFound: 'errors.roomReferenceNotFound',
+  roomTypeInUse: 'errors.roomTypeInUse',
+  roomTypeNameConflict: 'errors.roomTypeNameConflict',
+  roomTypeNotFound: 'errors.roomTypeNotFound',
+  roomVersionConflict: 'errors.roomVersionConflict',
   selfDeactivationForbidden: 'errors.selfDeactivationForbidden',
   sessionInvalid: 'errors.sessionInvalid',
   serviceUnavailable: 'errors.serviceUnavailable',

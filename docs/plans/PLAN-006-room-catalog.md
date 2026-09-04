@@ -56,7 +56,7 @@ spec adds pixel/dimension processing.
 | Slice    | Observable outcome                                                                                                                         | Files/modules                                                                                        | Migration                                                                                               | Tests                                                                                                  | Status   |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | -------- |
 | `P3-T01` | Accepted contracts, validated catalog/upload/storage policy, locked dependencies, TypeORM entities, and reversible Phase 3 schema exist    | `docs/specs`, `docs/decisions`, `docs/architecture`, `src/config`, `src/rooms/entities`, `src/files` | Create room types, amenities, rooms/version, assignments, windows, attachments, and cleanup persistence | Config/entity unit; schema constraint/index and migration run/revert integration                       | Complete |
-| `P3-T02` | An admin can create/list/read/version-update/deactivate/hard-delete eligible rooms with atomic amenity assignment                          | `src/rooms` admin controller/services/repositories/DTOs; optional reference-catalog APIs             | Uses Phase 3 schema; seed/reference migration only if owner selects fixed catalog                       | Room policy/service unit; CRUD/version/unique/reference/delete integration and admin/user/guest E2E    | Pending  |
+| `P3-T02` | An admin can create/list/read/version-update/deactivate/hard-delete eligible rooms with atomic amenity assignment                          | `src/rooms` admin controller/services/repositories/DTOs; optional reference-catalog APIs             | Uses Phase 3 schema; seed/reference migration only if owner selects fixed catalog                       | Room policy/service unit; CRUD/version/unique/reference/delete integration and admin/user/guest E2E    | Complete |
 | `P3-T03` | Admin nested window APIs enforce target binding, history/use policy seams, and non-overlap under concurrent changes                        | `src/rooms` window controller/service/repository/DTOs                                                | None                                                                                                    | Overlap/containment unit; real MySQL locking/concurrency/adjacency/nested-mismatch integration and E2E | Pending  |
 | `P3-T04` | Guests can browse public active rooms and query deterministic window-contained availability with all documented filters                    | `src/rooms` public controller/search service/query DTOs/response DTOs                                | Add indexes only if query-plan evidence requires a compatible migration revision                        | Query policy unit; SQL/filter/pagination integration; public list/detail/date/error/localization E2E   | Pending  |
 | `P3-T05` | Admin thumbnail/album upload, replacement, target-bound delete, atomic reorder, private presign, and durable cleanup retry work end to end | `src/files`, room image controller/DTO mapping, storage adapter, cleanup repository/CLI              | Uses attachment/cleanup schema from P3-T01                                                              | MIME/key/policy unit; MySQL+MinIO transaction/race/failure/retry integration; multipart/RBAC E2E       | Pending  |
@@ -175,3 +175,27 @@ its own focused evidence.
   reapply. Build, lint, formatting, editable-ERD XML validation, and dependency audit
   passed; the audit reported zero vulnerabilities. Full handoff verification remains
   deferred until `P3-T06` as required by the iteration policy.
+
+## P3-T02 implementation evidence
+
+- Added the approved admin room-type and amenity CRUD endpoints with trimmed,
+  canonical input, deterministic pagination, case-insensitive uniqueness, and
+  reference-in-use protection. No mutable business catalog values are seeded.
+- Added physical-room create/list/detail/update/delete APIs. Creation and update lock
+  every referenced catalog row, atomically replace complete amenity assignments, and
+  map concurrent duplicate/reference failures to stable localized errors.
+- Room updates require a strict quoted `If-Match` version. The service locks the room,
+  compares the caller version, and saves scalar fields plus amenity replacement in one
+  transaction; concurrent same-version integration attempts proved one success and
+  one `ROOM_VERSION_CONFLICT`.
+- Eligible hard delete removes windows/assignments/attachment metadata in one
+  transaction and persists `DETACHED_OBJECT` cleanup work without calling storage
+  under database locks. A future restrictive booking foreign key maps to the already
+  documented `ROOM_HAS_HISTORY` contract.
+- Focused policy/DTO unit tests passed 5/5; real-MySQL service integration passed 3/3;
+  room lifecycle/RBAC plus Swagger E2E passed 14/14. Build, lint, formatting, and
+  `git diff --check` passed.
+- The owner requested an intermediate mentor-review PR after this larger slice, so
+  `MYSQL_PORT=13306 npm run verify` was run as the PR handoff gate: Harness 68/68,
+  Compose 8/8, unit 82/82, integration 23/23, and E2E 18/18 passed, followed by a
+  successful build. Phase 3 still receives its final review/exit gate in `P3-T06`.

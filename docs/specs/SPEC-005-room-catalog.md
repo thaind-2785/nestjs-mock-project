@@ -72,7 +72,8 @@ Room types and amenities are administrator-managed reference catalogs:
   amenity codes are stored uppercase. Deletion is rejected with a stable conflict
   while any room/reference assignment uses the record.
 - Reference lists use `page`/`pageSize` with the same defaults and maximum as room
-  lists. Mutations require `ADMIN`; no write endpoint is public.
+  lists. Room-type search matches name; amenity search matches code or name. Mutations
+  require `ADMIN`; no write endpoint is public.
 
 `POST /admin/rooms` requires `ADMIN` and accepts:
 
@@ -98,7 +99,8 @@ Status defaults to `ACTIVE`. Referenced room type and amenities must exist.
 Admin list/detail responses expose the physical room number, room type, amenities,
 base price, currency, status, timestamps, and numeric `version`. Admin list accepts
 optional `query`, `status`, `roomTypeId`, `beds`, `view`, `page` (default 1), and
-`pageSize` (default 20, maximum 100), ordered by room ID ascending.
+`pageSize` (default 20, maximum 100), ordered by room ID ascending. `query` matches
+the room number or room-type name.
 
 `PATCH /admin/rooms/:roomId` is a partial update but requires the current version in
 `If-Match: "<version>"`. An absent or stale version returns `409 ROOM_VERSION_CONFLICT`;
@@ -287,7 +289,7 @@ version as part of the accepted logical model.
 
 ## Acceptance criteria
 
-- [ ] An admin can create, list, inspect, version-update, deactivate, and safely
+- [x] An admin can create, list, inspect, version-update, deactivate, and safely
       hard-delete eligible rooms; a user/guest cannot call admin routes.
 - [ ] Active-window create/update operations serialize per physical room, reject
       overlapping windows under concurrency, and accept adjacent windows.

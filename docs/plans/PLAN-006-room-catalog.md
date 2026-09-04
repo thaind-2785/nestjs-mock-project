@@ -1,13 +1,13 @@
 # PLAN-006: Room catalog, availability windows, and images
 
 - Spec: `docs/specs/SPEC-005-room-catalog.md`
-- Status: Draft
+- Status: In progress
 - Owner: Codex primary agent
 - Reviewer (must be independent): Unassigned
 
-Implementation must not begin until the project owner resolves the spec's production
-storage, upload-limit, reference-catalog, and currency decisions and accepts
-`SPEC-005`.
+The project owner accepted `SPEC-005` and its production-storage, upload-policy,
+reference-catalog, and currency decisions on 2026-09-04. Implement and explain one
+vertical slice at a time; do not batch later slices into the current handoff.
 
 ## Constraints and risks
 
@@ -39,14 +39,13 @@ storage, upload-limit, reference-catalog, and currency decisions and accepts
 
 ## Decision gate and expected dependencies
 
-Before `P3-T01`, convert `SPEC-005` from `Draft` to `Accepted` with owner-approved
-answers. The anticipated package delta is deliberately provisional until then:
+The accepted and locked P3-T01 dependency delta is:
 
-| Package                         | Purpose                                                |
-| ------------------------------- | ------------------------------------------------------ |
-| `@aws-sdk/s3-request-presigner` | Short-lived reads from a private S3-compatible bucket  |
-| `file-type`                     | Signature-based image format verification              |
-| `@types/multer` (development)   | Typed bounded multipart handling with the Nest adapter |
+| Package                                  | Purpose                                                |
+| ---------------------------------------- | ------------------------------------------------------ |
+| `@aws-sdk/s3-request-presigner@3.1120.0` | Short-lived reads from a private S3-compatible bucket  |
+| `file-type@21.3.4`                       | Signature-based image format verification              |
+| `@types/multer@2.2.0` (development)      | Typed bounded multipart handling with the Nest adapter |
 
 Reuse the locked `@aws-sdk/client-s3` and Nest Express adapter. Use Node `crypto`
 for UUID/random object keys. Do not add an image transformer unless the accepted
@@ -54,14 +53,14 @@ spec adds pixel/dimension processing.
 
 ## Vertical slices
 
-| Slice    | Observable outcome                                                                                                                         | Files/modules                                                                                        | Migration                                                                                               | Tests                                                                                                  | Status  |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------- |
-| `P3-T01` | Accepted contracts, validated catalog/upload/storage policy, locked dependencies, TypeORM entities, and reversible Phase 3 schema exist    | `docs/specs`, `docs/decisions`, `docs/architecture`, `src/config`, `src/rooms/entities`, `src/files` | Create room types, amenities, rooms/version, assignments, windows, attachments, and cleanup persistence | Config/entity unit; schema constraint/index and migration run/revert integration                       | Pending |
-| `P3-T02` | An admin can create/list/read/version-update/deactivate/hard-delete eligible rooms with atomic amenity assignment                          | `src/rooms` admin controller/services/repositories/DTOs; optional reference-catalog APIs             | Uses Phase 3 schema; seed/reference migration only if owner selects fixed catalog                       | Room policy/service unit; CRUD/version/unique/reference/delete integration and admin/user/guest E2E    | Pending |
-| `P3-T03` | Admin nested window APIs enforce target binding, history/use policy seams, and non-overlap under concurrent changes                        | `src/rooms` window controller/service/repository/DTOs                                                | None                                                                                                    | Overlap/containment unit; real MySQL locking/concurrency/adjacency/nested-mismatch integration and E2E | Pending |
-| `P3-T04` | Guests can browse public active rooms and query deterministic window-contained availability with all documented filters                    | `src/rooms` public controller/search service/query DTOs/response DTOs                                | Add indexes only if query-plan evidence requires a compatible migration revision                        | Query policy unit; SQL/filter/pagination integration; public list/detail/date/error/localization E2E   | Pending |
-| `P3-T05` | Admin thumbnail/album upload, replacement, target-bound delete, atomic reorder, private presign, and durable cleanup retry work end to end | `src/files`, room image controller/DTO mapping, storage adapter, cleanup repository/CLI              | Uses attachment/cleanup schema from P3-T01                                                              | MIME/key/policy unit; MySQL+MinIO transaction/race/failure/retry integration; multipart/RBAC E2E       | Pending |
-| `P3-T06` | Public/operator documentation agrees and Phase 3 meets its exit gate with independent review findings dispositioned                        | Swagger, locales, `.env.example`, `README.md`, API/database/ADR docs, spec/plan/review               | Prove production migration state; no ad hoc schema changes                                              | Focused regressions, full `npm run verify`, independent security/data/concurrency/storage review       | Pending |
+| Slice    | Observable outcome                                                                                                                         | Files/modules                                                                                        | Migration                                                                                               | Tests                                                                                                  | Status   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | -------- |
+| `P3-T01` | Accepted contracts, validated catalog/upload/storage policy, locked dependencies, TypeORM entities, and reversible Phase 3 schema exist    | `docs/specs`, `docs/decisions`, `docs/architecture`, `src/config`, `src/rooms/entities`, `src/files` | Create room types, amenities, rooms/version, assignments, windows, attachments, and cleanup persistence | Config/entity unit; schema constraint/index and migration run/revert integration                       | Complete |
+| `P3-T02` | An admin can create/list/read/version-update/deactivate/hard-delete eligible rooms with atomic amenity assignment                          | `src/rooms` admin controller/services/repositories/DTOs; optional reference-catalog APIs             | Uses Phase 3 schema; seed/reference migration only if owner selects fixed catalog                       | Room policy/service unit; CRUD/version/unique/reference/delete integration and admin/user/guest E2E    | Pending  |
+| `P3-T03` | Admin nested window APIs enforce target binding, history/use policy seams, and non-overlap under concurrent changes                        | `src/rooms` window controller/service/repository/DTOs                                                | None                                                                                                    | Overlap/containment unit; real MySQL locking/concurrency/adjacency/nested-mismatch integration and E2E | Pending  |
+| `P3-T04` | Guests can browse public active rooms and query deterministic window-contained availability with all documented filters                    | `src/rooms` public controller/search service/query DTOs/response DTOs                                | Add indexes only if query-plan evidence requires a compatible migration revision                        | Query policy unit; SQL/filter/pagination integration; public list/detail/date/error/localization E2E   | Pending  |
+| `P3-T05` | Admin thumbnail/album upload, replacement, target-bound delete, atomic reorder, private presign, and durable cleanup retry work end to end | `src/files`, room image controller/DTO mapping, storage adapter, cleanup repository/CLI              | Uses attachment/cleanup schema from P3-T01                                                              | MIME/key/policy unit; MySQL+MinIO transaction/race/failure/retry integration; multipart/RBAC E2E       | Pending  |
+| `P3-T06` | Public/operator documentation agrees and Phase 3 meets its exit gate with independent review findings dispositioned                        | Swagger, locales, `.env.example`, `README.md`, API/database/ADR docs, spec/plan/review               | Prove production migration state; no ad hoc schema changes                                              | Focused regressions, full `npm run verify`, independent security/data/concurrency/storage review       | Pending  |
 
 ### Slice notes
 
@@ -71,10 +70,9 @@ pull the Phase 5 general notification outbox or BullMQ runtime into this phase. 
 change to the accepted attachment logical model must update `ADR-0003`, database
 documentation, and the editable ERD in the same slice.
 
-`P3-T02` is conditional at its reference-catalog edge. If the owner approves admin
-room-type/amenity management, add and catalog those support endpoints before room
-CRUD. If the owner chooses fixed data, add only the exact approved idempotent seed
-strategy and do not invent values during implementation.
+`P3-T02` starts with the approved admin room-type/amenity CRUD endpoints, then uses
+those references in physical-room CRUD. Migrations contain no business catalog seed
+values.
 
 `P3-T03` defines a booking-usage repository port before booking tables exist. Phase 3
 uses a zero-use implementation while unit tests prove the immutable/in-use branches;
@@ -104,7 +102,8 @@ Focused iteration commands (run only for the slice being changed):
 - `MYSQL_PORT=13306 npm run test:e2e -- --runTestsByPath <Phase 3 E2E paths>`
 - Phase 3 production migration run/revert against an isolated disposable database.
 - Targeted MinIO attachment integration with a unique test prefix and scoped cleanup.
-- `git diff --check` and `npm run format:check` for this docs-only planning change.
+- `git diff --check`, `npm run format:check`, and `npm run lint:check` before the
+  completed slice is explained to the owner.
 
 Handoff commands after all slices are coherent:
 
@@ -113,8 +112,9 @@ Handoff commands after all slices are coherent:
   `MYSQL_PORT=13306 npm run verify` because gate inputs changed.
 
 Do not run standalone Harness checks immediately before the full gate; `verify`
-already includes them. No full gate or independent implementation review is required
-for the current spec/plan-only stop point.
+already includes them. The full gate and independent implementation review are
+deferred until the Phase 3 handoff slice, while each implementation slice records
+its own focused evidence.
 
 ## Documentation / OpenAPI impact
 
@@ -150,5 +150,28 @@ for the current spec/plan-only stop point.
 
 ## Decisions made during implementation
 
-None. Planning is intentionally stopped before implementation. Record accepted owner
-answers and link any resulting ADR updates here before starting `P3-T01`.
+- The owner approved AWS S3/private presigned reads, the 5 MiB/JPEG-PNG-WebP/20-album
+  upload policy, admin-managed reference catalogs, and currency-specific price
+  filtering on 2026-09-04.
+- `P3-T01` introduces only schema, configuration, dependency, entity/module, and
+  documentation foundations. It deliberately exposes no HTTP endpoint; `P3-T02`
+  owns the first admin-visible behavior.
+- Storage cleanup uses a narrow leased `storage_cleanup_tasks` table. Pre-upload rows
+  close the crash gap before the S3 write; the attachment transaction retires the
+  safeguard. This does not activate BullMQ, notifications, or the Phase 7 scheduler.
+
+## P3-T01 implementation evidence
+
+- Locked `@aws-sdk/s3-request-presigner@3.1120.0` to the existing S3 client version,
+  reused the locked `file-type@21.3.4`, and added `@types/multer@2.2.0` for the later
+  multipart boundary.
+- Added fail-fast room-image policy validation for size/count/presign/rate/storage-
+  timeout/cleanup-grace values; cleanup grace must exceed the storage timeout.
+- Added seven Phase 3 tables and matching TypeORM entities with `synchronize: false`:
+  room types, amenities, rooms/version, room assignments, bookable windows,
+  attachments, and storage cleanup tasks.
+- Focused config unit tests passed 35/35; the P3-T01 MySQL migration integration
+  suite passed 4/4 including constraint coverage and clean Phase 3-only revert/
+  reapply. Build, lint, formatting, editable-ERD XML validation, and dependency audit
+  passed; the audit reported zero vulnerabilities. Full handoff verification remains
+  deferred until `P3-T06` as required by the iteration policy.

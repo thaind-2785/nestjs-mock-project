@@ -1,12 +1,14 @@
 # SPEC-005: Room catalog, availability windows, and images
 
-- Status: Draft
+- Status: Accepted
 - Owner: Codex primary agent
 - Last updated: 2026-09-04
 - Scope: Required
 - Related endpoints / ADRs: `ROOM-01`, `ROOM-02`, `ADMIN-ROOM-01` through
   `ADMIN-ROOM-05`, `ADMIN-TIME-01` through `ADMIN-TIME-04`, `ADMIN-FILE-01`
-  through `ADMIN-FILE-03`, `ADR-0002`, `ADR-0003`
+  through `ADMIN-FILE-03`, `ADMIN-ROOM-TYPE-01` through
+  `ADMIN-ROOM-TYPE-05`, `ADMIN-AMENITY-01` through `ADMIN-AMENITY-05`,
+  `ADR-0002`, `ADR-0003`
 
 ## Problem and outcome
 
@@ -37,6 +39,8 @@ In scope:
   complete-list album reorder, target-bound delete, and durable cloud cleanup work.
 - Provider-neutral storage/upload configuration, MinIO integration tests, OpenAPI,
   English/Vietnamese messages, and operator documentation.
+- Admin CRUD for room types and amenities so a fresh database is operable without
+  embedding mutable business catalog data in a migration.
 
 Out of scope:
 
@@ -49,8 +53,6 @@ Out of scope:
   scheduled reconciliation.
 - Multi-property inventory, room quantities, promotions, taxes, currency conversion,
   and time-of-day check-in/check-out rules.
-- Room-type and amenity mutation endpoints until the reference-catalog decision in
-  the open questions is approved.
 
 ## User-visible contract
 
@@ -59,6 +61,18 @@ decimal strings in JSON. Public responses never include optimistic versions,
 storage object keys, uploader IDs, or internal attachment metadata.
 
 ### Admin room contract
+
+Room types and amenities are administrator-managed reference catalogs:
+
+- `POST|GET /admin/room-types`, `GET|PATCH|DELETE
+/admin/room-types/:roomTypeId` create, list, inspect, update, and delete room types.
+- `POST|GET /admin/amenities`, `GET|PATCH|DELETE
+/admin/amenities/:amenityId` provide the equivalent amenity lifecycle.
+- Room-type names and amenity codes are case-insensitively unique after trimming;
+  amenity codes are stored uppercase. Deletion is rejected with a stable conflict
+  while any room/reference assignment uses the record.
+- Reference lists use `page`/`pageSize` with the same defaults and maximum as room
+  lists. Mutations require `ADMIN`; no write endpoint is public.
 
 `POST /admin/rooms` requires `ADMIN` and accepts:
 
@@ -203,9 +217,10 @@ Stable file errors include `ATTACHMENT_NOT_FOUND`, `ATTACHMENT_PAIR_INVALID`,
 
 ## Data and migration impact
 
-One Phase 3 migration creates the six target catalog/media tables plus the minimum
-durable storage-cleanup record needed by `ADR-0003`. It adds `rooms.version BIGINT
-UNSIGNED NOT NULL DEFAULT 1` to support the catalog's optimistic update contract.
+One Phase 3 migration creates the six target catalog/media tables plus
+`storage_cleanup_tasks`, the narrow durable cleanup record needed by `ADR-0003`. It
+adds `rooms.version BIGINT UNSIGNED NOT NULL DEFAULT 1` to support the catalog's
+optimistic update contract.
 
 Constraints and indexes follow `database.md`: unique room number/type name/amenity
 code/object key; room/status/type and search indexes; composite room-amenity key;
@@ -220,8 +235,8 @@ is safe only before Phase 4 creates booking foreign keys and after preserving or
 deleting stored room media; after dependent phases, production rollback uses a
 forward-compatible fix.
 
-Before implementation, `database.md`, its Draw.io ERD, and `ADR-0003` must be updated
-if the cleanup record or room version changes the accepted logical model.
+`database.md`, its Draw.io ERD, and `ADR-0003` record the cleanup safeguard and room
+version as part of the accepted logical model.
 
 ## External services, async work, and failure behavior
 
@@ -310,7 +325,7 @@ if the cleanup record or room version changes the accepted logical model.
 - Phase 4 later adds confirmed-booking overlap to public availability and booking-
   reference restrictions without weakening these tests.
 
-## Assumptions and open questions
+## Assumptions and approved decisions
 
 Assumptions that do not block contract review:
 
@@ -322,28 +337,25 @@ Assumptions that do not block contract review:
 - Exact physical room numbers remain admin-only.
 - Price filtering is currency-specific; no exchange-rate comparison is attempted.
 
-Owner decisions required before this spec can become `Accepted`:
+The project owner approved these Phase 3 decisions on 2026-09-04:
 
-1. **Production storage:** recommend AWS S3, a private bucket, 15-minute presigned
-   reads, and least-privilege prefix credentials. The adapter remains S3-compatible
-   and MinIO remains local-only. Approve this or name the production provider/access
-   policy.
-2. **Upload policy:** recommend JPEG, PNG, and WebP only; 5 MiB maximum per image;
-   one thumbnail plus at most 20 album images per room; 15-minute read URL TTL; and
-   10 upload attempts per admin per minute. Approve or provide replacement limits.
-3. **Reference catalog lifecycle:** recommend adding admin CRUD endpoints for room
-   types and amenities as required-support APIs so a fresh production database is
-   operable without business-data migrations. Alternatively, provide the fixed
-   room-type/amenity seed catalog and confirm it is intentionally immutable in
-   Phase 3.
-4. **Currency policy:** recommend accepting any uppercase ISO 4217 room currency and
-   requiring `currency` whenever a public price bound is used. Alternatively,
-   approve one release currency (for example `VND`) and reject all others.
+1. Production object storage is AWS S3 with a private bucket, least-privilege prefix
+   credentials, and 15-minute presigned reads. The adapter stays S3-compatible and
+   MinIO remains a local/CI emulator only.
+2. Room uploads accept signature-verified JPEG, PNG, and WebP, at most 5 MiB each,
+   with one thumbnail plus 20 album images per room and 10 upload attempts per admin
+   per 60 seconds.
+3. Room types and amenities have admin CRUD support APIs; migrations create schema
+   only and do not seed changeable business catalog values.
+4. Rooms accept uppercase ISO 4217 currencies. Public price filtering requires an
+   explicit currency and performs no conversion.
 
-The exact durable file-cleanup table/runner is a technical design to reconcile with
-`ADR-0003` before implementation. It must preserve the pre-upload safeguard contract,
-claim only expired safeguards, and may not silently introduce the Phase 5 general
-notification outbox or Phase 7 scheduler early.
+`storage_cleanup_tasks` is deliberately narrower than the Phase 5 general outbox.
+Before uploading, a task reserves the generated object key and becomes claimable
+only after a grace period longer than the bounded storage call. A successful target-
+locked attachment transaction removes that safeguard atomically. Detach/replace
+transactions insert the same idempotent task with immediate availability. Workers
+claim expired work with a lease; Phase 7 may schedule the same service later.
 
 ## Rollout and rollback
 

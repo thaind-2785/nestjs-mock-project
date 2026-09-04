@@ -28,6 +28,13 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   OBJECT_STORAGE_BUCKET: string;
   OBJECT_STORAGE_ACCESS_KEY: string;
   OBJECT_STORAGE_SECRET_KEY: string;
+  ROOM_IMAGE_MAX_BYTES: number;
+  ROOM_IMAGE_MAX_ALBUM_COUNT: number;
+  ROOM_IMAGE_PRESIGN_TTL_SECONDS: number;
+  ROOM_IMAGE_UPLOAD_RATE_LIMIT_MAX: number;
+  ROOM_IMAGE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: number;
+  ROOM_IMAGE_STORAGE_TIMEOUT_MS: number;
+  ROOM_IMAGE_CLEANUP_GRACE_MS: number;
   HEALTH_CHECK_TIMEOUT_MS: number;
   GOOGLE_AUTH_ENABLED: boolean;
   GOOGLE_CLIENT_ID?: string;
@@ -94,6 +101,41 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     then: Joi.string().min(8).required(),
     otherwise: Joi.string().min(8).default('local_minio_change_me'),
   }),
+  ROOM_IMAGE_MAX_BYTES: Joi.number()
+    .integer()
+    .min(1_024)
+    .max(20 * 1_024 * 1_024)
+    .default(5 * 1_024 * 1_024),
+  ROOM_IMAGE_MAX_ALBUM_COUNT: Joi.number()
+    .integer()
+    .min(1)
+    .max(100)
+    .default(20),
+  ROOM_IMAGE_PRESIGN_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(60)
+    .max(3_600)
+    .default(900),
+  ROOM_IMAGE_UPLOAD_RATE_LIMIT_MAX: Joi.number()
+    .integer()
+    .min(1)
+    .max(1_000)
+    .default(10),
+  ROOM_IMAGE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: Joi.number()
+    .integer()
+    .min(1)
+    .max(3_600)
+    .default(60),
+  ROOM_IMAGE_STORAGE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30_000)
+    .default(10_000),
+  ROOM_IMAGE_CLEANUP_GRACE_MS: Joi.number()
+    .integer()
+    .greater(Joi.ref('ROOM_IMAGE_STORAGE_TIMEOUT_MS'))
+    .max(900_000)
+    .default(60_000),
   HEALTH_CHECK_TIMEOUT_MS: Joi.number()
     .integer()
     .min(100)

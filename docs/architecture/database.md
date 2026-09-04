@@ -89,6 +89,7 @@ erDiagram
       bigint base_price_amount
       char3 currency
       enum status
+      bigint version
     }
     AMENITIES {
       bigint id PK
@@ -98,6 +99,8 @@ erDiagram
     ROOM_AMENITIES {
       bigint room_id PK, FK
       bigint amenity_id PK, FK
+      datetime created_at
+      datetime updated_at
     }
     ROOM_TIMES {
       bigint id PK
@@ -182,6 +185,16 @@ erDiagram
       varchar mime_type
       bigint size_bytes
     }
+    STORAGE_CLEANUP_TASKS {
+      char36 id PK
+      varchar object_key UK
+      enum reason
+      datetime available_at
+      datetime locked_at "nullable"
+      datetime lock_expires_at "nullable"
+      varchar locked_by "nullable"
+      smallint attempts
+    }
     OUTBOX_EVENTS {
       char36 id PK
       varchar event_type
@@ -248,6 +261,7 @@ erDiagram
 | `booking_status_history`  | `(booking_id, created_at)`; no updates/deletes in application                    |
 | `booking_change_history`  | `(booking_id, created_at)`; append-only; stores window/date before and after     |
 | `attachments`             | unique object key and `(object_type, object_id, association_type, position)`     |
+| `storage_cleanup_tasks`   | unique object key; claim index `(available_at, lock_expires_at)`                 |
 | `reviews`                 | unique `booking_id`; check `rating BETWEEN 1 AND 5`                              |
 | `payment_provider_events` | unique `(provider, provider_event_id)`; index `(payment_id, created_at)`         |
 | `outbox_events`           | unique `idempotency_key`; claim index `(status, available_at, lock_expires_at)`  |
@@ -310,6 +324,17 @@ metadata/cloud objects. Deactivation preserves media; only hard deletion detache
 The Draw.io ERD therefore uses a dashed `rooms -> attachments` connector labelled
 `logical ROOM target (no FK)`; it documents the application relation without
 pretending MySQL can enforce it. See ADR-0003.
+
+`storage_cleanup_tasks` closes the object-upload/database-commit crash gap without
+activating the general notification outbox early. Before a provider upload, the API
+inserts a unique object-key safeguard whose `available_at` is later than the bounded
+storage timeout. The target-locked attachment transaction deletes that safeguard as
+it inserts live metadata. If upload or metadata work fails, the safeguard eventually
+becomes claimable and deleting a nonexistent object remains safe. Attachment detach
+or replacement inserts immediately available cleanup work in its metadata
+transaction. Claimers use expiring lock fields and increment `attempts`; the lock
+columns are either all null or all populated. Phase 7 may schedule this same bounded
+cleanup service, while Phase 5's general outbox remains independent.
 
 The first-admin CLI identifies one already-provisioned account using both `user_id`
 and its matching normalized verified email. It rejects missing/inactive/mismatched

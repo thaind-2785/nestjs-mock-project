@@ -9,6 +9,9 @@ import { describeException } from './error-descriptor';
 
 interface ErrorTranslations {
   errors: {
+    amenityCodeConflict: string;
+    amenityInUse: string;
+    amenityNotFound: string;
     authenticationFailed: string;
     authorizationUnavailable: string;
     badRequest: string;
@@ -20,6 +23,14 @@ interface ErrorTranslations {
     methodNotAllowed: string;
     notFound: string;
     payloadTooLarge: string;
+    roomHasHistory: string;
+    roomNotFound: string;
+    roomNumberConflict: string;
+    roomReferenceNotFound: string;
+    roomTypeInUse: string;
+    roomTypeNameConflict: string;
+    roomTypeNotFound: string;
+    roomVersionConflict: string;
     selfDeactivationForbidden: string;
     sessionInvalid: string;
     serviceUnavailable: string;

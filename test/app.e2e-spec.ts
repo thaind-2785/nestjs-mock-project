@@ -306,6 +306,7 @@ describe('Application bootstrap (e2e)', () => {
         string,
         {
           get?: { parameters?: Array<{ name?: string }> };
+          patch?: { parameters?: Array<{ name?: string }> };
         }
       >;
       components?: {
@@ -325,9 +326,16 @@ describe('Application bootstrap (e2e)', () => {
     expect(documentBody.paths).toHaveProperty(
       '/api/v1/admin/users/{userId}/status',
     );
+    expect(documentBody.paths).toHaveProperty('/api/v1/admin/room-types');
+    expect(documentBody.paths).toHaveProperty('/api/v1/admin/amenities');
+    expect(documentBody.paths).toHaveProperty('/api/v1/admin/rooms');
+    expect(documentBody.paths).toHaveProperty('/api/v1/admin/rooms/{roomId}');
     expect(documentBody.components?.schemas).toHaveProperty('ErrorResponseDto');
     expect(documentBody.components?.schemas).toHaveProperty(
       'AccessTokenResponseDto',
+    );
+    expect(documentBody.components?.schemas).toHaveProperty(
+      'AdminRoomResponseDto',
     );
     expect(documentBody.components?.securitySchemes).toHaveProperty('bearer');
     expect(documentBody.components?.securitySchemes).toHaveProperty(
@@ -349,6 +357,11 @@ describe('Application bootstrap (e2e)', () => {
       documentBody.components?.schemas?.UpdateUserStatusDto.properties;
     expect(statusUpdateProperties).toHaveProperty('status');
     expect(statusUpdateProperties).toHaveProperty('reason');
+    expect(
+      documentBody.paths['/api/v1/admin/rooms/{roomId}'].patch?.parameters?.map(
+        (parameter) => parameter.name,
+      ),
+    ).toEqual(expect.arrayContaining(['roomId', 'If-Match']));
 
     await app.close();
     app = await createTestApplication({

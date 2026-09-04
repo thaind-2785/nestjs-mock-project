@@ -36,6 +36,16 @@ update or temporary positions before final positions so the unique key is never
 violated mid-transaction. Deactivation preserves media for later reactivation; only
 hard target deletion detaches associations.
 
+Phase 3 persists narrow `storage_cleanup_tasks` records rather than starting the
+Phase 5 general outbox early. The API creates a unique-key cleanup safeguard before
+the S3-compatible upload, with `available_at` beyond the bounded storage-call
+timeout. In the target-locked metadata transaction, successful attachment insertion
+deletes that safeguard. Upload/provider/metadata failure leaves an eventually
+claimable task, and object deletion is idempotent even when the upload never created
+the key. Replacement and detach insert immediately available cleanup work in the
+same transaction that removes the live association. Claimers use an expiring lease;
+Phase 7 can schedule the same bounded service without changing attachment semantics.
+
 ## Consequences
 
 Adding a supported target no longer needs another join table, but MySQL cannot create
@@ -45,3 +55,8 @@ preserves them. A bounded cron reconciliation detects orphan metadata/cloud obje
 Tests must cover invalid type/association pairs, missing targets, authorization,
 singleton replacement, target deletion races, cross-target mutation, rollback,
 reorder, and cleanup retry.
+
+The cleanup safeguard adds one operational table and a small write before uploads,
+but removes the crash window in which an uploaded object could have neither live
+metadata nor a durable deletion intent. It remains intentionally separate from
+notification delivery semantics.

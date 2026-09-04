@@ -1,19 +1,18 @@
 import {
   Column,
-  CreateDateColumn,
   Entity,
   Index,
   JoinColumn,
   ManyToOne,
   PrimaryColumn,
-  UpdateDateColumn,
 } from 'typeorm';
+import { MutableEntity } from '../../database/entities/base.entity';
 import { User } from '../../users/entities/user.entity';
 
 @Entity({ name: 'auth_sessions' })
 @Index('idx_auth_sessions_user_revoked', ['userId', 'revokedAt'])
 @Index('idx_auth_sessions_refresh_expires', ['refreshExpiresAt'])
-export class AuthSession {
+export class AuthSession extends MutableEntity {
   @PrimaryColumn({ type: 'char', length: 36 })
   id!: string;
 
@@ -37,10 +36,4 @@ export class AuthSession {
     nullable: true,
   })
   revokedAt!: Date | null;
-
-  @CreateDateColumn({ name: 'created_at', type: 'datetime', precision: 6 })
-  createdAt!: Date;
-
-  @UpdateDateColumn({ name: 'updated_at', type: 'datetime', precision: 6 })
-  updatedAt!: Date;
 }

@@ -5,6 +5,7 @@ import {
   HttpStatus,
   Inject,
   Post,
+  Query,
   Req,
   Res,
 } from '@nestjs/common';
@@ -24,6 +25,7 @@ import { authConfig } from '../config/auth.config';
 import { CurrentPrincipal } from './decorators/current-principal.decorator';
 import { Public } from './decorators/public.decorator';
 import { AccessTokenResponseDto } from './dto/access-token-response.dto';
+import { GoogleCallbackQueryDto } from './dto/google-callback-query.dto';
 import { AuthService } from './auth.service';
 import {
   clearOAuthStateCookieOptions,
@@ -80,13 +82,16 @@ export class AuthController {
       'OAuth provider error; returned to clients as a generic failure',
   })
   async googleCallback(
+    @Query() query: Record<string, unknown>,
     @Req() request: Request,
     @Res() response: Response,
   ): Promise<void> {
     try {
-      const session = await this.auth.completeGoogleLogin({
-        code: readOptionalQueryString(request.query.code, 2_048),
-        queryState: readOptionalQueryString(request.query.state, 256),
+      // Google may append provider-specific query parameters. Selecting the OAuth
+      // fields here lets the DTO validate our contract without the global
+      // forbidNonWhitelisted policy rejecting compatible provider extensions.
+      const callback = GoogleCallbackQueryDto.fromQuery(query);
+      const session = await this.auth.completeGoogleLogin(callback, {
         cookieState: readCookie(request, oauthStateCookieName),
         rateLimitKey: rateLimitKey(request),
       });
@@ -176,15 +181,6 @@ function readCookie(request: Request, name: string): string | undefined {
     .cookies;
   const value = cookies?.[name];
   return typeof value === 'string' ? value : undefined;
-}
-
-function readOptionalQueryString(
-  value: unknown,
-  maximumLength: number,
-): string | undefined {
-  return typeof value === 'string' && value.length <= maximumLength
-    ? value
-    : undefined;
 }
 
 export function shouldClearRefreshCookie(error: unknown): boolean {

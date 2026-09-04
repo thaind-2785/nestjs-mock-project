@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { validateSync } from 'class-validator';
 import { DataSource, EntityManager } from 'typeorm';
 import { authConfig } from '../config/auth.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
@@ -8,6 +9,11 @@ import { User } from '../users/entities/user.entity';
 import { UserRole, UserStatus } from '../users/entities/user.enums';
 import { AuthRedisService } from './auth-redis.service';
 import { authErrors } from './auth.errors';
+import {
+  GoogleCallbackQueryDto,
+  googleCallbackProviderValidationGroup,
+  googleCallbackStateValidationGroup,
+} from './dto/google-callback-query.dto';
 import { AuthIdentity, AuthProvider } from './entities/auth-identity.entity';
 import type {
   GoogleOAuthClientContract,
@@ -20,6 +26,11 @@ import { GoogleIdentityClaims, IssuedSession } from './auth.types';
 export interface GoogleLoginStart {
   authorizationUrl: string;
   state: string;
+}
+
+export interface GoogleCallbackContext {
+  cookieState?: string;
+  rateLimitKey: string;
 }
 
 @Injectable()
@@ -53,29 +64,25 @@ export class AuthService {
     }
   }
 
-  async completeGoogleLogin(input: {
-    code?: string;
-    queryState?: string;
-    cookieState?: string;
-    rateLimitKey: string;
-  }): Promise<IssuedSession> {
-    await this.redis.assertRateLimit('google-callback', input.rateLimitKey);
-    if (
-      !input.queryState ||
-      !input.cookieState ||
-      !/^[A-Za-z0-9_-]{43}$/.test(input.queryState) ||
-      !safeEqual(input.queryState, input.cookieState)
-    ) {
+  async completeGoogleLogin(
+    query: GoogleCallbackQueryDto,
+    context: GoogleCallbackContext,
+  ): Promise<IssuedSession> {
+    await this.redis.assertRateLimit('google-callback', context.rateLimitKey);
+    const queryState = validatedQueryState(query);
+    if (!context.cookieState || !safeEqual(queryState, context.cookieState)) {
       throw authErrors.oauthTransactionInvalid();
     }
-    const transaction = await this.redis.consumeOAuthTransaction(
-      input.queryState,
-    );
+    const transaction = await this.redis.consumeOAuthTransaction(queryState);
     if (!transaction) throw authErrors.oauthTransactionInvalid();
-    if (!input.code?.trim()) throw authErrors.googleAuthenticationFailed();
+
+    // Validate the provider result only after consuming a matching transaction.
+    // A single-use OAuth state must stay consumed even when code/error is malformed;
+    // validating the entire DTO in Nest's global pipe would return too early.
+    const code = validatedAuthorizationCode(query);
 
     const claims = await this.google.exchangeAndVerify({
-      code: input.code,
+      code,
       codeVerifier: transaction.codeVerifier,
       expectedNonce: transaction.nonce,
     });
@@ -171,6 +178,29 @@ export class AuthService {
     }
     return this.sessions.createWithManager(manager, user);
   }
+}
+
+function validatedQueryState(query: GoogleCallbackQueryDto): string {
+  const errors = validateSync(query, {
+    groups: [googleCallbackStateValidationGroup],
+  });
+  if (errors.length > 0) throw authErrors.oauthTransactionInvalid();
+  return query.state as string;
+}
+
+function validatedAuthorizationCode(query: GoogleCallbackQueryDto): string {
+  const errors = validateSync(query, {
+    groups: [googleCallbackProviderValidationGroup],
+  });
+  if (
+    errors.length > 0 ||
+    query.error !== undefined ||
+    typeof query.code !== 'string' ||
+    !query.code.trim()
+  ) {
+    throw authErrors.googleAuthenticationFailed();
+  }
+  return query.code;
 }
 
 function createGoogleAuthorizationRequest(): GoogleAuthorizationRequest & {

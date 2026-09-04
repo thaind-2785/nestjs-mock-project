@@ -206,6 +206,32 @@ describe('Google auth and RBAC journey (e2e)', () => {
     );
   });
 
+  it('consumes a matching OAuth transaction before rejecting an invalid provider result', async () => {
+    const browser = request.agent(app.getHttpServer());
+    const started = await browser
+      .get('/api/v1/auth/google')
+      .redirects(0)
+      .expect(302);
+    const state = new URL(started.headers.location).searchParams.get('state');
+
+    const failed = await browser
+      .get('/api/v1/auth/google/callback')
+      .query({ code: 'x'.repeat(2_049), state })
+      .expect(401);
+    expect((failed.body as unknown as { code: string }).code).toBe(
+      'GOOGLE_AUTHENTICATION_FAILED',
+    );
+
+    const replayed = await browser
+      .get('/api/v1/auth/google/callback')
+      .set('Cookie', `hotel_oauth_state=${state ?? ''}`)
+      .query({ code: 'late-code', state })
+      .expect(401);
+    expect((replayed.body as unknown as { code: string }).code).toBe(
+      'OAUTH_TRANSACTION_INVALID',
+    );
+  });
+
   it('provisions users, rotates cookies, enforces RBAC, and denies revoked sessions', async () => {
     google.claims = {
       subject: 'google-admin-subject',

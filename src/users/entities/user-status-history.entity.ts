@@ -1,18 +1,18 @@
 import {
   Column,
-  CreateDateColumn,
   Entity,
   Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { CreatedAtEntity } from '../../database/entities/base.entity';
 import { User } from './user.entity';
 import { UserStatus } from './user.enums';
 
 @Entity({ name: 'user_status_history' })
 @Index('idx_user_status_history_user_created', ['userId', 'createdAt'])
-export class UserStatusHistory {
+export class UserStatusHistory extends CreatedAtEntity {
   @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id!: string;
 
@@ -38,7 +38,4 @@ export class UserStatusHistory {
 
   @Column({ type: 'text' })
   reason!: string;
-
-  @CreateDateColumn({ name: 'created_at', type: 'datetime', precision: 6 })
-  createdAt!: Date;
 }

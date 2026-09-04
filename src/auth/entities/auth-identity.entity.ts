@@ -1,13 +1,12 @@
 import {
   Column,
-  CreateDateColumn,
   Entity,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
   Unique,
-  UpdateDateColumn,
 } from 'typeorm';
+import { MutableEntity } from '../../database/entities/base.entity';
 import { User } from '../../users/entities/user.entity';
 
 export enum AuthProvider {
@@ -17,7 +16,7 @@ export enum AuthProvider {
 @Entity({ name: 'auth_identities' })
 @Unique('uq_auth_identities_provider_subject', ['provider', 'providerSubject'])
 @Unique('uq_auth_identities_user_provider', ['userId', 'provider'])
-export class AuthIdentity {
+export class AuthIdentity extends MutableEntity {
   @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id!: string;
 
@@ -36,10 +35,4 @@ export class AuthIdentity {
 
   @Column({ name: 'provider_email', type: 'varchar', length: 255 })
   providerEmail!: string;
-
-  @CreateDateColumn({ name: 'created_at', type: 'datetime', precision: 6 })
-  createdAt!: Date;
-
-  @UpdateDateColumn({ name: 'updated_at', type: 'datetime', precision: 6 })
-  updatedAt!: Date;
 }

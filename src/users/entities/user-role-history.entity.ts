@@ -1,18 +1,18 @@
 import {
   Column,
-  CreateDateColumn,
   Entity,
   Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { CreatedAtEntity } from '../../database/entities/base.entity';
 import { User } from './user.entity';
 import { RoleActorType, UserRole } from './user.enums';
 
 @Entity({ name: 'user_role_history' })
 @Index('idx_user_role_history_user_created', ['userId', 'createdAt'])
-export class UserRoleHistory {
+export class UserRoleHistory extends CreatedAtEntity {
   @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id!: string;
 
@@ -46,7 +46,4 @@ export class UserRoleHistory {
 
   @Column({ type: 'text' })
   reason!: string;
-
-  @CreateDateColumn({ name: 'created_at', type: 'datetime', precision: 6 })
-  createdAt!: Date;
 }

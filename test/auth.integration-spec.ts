@@ -6,6 +6,7 @@ import { DataSource } from 'typeorm';
 import { AccessTokenService } from '../src/auth/access-token.service';
 import { AuthRedisService } from '../src/auth/auth-redis.service';
 import { AuthService } from '../src/auth/auth.service';
+import { GoogleCallbackQueryDto } from '../src/auth/dto/google-callback-query.dto';
 import { AuthIdentity } from '../src/auth/entities/auth-identity.entity';
 import { AuthSession } from '../src/auth/entities/auth-session.entity';
 import type {
@@ -190,6 +191,8 @@ describe('Auth and RBAC persistence', () => {
     expect(loaded.emailVerifiedAt.toISOString()).toBe(
       '2026-01-02T03:04:05.678Z',
     );
+    expect(loaded.createdAt).toBeInstanceOf(Date);
+    expect(loaded.updatedAt).toBeInstanceOf(Date);
   });
 
   it('atomically rotates once under concurrent refresh and revokes on reuse', async () => {
@@ -235,18 +238,26 @@ describe('Auth and RBAC persistence', () => {
     const first = await auth.beginGoogleLogin('concurrent-first-start');
     const second = await auth.beginGoogleLogin('concurrent-second-start');
     const attempts = await Promise.allSettled([
-      auth.completeGoogleLogin({
-        code: randomUUID(),
-        queryState: first.state,
-        cookieState: first.state,
-        rateLimitKey: 'concurrent-first-callback',
-      }),
-      auth.completeGoogleLogin({
-        code: randomUUID(),
-        queryState: second.state,
-        cookieState: second.state,
-        rateLimitKey: 'concurrent-second-callback',
-      }),
+      auth.completeGoogleLogin(
+        GoogleCallbackQueryDto.fromQuery({
+          code: randomUUID(),
+          state: first.state,
+        }),
+        {
+          cookieState: first.state,
+          rateLimitKey: 'concurrent-first-callback',
+        },
+      ),
+      auth.completeGoogleLogin(
+        GoogleCallbackQueryDto.fromQuery({
+          code: randomUUID(),
+          state: second.state,
+        }),
+        {
+          cookieState: second.state,
+          rateLimitKey: 'concurrent-second-callback',
+        },
+      ),
     ]);
 
     const rejection = attempts.find(
@@ -315,7 +326,10 @@ describe('Auth and RBAC persistence', () => {
       (await dataSource.getRepository(User).findOneByOrFail({ id: user.id }))
         .role,
     ).toBe(UserRole.Admin);
-    expect(await dataSource.getRepository(UserRoleHistory).count()).toBe(1);
+    const roleHistory = await dataSource
+      .getRepository(UserRoleHistory)
+      .findOneByOrFail({ userId: user.id });
+    expect(roleHistory.createdAt).toBeInstanceOf(Date);
   });
 
   it('rejects bootstrap for missing, mismatched, and inactive accounts', async () => {
@@ -363,7 +377,10 @@ describe('Auth and RBAC persistence', () => {
       (await dataSource.getRepository(User).findOneByOrFail({ id: target.id }))
         .status,
     ).toBe(UserStatus.Inactive);
-    expect(await dataSource.getRepository(UserStatusHistory).count()).toBe(1);
+    const statusHistory = await dataSource
+      .getRepository(UserStatusHistory)
+      .findOneByOrFail({ userId: target.id });
+    expect(statusHistory.createdAt).toBeInstanceOf(Date);
     expect(
       (
         await dataSource.getRepository(AuthSession).findOneByOrFail({
@@ -434,12 +451,16 @@ describe('Auth and RBAC persistence', () => {
 
   async function completeGoogleLogin(rateLimitKey: string) {
     const started = await auth.beginGoogleLogin(`${rateLimitKey}-start`);
-    return auth.completeGoogleLogin({
-      code: randomUUID(),
-      queryState: started.state,
-      cookieState: started.state,
-      rateLimitKey: `${rateLimitKey}-callback`,
-    });
+    return auth.completeGoogleLogin(
+      GoogleCallbackQueryDto.fromQuery({
+        code: randomUUID(),
+        state: started.state,
+      }),
+      {
+        cookieState: started.state,
+        rateLimitKey: `${rateLimitKey}-callback`,
+      },
+    );
   }
 
   async function createUser(

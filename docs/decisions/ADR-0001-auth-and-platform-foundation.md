@@ -84,3 +84,22 @@ The API has a smaller credential surface: no password storage, reset, activation
 linking endpoints. The application still owns JWT/session rotation, logout,
 revocation, role checks, and user inactivation. Availability depends on Google for
 new authentication, while existing application authorization remains local.
+
+## Phase 2 implementation clarification
+
+The backend-only local demonstration uses same-origin Swagger as the post-login
+landing page. The Google callback creates the application session and sets its
+HttpOnly refresh cookie before redirecting; the landing URI never transports a
+token. Cross-site cookies remain unavailable until exact frontend origins and the
+required credentialed-CORS/CSRF design are selected.
+
+Access JWTs use HS256 with an injected high-entropy application secret, a 15-minute
+lifetime, explicit issuer/audience/type claims, and `sid`. Rotating refresh sessions
+have a fixed 30-day absolute lifetime and allow multiple devices. Google OAuth
+transactions use Redis `GETDEL` for one-time state/nonce/PKCE consumption. These
+durations remain validated environment settings, while changing the signing model
+to independently verified asymmetric tokens requires another ADR.
+
+User inactivation revokes every durable session in the status-change transaction.
+An administrator cannot deactivate itself or the last active administrator. Actual
+status changes and CLI role promotion append audit history; idempotent no-ops do not.

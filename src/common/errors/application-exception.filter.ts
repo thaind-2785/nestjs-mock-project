@@ -9,16 +9,24 @@ import { describeException } from './error-descriptor';
 
 interface ErrorTranslations {
   errors: {
+    authenticationFailed: string;
+    authorizationUnavailable: string;
     badRequest: string;
     conflict: string;
     forbidden: string;
     internalServerError: string;
+    identityConflict: string;
+    lastAdminDeactivationForbidden: string;
     methodNotAllowed: string;
     notFound: string;
     payloadTooLarge: string;
+    selfDeactivationForbidden: string;
+    sessionInvalid: string;
     serviceUnavailable: string;
     tooManyRequests: string;
     unauthorized: string;
+    userInactive: string;
+    userNotFound: string;
     unprocessableEntity: string;
     validationFailed: string;
   };

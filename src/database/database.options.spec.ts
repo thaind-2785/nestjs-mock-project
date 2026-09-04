@@ -23,6 +23,7 @@ describe('createTypeOrmOptions', () => {
       password: 'test-password',
       database: 'hotel_test',
       charset: 'utf8mb4',
+      timezone: 'Z',
       entities: [],
       migrations: [],
       migrationsTableName: 'migrations',
@@ -50,6 +51,7 @@ describe('createTypeOrmOptions', () => {
       createTypeOrmOptions(database, { migrations: [migration] }),
     ).toMatchObject({
       migrations: [migration],
+      timezone: 'Z',
       synchronize: false,
       migrationsRun: false,
     });

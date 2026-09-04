@@ -1,0 +1,2 @@
+export const AUTH_REDIS_CLIENT = Symbol('AUTH_REDIS_CLIENT');
+export const GOOGLE_OAUTH_CLIENT = Symbol('GOOGLE_OAUTH_CLIENT');

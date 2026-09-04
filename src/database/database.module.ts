@@ -3,6 +3,7 @@ import { ConfigModule, ConfigType } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { createTypeOrmOptions } from './database.options';
 import { databaseConfig } from '../config/database.config';
+import { DatabaseConnectionService } from './database-connection.service';
 
 @Module({
   imports: [
@@ -18,5 +19,7 @@ import { databaseConfig } from '../config/database.config';
       }),
     }),
   ],
+  providers: [DatabaseConnectionService],
+  exports: [DatabaseConnectionService],
 })
 export class DatabaseModule {}

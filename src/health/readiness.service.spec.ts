@@ -2,6 +2,7 @@
 import { HealthIndicatorService } from '@nestjs/terminus';
 import { DataSource } from 'typeorm';
 import { ReadinessConfiguration } from '../config/readiness.config';
+import { DatabaseConnectionService } from '../database/database-connection.service';
 import {
   ReadinessService,
   RedisReadinessClient,
@@ -48,6 +49,7 @@ function createService({
   const storageClient = storage;
   const service = new ReadinessService(
     source,
+    new DatabaseConnectionService(source),
     { ...configuration, timeoutMs },
     () => redisClient,
     storageClient,

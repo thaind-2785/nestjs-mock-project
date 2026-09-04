@@ -9,6 +9,7 @@ import {
 import { ApplicationException } from '../common/errors/application.exception';
 import { errorMessageKeys } from '../common/errors/error-descriptor';
 import { ErrorResponseDto } from '../common/errors/error-response.dto';
+import { Public } from '../auth/decorators/public.decorator';
 import { CurrentRequestId } from '../common/http/request-id.decorator';
 import { ReadinessService } from './readiness.service';
 
@@ -31,6 +32,7 @@ export class ServiceNotReadyResponseDto extends ErrorResponseDto {
 }
 
 @ApiTags('health')
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(private readonly readiness: ReadinessService) {}

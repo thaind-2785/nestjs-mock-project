@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ErrorResponseDto } from '../errors/error-response.dto';
+import { refreshCookieName } from '../../auth/auth.cookies';
 
 export const swaggerPath = 'api/docs';
 export const swaggerJsonPath = 'api/docs-json';
@@ -17,6 +18,17 @@ export function configureSwagger(
     .setTitle('Hotel Management System API')
     .setDescription('HTTP API for the hotel management system.')
     .setVersion('1.0')
+    .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' })
+    .addCookieAuth(
+      refreshCookieName,
+      {
+        type: 'apiKey',
+        in: 'cookie',
+        name: refreshCookieName,
+        description: 'Rotating HttpOnly refresh cookie set by Google login',
+      },
+      refreshCookieName,
+    )
     .build();
   const document = SwaggerModule.createDocument(app, configuration, {
     extraModels: [ErrorResponseDto],

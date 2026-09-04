@@ -29,6 +29,20 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   OBJECT_STORAGE_ACCESS_KEY: string;
   OBJECT_STORAGE_SECRET_KEY: string;
   HEALTH_CHECK_TIMEOUT_MS: number;
+  GOOGLE_AUTH_ENABLED: boolean;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  GOOGLE_REDIRECT_URI?: string;
+  AUTH_SUCCESS_REDIRECT_URI: string;
+  JWT_ACCESS_SECRET: string;
+  JWT_ISSUER: string;
+  JWT_AUDIENCE: string;
+  AUTH_ACCESS_TTL_SECONDS: number;
+  AUTH_REFRESH_TTL_SECONDS: number;
+  OAUTH_TRANSACTION_TTL_SECONDS: number;
+  AUTH_RATE_LIMIT_MAX: number;
+  AUTH_RATE_LIMIT_WINDOW_SECONDS: number;
+  AUTH_REDIS_KEY_PREFIX: string;
 }
 
 const environmentSchema = Joi.object<EnvironmentVariables>({
@@ -85,6 +99,90 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(100)
     .max(5_000)
     .default(1_000),
+  GOOGLE_AUTH_ENABLED: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.boolean().default(true),
+    otherwise: Joi.boolean().default(false),
+  }),
+  GOOGLE_CLIENT_ID: Joi.string().trim().min(3).when('GOOGLE_AUTH_ENABLED', {
+    is: true,
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  GOOGLE_CLIENT_SECRET: Joi.string().min(8).when('GOOGLE_AUTH_ENABLED', {
+    is: true,
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  GOOGLE_REDIRECT_URI: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .when('GOOGLE_AUTH_ENABLED', {
+      is: true,
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
+  AUTH_SUCCESS_REDIRECT_URI: Joi.string()
+    .custom((value: string, helpers) => {
+      if (
+        !value.startsWith('/') ||
+        value.startsWith('//') ||
+        hasUnsafeRelativeUriCharacter(value)
+      ) {
+        return helpers.error('string.relativeUri');
+      }
+      try {
+        const base = new URL('https://auth.invalid');
+        const resolved = new URL(value, base);
+        if (resolved.origin !== base.origin) {
+          return helpers.error('string.relativeUri');
+        }
+      } catch {
+        return helpers.error('string.relativeUri');
+      }
+      return value;
+    })
+    .default('/api/docs'),
+  JWT_ACCESS_SECRET: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(32).required(),
+    otherwise: Joi.string()
+      .min(32)
+      .default('local_jwt_secret_change_me_32_chars'),
+  }),
+  JWT_ISSUER: Joi.string()
+    .trim()
+    .min(1)
+    .max(255)
+    .default('hotel-management-api'),
+  JWT_AUDIENCE: Joi.string()
+    .trim()
+    .min(1)
+    .max(255)
+    .default('hotel-management-web'),
+  AUTH_ACCESS_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(60)
+    .max(3_600)
+    .default(900),
+  AUTH_REFRESH_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(3_600)
+    .max(7_776_000)
+    .default(2_592_000),
+  OAUTH_TRANSACTION_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(60)
+    .max(900)
+    .default(600),
+  AUTH_RATE_LIMIT_MAX: Joi.number().integer().min(1).max(1_000).default(20),
+  AUTH_RATE_LIMIT_WINDOW_SECONDS: Joi.number()
+    .integer()
+    .min(1)
+    .max(3_600)
+    .default(60),
+  AUTH_REDIS_KEY_PREFIX: Joi.string()
+    .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
+    .default('hotel:auth'),
 }).unknown(true);
 
 export function validateEnvironment(
@@ -124,4 +222,14 @@ export function validateEnvironment(
       validationResult.value.SWAGGER_ENABLED ??
       validationResult.value.NODE_ENV !== 'production',
   };
+}
+
+function hasUnsafeRelativeUriCharacter(value: string): boolean {
+  return (
+    value.includes('\\') ||
+    [...value].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint === undefined || codePoint <= 31 || codePoint === 127;
+    })
+  );
 }

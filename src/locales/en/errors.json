@@ -1,14 +1,22 @@
 {
+  "authenticationFailed": "Authentication could not be completed.",
+  "authorizationUnavailable": "Authorization is temporarily unavailable.",
   "badRequest": "Bad request.",
   "conflict": "The request conflicts with the current resource state.",
   "forbidden": "You do not have permission to perform this action.",
   "internalServerError": "An unexpected error occurred.",
+  "identityConflict": "Authentication could not be completed for this identity.",
+  "lastAdminDeactivationForbidden": "The last active administrator cannot be deactivated.",
   "methodNotAllowed": "Method not allowed.",
   "notFound": "Resource not found.",
   "payloadTooLarge": "Request payload is too large.",
+  "selfDeactivationForbidden": "You cannot deactivate your own account.",
+  "sessionInvalid": "The session is invalid or has expired.",
   "serviceUnavailable": "Service is unavailable.",
   "tooManyRequests": "Too many requests.",
   "unauthorized": "Authentication is required.",
+  "userInactive": "This account is inactive.",
+  "userNotFound": "User not found.",
   "unprocessableEntity": "The request could not be processed.",
   "validationFailed": "Request validation failed."
 }

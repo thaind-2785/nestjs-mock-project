@@ -5,6 +5,7 @@ import { HealthIndicatorService } from '@nestjs/terminus';
 import { ListBucketsCommand } from '@aws-sdk/client-s3';
 import { DataSource } from 'typeorm';
 import { readinessConfig } from '../config/readiness.config';
+import { DatabaseConnectionService } from '../database/database-connection.service';
 import {
   READINESS_REDIS_FACTORY,
   READINESS_STORAGE_CLIENT,
@@ -36,10 +37,9 @@ interface ReadinessProbeResult {
 
 @Injectable()
 export class ReadinessService implements OnApplicationShutdown {
-  private databaseInitialization: Promise<DataSource> | undefined;
-
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly databaseConnection: DatabaseConnectionService,
     @Inject(readinessConfig.KEY)
     private readonly configuration: ConfigType<typeof readinessConfig>,
     @Inject(READINESS_REDIS_FACTORY)
@@ -68,7 +68,7 @@ export class ReadinessService implements OnApplicationShutdown {
   private async checkMySql(): Promise<ReadinessProbeResult> {
     try {
       await this.withTimeout(async () => {
-        await this.initializeDataSource();
+        await this.databaseConnection.ensureInitialized();
         await this.dataSource.query('SELECT 1');
       });
       this.healthIndicator.check('mysql').up();
@@ -109,16 +109,6 @@ export class ReadinessService implements OnApplicationShutdown {
       this.healthIndicator.check('storage').down();
       return { dependency: 'storage', healthy: false };
     }
-  }
-
-  private async initializeDataSource(): Promise<DataSource> {
-    if (this.dataSource.isInitialized) return this.dataSource;
-    if (!this.databaseInitialization) {
-      this.databaseInitialization = this.dataSource.initialize().finally(() => {
-        this.databaseInitialization = undefined;
-      });
-    }
-    return this.databaseInitialization;
   }
 
   private async withTimeout<T>(

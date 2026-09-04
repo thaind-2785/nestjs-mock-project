@@ -12,6 +12,7 @@ import {
 import { HttpRequestCompletedLog } from './../src/common/http/request-context';
 import { swaggerJsonPath, swaggerPath } from './../src/common/openapi/swagger';
 import { ReadinessService } from './../src/health/readiness.service';
+import { Public } from './../src/auth/decorators/public.decorator';
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -28,6 +29,7 @@ class BootstrapValidationDto {
   strictCount!: number;
 }
 
+@Public()
 @Controller('bootstrap-validation')
 class BootstrapValidationController {
   @Post()
@@ -300,15 +302,53 @@ describe('Application bootstrap (e2e)', () => {
       .get(`/${swaggerJsonPath}`)
       .expect(200);
     const documentBody = document.body as unknown as {
-      paths: Record<string, unknown>;
+      paths: Record<
+        string,
+        {
+          get?: { parameters?: Array<{ name?: string }> };
+        }
+      >;
       components?: {
-        schemas?: Record<string, unknown>;
+        schemas?: Record<string, { properties?: Record<string, unknown> }>;
+        securitySchemes?: Record<string, unknown>;
       };
     };
 
     expect(documentBody.paths).toHaveProperty('/api/v1/health/live');
     expect(documentBody.paths).toHaveProperty('/api/v1/health/ready');
+    expect(documentBody.paths).toHaveProperty('/api/v1/auth/google');
+    expect(documentBody.paths).toHaveProperty('/api/v1/auth/google/callback');
+    expect(documentBody.paths).toHaveProperty('/api/v1/auth/refresh');
+    expect(documentBody.paths).toHaveProperty('/api/v1/auth/logout');
+    expect(documentBody.paths).toHaveProperty('/api/v1/me');
+    expect(documentBody.paths).toHaveProperty('/api/v1/admin/users');
+    expect(documentBody.paths).toHaveProperty(
+      '/api/v1/admin/users/{userId}/status',
+    );
     expect(documentBody.components?.schemas).toHaveProperty('ErrorResponseDto');
+    expect(documentBody.components?.schemas).toHaveProperty(
+      'AccessTokenResponseDto',
+    );
+    expect(documentBody.components?.securitySchemes).toHaveProperty('bearer');
+    expect(documentBody.components?.securitySchemes).toHaveProperty(
+      'hotel_refresh',
+    );
+    expect(
+      documentBody.paths['/api/v1/auth/google/callback'].get?.parameters?.map(
+        (parameter) => parameter.name,
+      ),
+    ).toEqual(expect.arrayContaining(['code', 'state', 'error']));
+    expect(
+      documentBody.paths['/api/v1/admin/users'].get?.parameters?.map(
+        (parameter) => parameter.name,
+      ),
+    ).toEqual(
+      expect.arrayContaining(['query', 'role', 'status', 'page', 'pageSize']),
+    );
+    const statusUpdateProperties =
+      documentBody.components?.schemas?.UpdateUserStatusDto.properties;
+    expect(statusUpdateProperties).toHaveProperty('status');
+    expect(statusUpdateProperties).toHaveProperty('reason');
 
     await app.close();
     app = await createTestApplication({

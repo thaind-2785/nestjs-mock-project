@@ -166,7 +166,8 @@ getters, so a window's dates are identical on every deployment timezone.
 
 Stable window errors include `ROOM_TIME_NOT_FOUND`, `ROOM_TIME_RANGE_INVALID`,
 `ROOM_TIME_OVERLAP`, `ROOM_TIME_DATES_IMMUTABLE`, `ROOM_TIME_IN_USE`, and
-`ROOM_TIME_HAS_HISTORY`.
+`ROOM_TIME_HAS_HISTORY`. Stable public catalog errors are `ROOM_NOT_FOUND`,
+`DATE_RANGE_INCOMPLETE`, and `STAY_RANGE_INVALID`.
 
 ### Public catalog contract
 
@@ -180,6 +181,10 @@ With dates, `checkIn < checkOut` is required and each returned room has one `ACT
 `room_times` row fully containing the range. Phase 3 has no bookings, so a containing
 window is sufficient; Phase 4 additionally excludes room-wide overlapping
 `CONFIRMED` bookings. Supplying only one date returns `400 DATE_RANGE_INCOMPLETE`.
+
+At most 20 repeated `amenity` values are accepted, and a `maxPrice` below
+`minPrice` returns `400 VALIDATION_FAILED`. A `checkOut` that does not advance past
+`checkIn` returns `400 STAY_RANGE_INVALID`.
 
 The response is `{ items, page, pageSize, total }`, ordered by room ID ascending.
 Each item exposes room ID, room-type display data, beds, view, base price/currency,
@@ -314,7 +319,7 @@ version as part of the accepted logical model.
       overlapping windows under concurrency, and accept adjacent windows.
 - [x] Nested window routes reject room/window mismatch; immutable/in-use/history
       policies are ready for Phase 4 references.
-- [ ] Public list/detail expose only active rooms and return deterministic filtered
+- [x] Public list/detail expose only active rooms and return deterministic filtered
       pagination; a supplied stay is returned only when fully contained in one
       active window.
 - [ ] Phase 4 can add confirmed-booking exclusion without changing the public

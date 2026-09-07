@@ -13,6 +13,13 @@ import { Room } from './room.entity';
 
 @Entity({ name: 'room_times' })
 @Index('idx_room_times_room_status_from', ['roomId', 'status', 'availableFrom'])
+// Public availability filters status and dates across rooms, then joins by key.
+@Index('idx_room_times_status_range', [
+  'status',
+  'availableFrom',
+  'availableTo',
+  'roomId',
+])
 @Check('chk_room_times_range', '`available_from` < `available_to`')
 export class RoomTime extends MutableEntity {
   @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })

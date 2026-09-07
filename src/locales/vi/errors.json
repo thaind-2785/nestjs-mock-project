@@ -30,6 +30,8 @@
   "selfDeactivationForbidden": "Bạn không thể vô hiệu hóa tài khoản của chính mình.",
   "sessionInvalid": "Phiên đăng nhập không hợp lệ hoặc đã hết hạn.",
   "serviceUnavailable": "Dịch vụ hiện không khả dụng.",
+  "stayDateRangeIncomplete": "Cần cả checkIn và checkOut để tra cứu phòng trống.",
+  "stayRangeInvalid": "Ngày checkOut phải sau ngày checkIn.",
   "tooManyRequests": "Có quá nhiều yêu cầu.",
   "unauthorized": "Yêu cầu xác thực.",
   "userInactive": "Tài khoản này đã bị vô hiệu hóa.",

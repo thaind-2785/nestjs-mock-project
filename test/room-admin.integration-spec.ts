@@ -10,6 +10,7 @@ import { DatabaseConnectionService } from '../src/database/database-connection.s
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
+import { AddPublicRoomSearchIndex1788660000000 } from '../src/database/migrations/1788660000000-AddPublicRoomSearchIndex';
 import {
   AttachmentAssociationType,
   AttachmentObjectType,
@@ -92,6 +93,7 @@ describe('Phase 3 room administration persistence', () => {
           migrations: [
             CreateAuthRbacSchema1788380000000,
             CreateRoomCatalogSchema1788490000000,
+            AddPublicRoomSearchIndex1788660000000,
           ],
         },
       ),

@@ -27,6 +27,8 @@ export const errorMessageKeys = {
   roomTimeOverlap: 'errors.roomTimeOverlap',
   roomTimeRangeInvalid: 'errors.roomTimeRangeInvalid',
   roomTypeInUse: 'errors.roomTypeInUse',
+  stayDateRangeIncomplete: 'errors.stayDateRangeIncomplete',
+  stayRangeInvalid: 'errors.stayRangeInvalid',
   roomTypeNameConflict: 'errors.roomTypeNameConflict',
   roomTypeNotFound: 'errors.roomTypeNotFound',
   roomVersionConflict: 'errors.roomVersionConflict',

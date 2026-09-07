@@ -30,6 +30,8 @@
   "selfDeactivationForbidden": "You cannot deactivate your own account.",
   "sessionInvalid": "The session is invalid or has expired.",
   "serviceUnavailable": "Service is unavailable.",
+  "stayDateRangeIncomplete": "Both checkIn and checkOut are required to query availability.",
+  "stayRangeInvalid": "The checkOut date must be later than the checkIn date.",
   "tooManyRequests": "Too many requests.",
   "unauthorized": "Authentication is required.",
   "userInactive": "This account is inactive.",

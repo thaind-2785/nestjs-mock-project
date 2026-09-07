@@ -118,6 +118,25 @@ export const roomsErrors = {
       'ROOM_TIME_HAS_HISTORY',
       errorMessageKeys.roomTimeHasHistory,
     ),
+  stayDateRangeIncomplete: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'DATE_RANGE_INCOMPLETE',
+      errorMessageKeys.stayDateRangeIncomplete,
+    ),
+  stayRangeInvalid: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'STAY_RANGE_INVALID',
+      errorMessageKeys.stayRangeInvalid,
+    ),
+  priceRangeInvalid: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'VALIDATION_FAILED',
+      errorMessageKeys.validationFailed,
+      { errors: [{ field: 'maxPrice', codes: ['min'] }] },
+    ),
   emptyUpdate: () =>
     new ApplicationException(
       HttpStatus.BAD_REQUEST,

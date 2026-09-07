@@ -60,7 +60,7 @@ spec adds pixel/dimension processing.
 | `P3-T01` | Accepted contracts, validated catalog/upload/storage policy, locked dependencies, TypeORM entities, and reversible Phase 3 schema exist    | `docs/specs`, `docs/decisions`, `docs/architecture`, `src/config`, `src/rooms/entities`, `src/files` | Create room types, amenities, rooms/version, assignments, windows, attachments, and cleanup persistence | Config/entity unit; schema constraint/index and migration run/revert integration                       | Complete |
 | `P3-T02` | An admin can create/list/read/version-update/deactivate/hard-delete eligible rooms with atomic amenity assignment                          | `src/rooms` admin controller/services/repositories/DTOs; optional reference-catalog APIs             | Uses Phase 3 schema; seed/reference migration only if owner selects fixed catalog                       | Room policy/service unit; CRUD/version/unique/reference/delete integration and admin/user/guest E2E    | Complete |
 | `P3-T03` | Admin nested window APIs enforce target binding, history/use policy seams, and non-overlap under concurrent changes                        | `src/rooms` window controller/service/repository/DTOs                                                | None                                                                                                    | Overlap/containment unit; real MySQL locking/concurrency/adjacency/nested-mismatch integration and E2E | Complete |
-| `P3-T04` | Guests can browse public active rooms and query deterministic window-contained availability with all documented filters                    | `src/rooms` public controller/search service/query DTOs/response DTOs                                | Add indexes only if query-plan evidence requires a compatible migration revision                        | Query policy unit; SQL/filter/pagination integration; public list/detail/date/error/localization E2E   | Pending  |
+| `P3-T04` | Guests can browse public active rooms and query deterministic window-contained availability with all documented filters                    | `src/rooms` public controller/search service/query DTOs/response DTOs                                | Add indexes only if query-plan evidence requires a compatible migration revision                        | Query policy unit; SQL/filter/pagination integration; public list/detail/date/error/localization E2E   | Complete |
 | `P3-T05` | Admin thumbnail/album upload, replacement, target-bound delete, atomic reorder, private presign, and durable cleanup retry work end to end | `src/files`, room image controller/DTO mapping, storage adapter, cleanup repository/CLI              | Uses attachment/cleanup schema from P3-T01                                                              | MIME/key/policy unit; MySQL+MinIO transaction/race/failure/retry integration; multipart/RBAC E2E       | Pending  |
 | `P3-T06` | Public/operator documentation agrees and Phase 3 meets its exit gate with independent review findings dispositioned                        | Swagger, locales, `.env.example`, `README.md`, API/database/ADR docs, spec/plan/review               | Prove production migration state; no ad hoc schema changes                                              | Focused regressions, full `npm run verify`, independent security/data/concurrency/storage review       | Pending  |
 
@@ -277,3 +277,43 @@ its own focused evidence.
 - Availability windows stay last-write-wins by owner decision: no window version or
   `If-Match` precondition is added in Phase 3. `SPEC-005` records the semantics and
   `REVIEW-018` carries it as residual risk for the Phase 3 exit review.
+
+## P3-T04 implementation evidence
+
+- Added public `GET /rooms` and `GET /rooms/:roomId` behind `@Public()`, with the
+  documented `checkIn`/`checkOut`, repeated `amenity`, `beds`, `view`, `roomTypeId`,
+  `minPrice`/`maxPrice`/`currency`, and pagination filters. Responses expose room-type
+  display data, beds, view, price, currency, and amenities, never the physical room
+  number, and inactive/maintenance rooms are indistinguishable from absent ones.
+- All-of amenity semantics use a correlated `COUNT(DISTINCT ...)` subquery instead of a
+  join, so no room is duplicated and `total` comes from the same filters. Ordering is
+  room ID ascending on both the page and its count.
+- Availability is window containment only: one `ACTIVE` window must cover the whole
+  half-open stay, so two adjacent windows that jointly cover it do not match. The
+  predicate lives in one helper that Phase 4 extends with room-wide `CONFIRMED`
+  exclusion. `available` is reported only when the caller supplied a stay.
+- New stable errors `DATE_RANGE_INCOMPLETE` and `STAY_RANGE_INVALID` are localized in
+  both locales; an inverted price range and an over-cap amenity list stay
+  `VALIDATION_FAILED` with the offending field named.
+- Query-plan evidence at 2000 rooms with 1800 active, one window each, and mixed
+  amenity assignments, captured with `EXPLAIN` on the executed statements:
+  - browse and amenity paths read `rooms` through `idx_rooms_status_type` as a
+    covering index; the temporary/filesort comes from the paginated `DISTINCT` id pass
+    that TypeORM emits, not from a missing index.
+  - the type path uses the same index with both columns.
+  - the availability path materializes a semijoin over `room_times` and scanned the
+    whole table (`key: null`, 2000 rows).
+  - A candidate `rooms (status, id)` index changed no plan on any path and was
+    rejected. A candidate `room_times (status, available_from, available_to, room_id)`
+    turned the availability scan into a covering index read of 668 rows on both the
+    page and count statements, so it ships as
+    `AddPublicRoomSearchIndex1788660000000`, which is additive and reversible.
+- Room images are deliberately absent from the public payload until `P3-T05` owns the
+  attachment and presign work. `PublicRoomResponseDto` is the single place where the
+  thumbnail and the ordered album that `SPEC-005` documents will be added, so no field
+  shipped here has to change shape.
+- Focused evidence: unit 9/9 across the search policy and the public OpenAPI contract,
+  the new real-MySQL public search suite 6/6, the Phase 3 schema suite 4/4 including a
+  two-step revert that proves the index migration reverts without dropping tables, and
+  the public E2E journey 1/1 covering guest access, filters, availability, validation
+  details, localization, and generic not-found.

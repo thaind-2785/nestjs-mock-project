@@ -34,6 +34,8 @@ interface ErrorTranslations {
     roomTimeOverlap: string;
     roomTimeRangeInvalid: string;
     roomTypeInUse: string;
+    stayDateRangeIncomplete: string;
+    stayRangeInvalid: string;
     roomTypeNameConflict: string;
     roomTypeNotFound: string;
     roomVersionConflict: string;

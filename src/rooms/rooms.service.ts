@@ -279,7 +279,7 @@ async function replaceAmenityAssignments(
   );
 }
 
-async function loadAmenitiesByRoom(
+export async function loadAmenitiesByRoom(
   manager: EntityManager,
   roomIds: string[],
 ): Promise<Map<string, Amenity[]>> {

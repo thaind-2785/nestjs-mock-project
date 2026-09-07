@@ -8,6 +8,7 @@ import {
   IsISO4217CurrencyCode,
   IsInt,
   IsOptional,
+  ValidateIf,
   IsString,
   Matches,
   Max,
@@ -18,11 +19,7 @@ import {
 import { RoomStatus } from '../entities/room.enums';
 import { decimalIdPattern } from './room-id-param.dto';
 
-const trim = ({ value }: { value: unknown }): unknown =>
-  typeof value === 'string' ? value.trim() : value;
-
-const trimAndUppercase = ({ value }: { value: unknown }): unknown =>
-  typeof value === 'string' ? value.trim().toUpperCase() : value;
+import { trim, trimAndUppercase } from './catalog-transforms';
 
 export class CreateRoomDto {
   @ApiProperty({ minLength: 1, maxLength: 50, example: 'A-201' })
@@ -71,12 +68,12 @@ export class CreateRoomDto {
   currency!: string;
 
   @ApiPropertyOptional({ enum: RoomStatus, default: RoomStatus.Active })
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @IsEnum(RoomStatus)
   status: RoomStatus = RoomStatus.Active;
 
   @ApiPropertyOptional({ type: [String], example: ['1', '2'], default: [] })
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @IsArray()
   @ArrayMaxSize(100)
   @ArrayUnique()
@@ -85,23 +82,24 @@ export class CreateRoomDto {
   amenityIds: string[] = [];
 }
 
+// IsOptional skips null too; skip only undefined for non-nullable PATCH fields.
 export class UpdateRoomDto {
   @ApiPropertyOptional({ minLength: 1, maxLength: 50, example: 'A-201' })
   @Transform(trim)
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @IsString()
   @MinLength(1)
   @MaxLength(50)
   roomNumber?: string;
 
   @ApiPropertyOptional({ example: '1', pattern: decimalIdPattern.source })
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @IsString()
   @Matches(decimalIdPattern)
   roomTypeId?: string;
 
   @ApiPropertyOptional({ minimum: 1, maximum: 20, example: 2 })
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @Type(() => Number)
   @IsInt()
   @Min(1)
@@ -117,7 +115,7 @@ export class UpdateRoomDto {
   viewCode?: string | null;
 
   @ApiPropertyOptional({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @Type(() => Number)
   @IsInt()
   @Min(0)
@@ -126,19 +124,19 @@ export class UpdateRoomDto {
 
   @ApiPropertyOptional({ example: 'VND' })
   @Transform(trimAndUppercase)
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @IsString()
   @IsISO4217CurrencyCode()
   @Matches(/^[A-Z]{3}$/)
   currency?: string;
 
   @ApiPropertyOptional({ enum: RoomStatus })
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @IsEnum(RoomStatus)
   status?: RoomStatus;
 
   @ApiPropertyOptional({ type: [String], example: ['1', '2'] })
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @IsArray()
   @ArrayMaxSize(100)
   @ArrayUnique()

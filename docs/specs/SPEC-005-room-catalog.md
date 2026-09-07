@@ -94,17 +94,27 @@ Room types and amenities are administrator-managed reference catalogs:
 `basePriceAmount` is a non-negative safe integer in minor units, `currency` is an
 uppercase ISO 4217 code, and `amenityIds` is a duplicate-free complete assignment.
 `viewCode` is an optional trimmed uppercase catalog code of at most 50 characters.
+Only `viewCode` accepts explicit null on room writes; omitted fields retain defaults
+or existing values. Reference catalog writes allow null only for `description`.
 Status defaults to `ACTIVE`. Referenced room type and amenities must exist.
 
 Admin list/detail responses expose the physical room number, room type, amenities,
 base price, currency, status, timestamps, and numeric `version`. Admin list accepts
 optional `query`, `status`, `roomTypeId`, `beds`, `view`, `page` (default 1), and
 `pageSize` (default 20, maximum 100), ordered by room ID ascending. `query` matches
-the room number or room-type name.
+the room number or room-type name. The `view` filter is trimmed and uppercased
+at the DTO boundary.
 
 `PATCH /admin/rooms/:roomId` is a partial update but requires the current version in
-`If-Match: "<version>"`. An absent or stale version returns `409 ROOM_VERSION_CONFLICT`;
-a successful update increments the version. When present, `amenityIds` replaces the
+`If-Match: "<version>"`. Missing/empty headers return `428 ROOM_VERSION_REQUIRED`; malformed or unsupported
+values return `400 ROOM_VERSION_MALFORMED`; stale versions return
+`412 ROOM_VERSION_CONFLICT`. Only one quoted positive decimal version is supported
+(up to 20 digits); wildcard, weak tags, and tag lists are rejected. `ADR-0004`
+records this decision and supersedes the initial PR #6 contract that grouped these
+cases under 409.
+Every successful non-empty update increments the version exactly once, including
+unchanged scalar values or an unchanged amenity set. Equal amenity sets (regardless
+of order) skip assignment rewrites but still advance the room version. When present, `amenityIds` replaces the
 complete assignment atomically. Empty patches are rejected.
 
 `DELETE /admin/rooms/:roomId` hard-deletes only a room with no booking history. It

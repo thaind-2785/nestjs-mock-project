@@ -91,9 +91,9 @@ export class RoomsService {
     if (query.beds !== undefined) {
       builder.andWhere('room.bed_count = :beds', { beds: query.beds });
     }
-    if (query.view?.trim()) {
+    if (query.view) {
       builder.andWhere('room.view_code = :view', {
-        view: query.view.trim().toUpperCase(),
+        view: query.view,
       });
     }
     const [rooms, total] = await builder
@@ -156,19 +156,28 @@ export class RoomsService {
           throw roomsErrors.roomVersionConflict();
         }
 
-        const currentAmenityIds =
-          body.amenityIds ??
-          (
-            await manager.find(RoomAmenity, {
-              where: { roomId },
-              order: { amenityId: 'ASC' },
-            })
-          ).map((assignment) => assignment.amenityId);
+        // Existing assignments are protected by the room lock. Shared reference
+        // locks are needed only for incoming amenities, not status-only patches.
         const references = await findLockedReferences(
           manager,
           body.roomTypeId ?? room.roomTypeId,
-          currentAmenityIds,
+          body.amenityIds ?? [],
         );
+        if (body.amenityIds !== undefined) {
+          const assignments = await manager.find(RoomAmenity, {
+            where: { roomId },
+          });
+          const currentIds = new Set(
+            assignments.map(({ amenityId }) => amenityId),
+          );
+          // Assignment order has no meaning; avoid delete/insert for the same set.
+          if (
+            currentIds.size !== body.amenityIds.length ||
+            body.amenityIds.some((id) => !currentIds.has(id))
+          ) {
+            await replaceAmenityAssignments(manager, room.id, body.amenityIds);
+          }
+        }
 
         if (body.roomNumber !== undefined) room.roomNumber = body.roomNumber;
         if (body.roomTypeId !== undefined) room.roomTypeId = body.roomTypeId;
@@ -180,15 +189,31 @@ export class RoomsService {
         if (body.currency !== undefined) room.currency = body.currency;
         if (body.status !== undefined) room.status = body.status;
 
-        const saved = await manager.save(room);
-        if (body.amenityIds !== undefined) {
-          await replaceAmenityAssignments(manager, room.id, body.amenityIds);
-        }
-        return toAdminRoomResponse(
-          saved,
-          references.roomType,
-          references.amenities,
+        // save() skips unchanged Room columns, including amenity-only patches.
+        // The contract advances every accepted PATCH once, even a no-op. Explicit
+        // SQL also avoids double bumps and BIGINT arithmetic through JS Number.
+        await manager.update(
+          Room,
+          { id: room.id },
+          {
+            roomNumber: room.roomNumber,
+            roomTypeId: room.roomTypeId,
+            bedCount: room.bedCount,
+            viewCode: room.viewCode,
+            basePriceAmount: room.basePriceAmount,
+            currency: room.currency,
+            status: room.status,
+            version: () => 'version + 1',
+          },
         );
+        // Reload both version and updatedAt; increment/update does not hydrate them.
+        const saved = await manager.findOneByOrFail(Room, { id: room.id });
+        const amenities =
+          body.amenityIds !== undefined
+            ? references.amenities
+            : ((await loadAmenitiesByRoom(manager, [room.id])).get(room.id) ??
+              []);
+        return toAdminRoomResponse(saved, references.roomType, amenities);
       });
     } catch (error) {
       if (isDatabaseError(error, 'ER_DUP_ENTRY')) {

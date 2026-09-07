@@ -176,7 +176,7 @@ describe('P3-T02 room administration persistence', () => {
         status: RoomStatus.Active,
         roomTypeId: deluxe.id,
         beds: 2,
-        view: 'city',
+        view: 'CITY',
       }),
     );
     expect(filtered).toMatchObject({ total: 1, items: [{ id: created.id }] });
@@ -206,6 +206,124 @@ describe('P3-T02 room administration persistence', () => {
       rooms.update(created.id, '2', { amenityIds: ['999999999'] }),
     ).rejects.toMatchObject({ errorCode: 'ROOM_REFERENCE_NOT_FOUND' });
     expect((await rooms.get(created.id)).version).toBe(2);
+  });
+
+  it('versions amenity-only, unchanged, and mixed patches exactly once and rolls back failed writes', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const wifi = await catalog.createAmenity({ code: 'WIFI', name: 'Wi-Fi' });
+    const pool = await catalog.createAmenity({ code: 'POOL', name: 'Pool' });
+    const created = await rooms.create(roomInput(type.id, [wifi.id], 'A-201'));
+    await rooms.create(roomInput(type.id, [], 'TAKEN'));
+    await dataSource.query(
+      "UPDATE rooms SET updated_at = '2000-01-01' WHERE id = ?",
+      [created.id],
+    );
+    const updated = await rooms.update(created.id, '1', {
+      amenityIds: [pool.id, wifi.id],
+    });
+    expect(updated).toMatchObject({
+      version: 2,
+      amenities: [{ id: wifi.id }, { id: pool.id }],
+    });
+    expect(updated.updatedAt).not.toBe('2000-01-01T00:00:00.000Z');
+    expect(await rooms.get(created.id)).toEqual(updated);
+    await expect(
+      rooms.update(created.id, '1', { amenityIds: [] }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_VERSION_CONFLICT' });
+
+    // Observe real MySQL statements: a reordered equal set must not rewrite joins.
+    const queries = jest.spyOn(dataSource.logger, 'logQuery');
+    try {
+      expect(
+        await rooms.update(created.id, '2', { amenityIds: [wifi.id, pool.id] }),
+      ).toMatchObject({ version: 3 });
+      expect(
+        queries.mock.calls
+          .map(([sql]) => sql)
+          .filter((sql) =>
+            /^(DELETE|INSERT|UPDATE).*`room_amenities`/i.test(sql),
+          ),
+      ).toEqual([]);
+    } finally {
+      queries.mockRestore();
+    }
+    expect(
+      await rooms.update(created.id, '3', { roomNumber: 'A-201' }),
+    ).toMatchObject({ version: 4 });
+    expect(
+      await rooms.update(created.id, '4', { amenityIds: [] }),
+    ).toMatchObject({ version: 5, amenities: [] });
+    expect(
+      await rooms.update(created.id, '5', {
+        roomNumber: 'REVISED',
+        amenityIds: [wifi.id],
+      }),
+    ).toMatchObject({ version: 6 });
+    const beforeFailure = await rooms.get(created.id);
+    await expect(
+      rooms.update(created.id, '6', {
+        roomNumber: 'TAKEN',
+        amenityIds: [pool.id],
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_NUMBER_CONFLICT' });
+    expect(await rooms.get(created.id)).toEqual(beforeFailure);
+  });
+
+  it('allows only one concurrent amenity-only writer with the same version', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const wifi = await catalog.createAmenity({ code: 'WIFI', name: 'Wi-Fi' });
+    const pool = await catalog.createAmenity({ code: 'POOL', name: 'Pool' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-201'));
+    const attempts = await Promise.allSettled([
+      rooms.update(room.id, '1', { amenityIds: [wifi.id] }),
+      rooms.update(room.id, '1', { amenityIds: [pool.id] }),
+    ]);
+    expect(
+      attempts.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      attempts.find((result) => result.status === 'rejected'),
+    ).toMatchObject({ reason: { errorCode: 'ROOM_VERSION_CONFLICT' } });
+    const winner = attempts.find((result) => result.status === 'fulfilled');
+    if (winner?.status !== 'fulfilled') throw new Error('Expected one winner');
+    expect(await rooms.get(room.id)).toEqual(winner.value);
+  });
+
+  it('does not wait for an existing amenity write lock on a status-only patch', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const wifi = await catalog.createAmenity({ code: 'WIFI', name: 'Wi-Fi' });
+    const room = await rooms.create(roomInput(type.id, [wifi.id], 'A-201'));
+    const runner = dataSource.createQueryRunner();
+    await runner.connect();
+    await runner.startTransaction();
+    let pending: ReturnType<RoomsService['update']> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await runner.manager.findOneOrFail(Amenity, {
+        where: { id: wifi.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      pending = rooms.update(room.id, '1', { status: RoomStatus.Maintenance });
+      const result = await Promise.race([
+        pending,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(new Error('Status patch waited on an unchanged amenity')),
+            3000,
+          );
+        }),
+      ]);
+      expect(result).toMatchObject({
+        version: 2,
+        amenities: [{ id: wifi.id }],
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+      await runner.rollbackTransaction();
+      await runner.release();
+      await pending;
+    }
   });
 
   it('hard-deletes the room graph and persists attachment cleanup atomically', async () => {

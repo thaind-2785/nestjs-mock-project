@@ -17,7 +17,9 @@ import {
   ApiNoContentResponse,
   ApiOkResponse,
   ApiTags,
+  ApiResponse,
 } from '@nestjs/swagger';
+import { ErrorResponseDto } from '../common/errors/error-response.dto';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/entities/user.enums';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
@@ -59,10 +61,27 @@ export class AdminRoomsController {
   @ApiHeader({
     name: 'If-Match',
     required: true,
-    description: 'Quoted room version returned by the latest admin read.',
+    description:
+      'One quoted positive decimal room version (1-20 digits). Wildcards, weak tags, and tag lists are unsupported.',
     example: '"1"',
   })
   @ApiOkResponse({ type: AdminRoomResponseDto })
+  @ApiResponse({
+    status: 428,
+    type: ErrorResponseDto,
+    description: 'ROOM_VERSION_REQUIRED: missing or empty If-Match.',
+  })
+  @ApiResponse({
+    status: 400,
+    type: ErrorResponseDto,
+    description: 'ROOM_VERSION_MALFORMED or VALIDATION_FAILED.',
+  })
+  @ApiResponse({
+    status: 412,
+    type: ErrorResponseDto,
+    description:
+      'ROOM_VERSION_CONFLICT: read the current room before retrying.',
+  })
   update(
     @Param() params: RoomIdParamDto,
     @Headers('if-match') versionHeader: string | undefined,

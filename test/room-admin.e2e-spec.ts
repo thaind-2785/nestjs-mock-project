@@ -272,7 +272,7 @@ describe('P3-T02 admin room API (e2e)', () => {
 
     await adminBrowser
       .get('/api/v1/admin/rooms')
-      .query({ query: 'delux', status: 'ACTIVE', beds: 2, view: 'city' })
+      .query({ query: 'delux', status: 'ACTIVE', beds: 2, view: ' city ' })
       .set('Authorization', `Bearer ${adminAccess}`)
       .expect(200)
       .expect((response) => {
@@ -285,11 +285,46 @@ describe('P3-T02 admin room API (e2e)', () => {
       .patch(`/api/v1/admin/rooms/${roomId}`)
       .set('Authorization', `Bearer ${adminAccess}`)
       .send({ status: 'MAINTENANCE' })
-      .expect(409)
+      .expect(428)
       .expect((response) => {
-        expect(response.body).toMatchObject({ code: 'ROOM_VERSION_CONFLICT' });
+        expect(response.body).toMatchObject({ code: 'ROOM_VERSION_REQUIRED' });
       });
 
+    for (const header of ['1', '*', 'W/"1"', '"1", "2"']) {
+      await adminBrowser
+        .patch(`/api/v1/admin/rooms/${roomId}`)
+        .set('Authorization', `Bearer ${adminAccess}`)
+        .set('If-Match', header)
+        .set('Accept-Language', 'vi')
+        .send({ status: 'ACTIVE' })
+        .expect(400)
+        .expect((response) => {
+          expect(response.body).toMatchObject({
+            code: 'ROOM_VERSION_MALFORMED',
+            message:
+              'If-Match phải chứa một phiên bản phòng dạng số nguyên dương trong dấu ngoặc kép.',
+          });
+        });
+    }
+    for (const field of [
+      'roomNumber',
+      'roomTypeId',
+      'bedCount',
+      'basePriceAmount',
+      'currency',
+      'status',
+      'amenityIds',
+    ]) {
+      await adminBrowser
+        .patch(`/api/v1/admin/rooms/${roomId}`)
+        .set('Authorization', `Bearer ${adminAccess}`)
+        .set('If-Match', '"1"')
+        .send({ [field]: null })
+        .expect(400)
+        .expect((response) => {
+          expect(response.body).toMatchObject({ code: 'VALIDATION_FAILED' });
+        });
+    }
     const updated = await adminBrowser
       .patch(`/api/v1/admin/rooms/${roomId}`)
       .set('Authorization', `Bearer ${adminAccess}`)
@@ -320,11 +355,29 @@ describe('P3-T02 admin room API (e2e)', () => {
       .set('Authorization', `Bearer ${adminAccess}`)
       .set('If-Match', '"1"')
       .send({ status: 'ACTIVE' })
-      .expect(409)
+      .expect(412)
       .expect((response) => {
         expect(response.body).toMatchObject({ code: 'ROOM_VERSION_CONFLICT' });
       });
 
+    await adminBrowser
+      .patch(`/api/v1/admin/rooms/${roomId}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .set('If-Match', '"2"')
+      .send({ amenityIds: [amenityId] })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          version: 3,
+          amenities: [{ id: amenityId }],
+        });
+      });
+    await adminBrowser
+      .patch(`/api/v1/admin/rooms/${roomId}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .set('If-Match', '"2"')
+      .send({ amenityIds: [] })
+      .expect(412);
     await adminBrowser
       .delete(`/api/v1/admin/room-types/${roomTypeId}`)
       .set('Authorization', `Bearer ${adminAccess}`)

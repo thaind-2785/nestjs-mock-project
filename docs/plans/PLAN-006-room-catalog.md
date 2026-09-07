@@ -3,7 +3,7 @@
 - Spec: `docs/specs/SPEC-005-room-catalog.md`
 - Status: In progress
 - Owner: Codex primary agent
-- Reviewer (must be independent): Unassigned
+- Reviewer (must be independent): Claude Code, `REVIEW-016` (P3-T02 PR #6 follow-up)
 
 The project owner accepted `SPEC-005` and its production-storage, upload-policy,
 reference-catalog, and currency decisions on 2026-09-04. Implement and explain one
@@ -181,8 +181,8 @@ its own focused evidence.
 - Added the approved admin room-type and amenity CRUD endpoints with trimmed,
   canonical input, deterministic pagination, case-insensitive uniqueness, and
   reference-in-use protection. No mutable business catalog values are seeded.
-- Added physical-room create/list/detail/update/delete APIs. Creation and update lock
-  every referenced catalog row, atomically replace complete amenity assignments, and
+- Added physical-room create/list/detail/update/delete APIs. Creation and update validate
+  referenced catalog rows, atomically replace complete amenity assignments, and
   map concurrent duplicate/reference failures to stable localized errors.
 - Room updates require a strict quoted `If-Match` version. The service locks the room,
   compares the caller version, and saves scalar fields plus amenity replacement in one
@@ -199,3 +199,35 @@ its own focused evidence.
   `MYSQL_PORT=13306 npm run verify` was run as the PR handoff gate: Harness 68/68,
   Compose 8/8, unit 82/82, integration 23/23, and E2E 18/18 passed, followed by a
   successful build. Phase 3 still receives its final review/exit gate in `P3-T06`.
+
+## PR #6 review follow-up (2026-09-07)
+
+- Owner authorized fixes and improvements, with inline rationale for departures
+  from review suggestions. Reuse P3-T02; no schema, migration, dependency, or
+  environment changes. `ADR-0004` records the durable precondition and
+  aggregate-versioning decision.
+- Slice 1: enforce one room version increment for every accepted non-empty PATCH,
+  skip equal amenity assignment rewrites, and lock only incoming amenity references.
+  Preserve the physical-room lock and atomic rollback; reload persisted timestamps.
+- Slice 2: distinguish missing (428), malformed (400), and stale (412) If-Match;
+  reject null for non-nullable catalog inputs; normalize view at the DTO boundary.
+  Update API/spec/Swagger/locales and targeted unit, MySQL, and HTTP regressions.
+- Verification: focused checks during implementation, then one full verify gate,
+  independent review, and disposition of findings before handoff.
+- Compatibility/rollback: clients must handle 428/400/412 instead of the initial
+  grouped 409. Deploy client handling with the API. Reverting this slice restores
+  the old contract but also restores the lost-update bug; prefer a forward fix.
+- Observability: existing request/error logging exposes the new stable codes; no
+  additional sensitive payload logging or external calls.
+- Focused evidence: room policy/DTO unit 16/16 and real-MySQL admin integration
+  6/6 passed, including concurrent amenity writers, atomic rollback, equal-set write
+  avoidance, and status updates while an existing amenity has an exclusive lock.
+  Initial environment failures (sandbox EPERM, then stopped Colima) were resolved
+  by starting Colima and passing Compose smoke for all four dependencies.
+- Handoff evidence: `MYSQL_PORT=13306 npm run verify` passed on 2026-09-07 with
+  Harness 68/68, Compose 8/8, unit 93/93, integration 26/26, E2E 18/18, and a green
+  build. Independent review `REVIEW-016` returned Approve with no Blocker, High, or
+  Medium finding. `LOW-01` (numeric `version` transport) is accepted with rationale
+  as residual risk; `LOW-02` (missing `ADR-0004` cross-reference) is fixed in this
+  spec/plan revision. No gate input changed after the review, so only a
+  documentation `format:check` was rerun.

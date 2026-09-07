@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsEnum,
   IsInt,
@@ -10,6 +10,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { trimAndUppercase } from './catalog-transforms';
 import { RoomStatus } from '../entities/room.enums';
 import { PaginationQueryDto } from './pagination-query.dto';
 import { decimalIdPattern } from './room-id-param.dto';
@@ -40,7 +41,14 @@ export class ListRoomsQueryDto extends PaginationQueryDto {
   @Max(20)
   beds?: number;
 
-  @ApiPropertyOptional({ maxLength: 50, example: 'CITY' })
+  // Normalize at the same boundary as writes; Swagger needs an explicit description.
+  @ApiPropertyOptional({
+    maxLength: 50,
+    example: 'CITY',
+    description:
+      'Trimmed and uppercased before filtering; blank values omit the filter.',
+  })
+  @Transform(trimAndUppercase)
   @IsOptional()
   @IsString()
   @MaxLength(50)

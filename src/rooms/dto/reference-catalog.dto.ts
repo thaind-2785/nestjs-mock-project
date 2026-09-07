@@ -1,12 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import {
+  IsOptional,
+  ValidateIf,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
-const trim = ({ value }: { value: unknown }): unknown =>
-  typeof value === 'string' ? value.trim() : value;
-
-const trimAndUppercase = ({ value }: { value: unknown }): unknown =>
-  typeof value === 'string' ? value.trim().toUpperCase() : value;
+import { trim, trimAndUppercase } from './catalog-transforms';
 
 export class CreateRoomTypeDto {
   @ApiProperty({ minLength: 1, maxLength: 100, example: 'Deluxe' })
@@ -24,10 +26,11 @@ export class CreateRoomTypeDto {
   description?: string | null;
 }
 
+// IsOptional skips null too; skip only undefined for non-nullable PATCH fields.
 export class UpdateRoomTypeDto {
   @ApiPropertyOptional({ minLength: 1, maxLength: 100, example: 'Deluxe' })
   @Transform(trim)
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @IsString()
   @MinLength(1)
   @MaxLength(100)
@@ -60,7 +63,7 @@ export class CreateAmenityDto {
 export class UpdateAmenityDto {
   @ApiPropertyOptional({ minLength: 1, maxLength: 50, example: 'WIFI' })
   @Transform(trimAndUppercase)
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @IsString()
   @MinLength(1)
   @MaxLength(50)
@@ -68,7 +71,7 @@ export class UpdateAmenityDto {
 
   @ApiPropertyOptional({ minLength: 1, maxLength: 100, example: 'Wi-Fi' })
   @Transform(trim)
-  @IsOptional()
+  @ValidateIf((_object, value: unknown) => value !== undefined)
   @IsString()
   @MinLength(1)
   @MaxLength(100)

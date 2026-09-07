@@ -57,9 +57,22 @@ export const roomsErrors = {
       'ROOM_NUMBER_CONFLICT',
       errorMessageKeys.roomNumberConflict,
     ),
+  roomVersionRequired: () =>
+    new ApplicationException(
+      HttpStatus.PRECONDITION_REQUIRED,
+      'ROOM_VERSION_REQUIRED',
+      errorMessageKeys.roomVersionRequired,
+    ),
+  roomVersionMalformed: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'ROOM_VERSION_MALFORMED',
+      errorMessageKeys.roomVersionMalformed,
+    ),
+  // RFC 9110 uses 412 for failed If-Match, unlike the review's suggested 409.
   roomVersionConflict: () =>
     new ApplicationException(
-      HttpStatus.CONFLICT,
+      HttpStatus.PRECONDITION_FAILED,
       'ROOM_VERSION_CONFLICT',
       errorMessageKeys.roomVersionConflict,
     ),

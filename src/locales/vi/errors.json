@@ -29,5 +29,7 @@
   "userInactive": "Tài khoản này đã bị vô hiệu hóa.",
   "userNotFound": "Không tìm thấy người dùng.",
   "unprocessableEntity": "Không thể xử lý yêu cầu.",
-  "validationFailed": "Dữ liệu yêu cầu không hợp lệ."
+  "validationFailed": "Dữ liệu yêu cầu không hợp lệ.",
+  "roomVersionRequired": "Hãy gửi phiên bản phòng hiện tại trong dấu ngoặc kép qua If-Match.",
+  "roomVersionMalformed": "If-Match phải chứa một phiên bản phòng dạng số nguyên dương trong dấu ngoặc kép."
 }

@@ -24,6 +24,8 @@ export const errorMessageKeys = {
   roomTypeNameConflict: 'errors.roomTypeNameConflict',
   roomTypeNotFound: 'errors.roomTypeNotFound',
   roomVersionConflict: 'errors.roomVersionConflict',
+  roomVersionRequired: 'errors.roomVersionRequired',
+  roomVersionMalformed: 'errors.roomVersionMalformed',
   selfDeactivationForbidden: 'errors.selfDeactivationForbidden',
   sessionInvalid: 'errors.sessionInvalid',
   serviceUnavailable: 'errors.serviceUnavailable',

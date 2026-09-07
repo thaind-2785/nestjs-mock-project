@@ -7,6 +7,18 @@ standard error body `{ statusCode, code, message, details?, requestId }`.
 `Required` means required by the brief or by a mentor technique. `Selected` is an
 optional product feature intentionally included to demonstrate a required technique.
 
+## Admin room update preconditions
+
+`PATCH /admin/rooms/:roomId` requires `If-Match: "<version>"`: one positive
+1-20 digit decimal version in double quotes. Wildcards (`*`), weak tags (`W/"1"`),
+and lists are unsupported. Missing/empty headers return `428 ROOM_VERSION_REQUIRED`,
+malformed/unsupported values return `400 ROOM_VERSION_MALFORMED`, and stale versions
+return `412 ROOM_VERSION_CONFLICT` (superseding the initial PR #6 grouped 409).
+Every successful non-empty PATCH advances version exactly once, even unchanged
+values; equal amenity sets skip assignment rewrites. Only `viewCode` is nullable
+on room writes; reference catalog writes allow null only for `description`.
+The admin list `view` filter is trimmed and uppercased before validation/filtering.
+
 ## HTTP endpoints
 
 | ID                 | Method and path                                    | Actor             | Scope              | Purpose / key contract                                                                         |

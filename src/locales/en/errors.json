@@ -29,5 +29,7 @@
   "userInactive": "This account is inactive.",
   "userNotFound": "User not found.",
   "unprocessableEntity": "The request could not be processed.",
-  "validationFailed": "Request validation failed."
+  "validationFailed": "Request validation failed.",
+  "roomVersionRequired": "Send the current quoted room version in If-Match.",
+  "roomVersionMalformed": "If-Match must contain one quoted positive decimal room version."
 }

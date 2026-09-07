@@ -31,6 +31,8 @@ interface ErrorTranslations {
     roomTypeNameConflict: string;
     roomTypeNotFound: string;
     roomVersionConflict: string;
+    roomVersionRequired: string;
+    roomVersionMalformed: string;
     selfDeactivationForbidden: string;
     sessionInvalid: string;
     serviceUnavailable: string;

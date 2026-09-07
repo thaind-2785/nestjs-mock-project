@@ -306,7 +306,10 @@ describe('Application bootstrap (e2e)', () => {
         string,
         {
           get?: { parameters?: Array<{ name?: string }> };
-          patch?: { parameters?: Array<{ name?: string }> };
+          patch?: {
+            parameters?: Array<{ name?: string }>;
+            responses?: Record<string, unknown>;
+          };
         }
       >;
       components?: {
@@ -362,6 +365,11 @@ describe('Application bootstrap (e2e)', () => {
         (parameter) => parameter.name,
       ),
     ).toEqual(expect.arrayContaining(['roomId', 'If-Match']));
+    for (const status of ['400', '412', '428']) {
+      expect(
+        documentBody.paths['/api/v1/admin/rooms/{roomId}'].patch?.responses,
+      ).toHaveProperty(status);
+    }
 
     await app.close();
     app = await createTestApplication({

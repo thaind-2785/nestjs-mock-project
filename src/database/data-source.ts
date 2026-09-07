@@ -18,7 +18,6 @@ import { StorageCleanupTask } from '../files/entities/storage-cleanup-task.entit
 import { createTypeOrmOptions } from './database.options';
 import { CreateAuthRbacSchema1788380000000 } from './migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from './migrations/1788490000000-CreateRoomCatalogSchema';
-import { AddPublicRoomSearchIndex1788660000000 } from './migrations/1788660000000-AddPublicRoomSearchIndex';
 
 loadRepositoryEnvironment();
 const environment = validateEnvironment(process.env);
@@ -42,7 +41,6 @@ export default new DataSource(
     migrations: [
       CreateAuthRbacSchema1788380000000,
       CreateRoomCatalogSchema1788490000000,
-      AddPublicRoomSearchIndex1788660000000,
     ],
   }),
 );

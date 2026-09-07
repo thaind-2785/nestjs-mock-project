@@ -182,8 +182,10 @@ With dates, `checkIn < checkOut` is required and each returned room has one `ACT
 window is sufficient; Phase 4 additionally excludes room-wide overlapping
 `CONFIRMED` bookings. Supplying only one date returns `400 DATE_RANGE_INCOMPLETE`.
 
-At most 20 repeated `amenity` values are accepted, and a `maxPrice` below
-`minPrice` returns `400 VALIDATION_FAILED`. A `checkOut` that does not advance past
+A `currency` without price bounds narrows the catalog to that currency. Repeated
+`amenity` values are deduplicated and then capped at 20, `page` is capped at 10000
+because deep pagination costs a large offset scan, and a `maxPrice` below `minPrice`
+returns `400 VALIDATION_FAILED`. A `checkOut` that does not advance past
 `checkIn` returns `400 STAY_RANGE_INVALID`.
 
 The response is `{ items, page, pageSize, total }`, ordered by room ID ascending.
@@ -192,6 +194,10 @@ amenities, thumbnail, and `available` only when a date pair was supplied. It doe
 expose the physical room number. `GET /rooms/:roomId` returns the same public fields
 plus ordered active album images; an optional date pair follows the same rules.
 Inactive/maintenance rooms return generic `404 ROOM_NOT_FOUND` publicly.
+
+The catalog and availability fields ship with the public search slice; the thumbnail
+and album fields are added by the room image slice that owns attachment storage and
+presigned reads, and no field shipped earlier changes shape when they arrive.
 
 ### Room image contract
 

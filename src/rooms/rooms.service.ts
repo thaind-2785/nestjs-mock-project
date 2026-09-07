@@ -24,6 +24,7 @@ import {
   toAmenityResponse,
   toRoomTypeResponse,
 } from './reference-catalog.service';
+import { applyRoomAttributeFilters } from './room-filters';
 import { lockRoom } from './room-lock';
 import { hasDefinedUpdate } from './room-version';
 import { isDatabaseError, roomsErrors } from './rooms.errors';
@@ -84,19 +85,7 @@ export class RoomsService {
     }
     if (query.status)
       builder.andWhere('room.status = :status', { status: query.status });
-    if (query.roomTypeId) {
-      builder.andWhere('room.room_type_id = :roomTypeId', {
-        roomTypeId: query.roomTypeId,
-      });
-    }
-    if (query.beds !== undefined) {
-      builder.andWhere('room.bed_count = :beds', { beds: query.beds });
-    }
-    if (query.view) {
-      builder.andWhere('room.view_code = :view', {
-        view: query.view,
-      });
-    }
+    applyRoomAttributeFilters(builder, query);
     const [rooms, total] = await builder
       .orderBy('room.id', 'ASC')
       .skip((query.page - 1) * query.pageSize)

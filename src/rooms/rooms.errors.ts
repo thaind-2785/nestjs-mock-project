@@ -135,7 +135,9 @@ export const roomsErrors = {
       HttpStatus.BAD_REQUEST,
       'VALIDATION_FAILED',
       errorMessageKeys.validationFailed,
-      { errors: [{ field: 'maxPrice', codes: ['min'] }] },
+      // Not a class-validator constraint name: a client must be able to tell an
+      // inverted range from `maxPrice` failing its own `@Min(0)`.
+      { errors: [{ field: 'maxPrice', codes: ['priceRangeInverted'] }] },
     ),
   emptyUpdate: () =>
     new ApplicationException(

@@ -32,10 +32,18 @@ export function resolveStayRange(query: StayQuery): StayRange | undefined {
   return { checkIn, checkOut };
 }
 
-/** Deduplicated and ordered so the same filter set always produces one SQL shape. */
+/**
+ * Deduplicated and numerically ordered so the same requested set always produces
+ * one SQL shape. Decimal ID strings must not be compared lexicographically, or
+ * `['9', '10']` and `['10', '9']` would build different queries.
+ */
 export function resolveAmenityFilter(amenityIds?: readonly string[]): string[] {
   if (!amenityIds?.length) return [];
-  return [...new Set(amenityIds)].sort();
+  return [...new Set(amenityIds)].sort((first, second) =>
+    first.length === second.length
+      ? first.localeCompare(second)
+      : first.length - second.length,
+  );
 }
 
 export function assertPriceRange(query: PriceQuery): void {

@@ -305,7 +305,10 @@ describe('Application bootstrap (e2e)', () => {
       paths: Record<
         string,
         {
-          get?: { parameters?: Array<{ name?: string }> };
+          get?: {
+            parameters?: Array<{ name?: string }>;
+            security?: unknown[];
+          };
           patch?: {
             parameters?: Array<{ name?: string }>;
             responses?: Record<string, unknown>;
@@ -333,12 +336,26 @@ describe('Application bootstrap (e2e)', () => {
     expect(documentBody.paths).toHaveProperty('/api/v1/admin/amenities');
     expect(documentBody.paths).toHaveProperty('/api/v1/admin/rooms');
     expect(documentBody.paths).toHaveProperty('/api/v1/admin/rooms/{roomId}');
+    expect(documentBody.paths).toHaveProperty(
+      '/api/v1/admin/rooms/{roomId}/times',
+    );
+    expect(documentBody.paths).toHaveProperty(
+      '/api/v1/admin/rooms/{roomId}/times/{roomTimeId}',
+    );
+    expect(documentBody.paths).toHaveProperty('/api/v1/rooms');
+    expect(documentBody.paths).toHaveProperty('/api/v1/rooms/{roomId}');
     expect(documentBody.components?.schemas).toHaveProperty('ErrorResponseDto');
     expect(documentBody.components?.schemas).toHaveProperty(
       'AccessTokenResponseDto',
     );
     expect(documentBody.components?.schemas).toHaveProperty(
       'AdminRoomResponseDto',
+    );
+    expect(documentBody.components?.schemas).toHaveProperty(
+      'AdminRoomTimeResponseDto',
+    );
+    expect(documentBody.components?.schemas).toHaveProperty(
+      'PublicRoomResponseDto',
     );
     expect(documentBody.components?.securitySchemes).toHaveProperty('bearer');
     expect(documentBody.components?.securitySchemes).toHaveProperty(
@@ -370,6 +387,32 @@ describe('Application bootstrap (e2e)', () => {
         documentBody.paths['/api/v1/admin/rooms/{roomId}'].patch?.responses,
       ).toHaveProperty(status);
     }
+    expect(
+      documentBody.paths['/api/v1/rooms'].get?.parameters?.map(
+        (parameter) => parameter.name,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        'checkIn',
+        'checkOut',
+        'amenity',
+        'beds',
+        'view',
+        'roomTypeId',
+        'minPrice',
+        'maxPrice',
+        'currency',
+        'page',
+        'pageSize',
+      ]),
+    );
+    // The public catalog must stay reachable without a bearer requirement.
+    for (const path of ['/api/v1/rooms', '/api/v1/rooms/{roomId}']) {
+      expect(documentBody.paths[path].get?.security).toBeUndefined();
+    }
+    expect(
+      documentBody.paths['/api/v1/admin/rooms/{roomId}/times'].get?.security,
+    ).toEqual([{ bearer: [] }]);
 
     await app.close();
     app = await createTestApplication({

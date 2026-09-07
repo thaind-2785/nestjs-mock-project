@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { plainToInstance } from 'class-transformer';
 import mysql from 'mysql2/promise';
 import { DataSource } from 'typeorm';
 import { AuthIdentity } from '../src/auth/entities/auth-identity.entity';
@@ -10,7 +11,6 @@ import { DatabaseConnectionService } from '../src/database/database-connection.s
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
-import { AddPublicRoomSearchIndex1788660000000 } from '../src/database/migrations/1788660000000-AddPublicRoomSearchIndex';
 import { Attachment } from '../src/files/entities/attachment.entity';
 import { StorageCleanupTask } from '../src/files/entities/storage-cleanup-task.entity';
 import { SearchRoomsQueryDto } from '../src/rooms/dto/public-room-query.dto';
@@ -21,6 +21,7 @@ import { RoomType } from '../src/rooms/entities/room-type.entity';
 import { Room } from '../src/rooms/entities/room.entity';
 import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { ReferenceCatalogService } from '../src/rooms/reference-catalog.service';
+import { resolveAmenityFilter } from '../src/rooms/room-search-policy';
 import { RoomSearchService } from '../src/rooms/room-search.service';
 import { ZeroRoomTimeUsageRepository } from '../src/rooms/room-time-usage.repository';
 import { RoomTimesService } from '../src/rooms/room-times.service';
@@ -88,7 +89,6 @@ describe('Phase 3 public room search', () => {
           migrations: [
             CreateAuthRbacSchema1788380000000,
             CreateRoomCatalogSchema1788490000000,
-            AddPublicRoomSearchIndex1788660000000,
           ],
         },
       ),
@@ -142,10 +142,16 @@ describe('Phase 3 public room search', () => {
         roomType: { id: type.id, name: 'Deluxe' },
       },
     ]);
-    // Public payloads never expose the physical room number or availability
-    // claims the caller did not ask for.
+    // Public payloads never expose the physical room number, the room status,
+    // availability the caller did not ask for, or internal audit timestamps.
     expect(result.items[0]).not.toHaveProperty('roomNumber');
+    expect(result.items[0]).not.toHaveProperty('status');
     expect(result.items[0]).not.toHaveProperty('available');
+    expect(Object.keys(result.items[0].roomType).sort()).toEqual([
+      'description',
+      'id',
+      'name',
+    ]);
   });
 
   it('applies all-of amenity semantics without duplicating rooms or inflating total', async () => {
@@ -177,6 +183,9 @@ describe('Phase 3 public room search', () => {
         .total,
     ).toBe(0);
     expect((await search.search(query({ amenity: [wifi.id] }))).total).toBe(2);
+    // Amenity IDs are decimal strings: ordering them lexicographically would
+    // build a different query for the same requested set.
+    expect(resolveAmenityFilter(['10', '9', '10'])).toEqual(['9', '10']);
   });
 
   it('filters by room type, beds, view, and price within one currency', async () => {
@@ -209,6 +218,20 @@ describe('Phase 3 public room search', () => {
         (item) => item.id,
       ),
     ).toEqual([expensive.id]);
+    // The DTO normalizes the catalog code at the boundary, so a lowercase or
+    // padded filter matches the stored uppercase value.
+    expect(
+      (
+        await search.search(
+          plainToInstance(SearchRoomsQueryDto, { view: '  sea  ' }),
+        )
+      ).items.map((item) => item.id),
+    ).toEqual([expensive.id]);
+    // A blank value omits the filter rather than matching a blank view code.
+    expect(
+      (await search.search(plainToInstance(SearchRoomsQueryDto, { view: ' ' })))
+        .total,
+    ).toBe(3);
     expect(
       (
         await search.search(

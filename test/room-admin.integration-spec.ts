@@ -10,7 +10,6 @@ import { DatabaseConnectionService } from '../src/database/database-connection.s
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
-import { AddPublicRoomSearchIndex1788660000000 } from '../src/database/migrations/1788660000000-AddPublicRoomSearchIndex';
 import {
   AttachmentAssociationType,
   AttachmentObjectType,
@@ -93,7 +92,6 @@ describe('Phase 3 room administration persistence', () => {
           migrations: [
             CreateAuthRbacSchema1788380000000,
             CreateRoomCatalogSchema1788490000000,
-            AddPublicRoomSearchIndex1788660000000,
           ],
         },
       ),
@@ -537,6 +535,72 @@ describe('Phase 3 room administration persistence', () => {
       .where('roomTime.id = :id', { id: created.id })
       .getRawOne<{ availableFrom: string }>();
     expect(stored?.availableFrom).toBe('2026-10-01');
+  });
+
+  it('keeps window creation independent across physical rooms', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const roomA = await rooms.create(roomInput(type.id, [], 'A-701'));
+    const roomB = await rooms.create(roomInput(type.id, [], 'A-702'));
+    // Skewed statistics: many windows concentrated on one room make a
+    // status-leading index look cheaper than the room-scoped one. Under
+    // REPEATABLE READ the overlap read takes next-key locks on whichever index
+    // the optimizer picks, so a status-leading index would spread its gap locks
+    // across every room and make independent rooms block each other. A rejected
+    // `room_times (status, available_from, available_to, room_id)` candidate did
+    // exactly that; this test fails if such an index or query change returns.
+    const values: string[] = [];
+    for (let index = 0; index < 300; index += 1) {
+      const from = `2027-01-${String((index % 27) + 1).padStart(2, '0')}`;
+      values.push(`(${roomA.id}, '${from}', '2027-02-01', 'INACTIVE')`);
+    }
+    await dataSource.query(
+      `INSERT INTO room_times (room_id, available_from, available_to, status) VALUES ${values.join(',')}`,
+    );
+    await dataSource.query('ANALYZE TABLE room_times');
+
+    let overlapSql = '';
+    const captured = jest
+      .spyOn(dataSource.logger, 'logQuery')
+      .mockImplementation((sql) => {
+        if (/FROM `room_times`.*FOR UPDATE/i.test(sql)) overlapSql = sql;
+      });
+    await roomTimes.create(roomA.id, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+      status: RoomTimeStatus.Active,
+    });
+    captured.mockRestore();
+    expect(overlapSql).not.toBe('');
+
+    const holder = dataSource.createQueryRunner();
+    const other = dataSource.createQueryRunner();
+    await holder.connect();
+    await other.connect();
+    try {
+      // Fail fast instead of waiting out the server default.
+      await other.query('SET SESSION innodb_lock_wait_timeout = 2');
+      await holder.startTransaction();
+      await holder.query(overlapSql, [
+        roomA.id,
+        RoomTimeStatus.Active,
+        '2026-10-25',
+        '2026-10-21',
+      ]);
+      await other.startTransaction();
+      await expect(
+        other.query(overlapSql, [
+          roomB.id,
+          RoomTimeStatus.Active,
+          '2027-06-10',
+          '2027-06-01',
+        ]),
+      ).resolves.toEqual([]);
+    } finally {
+      if (other.isTransactionActive) await other.rollbackTransaction();
+      if (holder.isTransactionActive) await holder.rollbackTransaction();
+      await other.release();
+      await holder.release();
+    }
   });
 
   it('waits for the physical-room lock before checking window overlap', async () => {

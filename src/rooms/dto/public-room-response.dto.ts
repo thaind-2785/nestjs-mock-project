@@ -1,12 +1,38 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { AmenityResponseDto, RoomTypeResponseDto } from './room-response.dto';
+
+/**
+ * The public catalog owns its own response shapes. Reusing the admin DTOs would
+ * publish their audit timestamps to anonymous callers and would silently expose
+ * any field a later admin slice adds to them.
+ */
+export class PublicRoomTypeResponseDto {
+  @ApiProperty({ example: '1' })
+  id!: string;
+
+  @ApiProperty({ example: 'Deluxe' })
+  name!: string;
+
+  @ApiPropertyOptional({ nullable: true })
+  description!: string | null;
+}
+
+export class PublicAmenityResponseDto {
+  @ApiProperty({ example: '1' })
+  id!: string;
+
+  @ApiProperty({ example: 'WIFI' })
+  code!: string;
+
+  @ApiProperty({ example: 'Wi-Fi' })
+  name!: string;
+}
 
 export class PublicRoomResponseDto {
   @ApiProperty({ example: '1' })
   id!: string;
 
-  @ApiProperty({ type: RoomTypeResponseDto })
-  roomType!: RoomTypeResponseDto;
+  @ApiProperty({ type: PublicRoomTypeResponseDto })
+  roomType!: PublicRoomTypeResponseDto;
 
   @ApiProperty({ minimum: 1, maximum: 20 })
   bedCount!: number;
@@ -20,8 +46,8 @@ export class PublicRoomResponseDto {
   @ApiProperty({ example: 'VND' })
   currency!: string;
 
-  @ApiProperty({ type: [AmenityResponseDto] })
-  amenities!: AmenityResponseDto[];
+  @ApiProperty({ type: [PublicAmenityResponseDto] })
+  amenities!: PublicAmenityResponseDto[];
 
   @ApiPropertyOptional({
     description:

@@ -1,4 +1,6 @@
 import { HttpStatus, NotFoundException } from '@nestjs/common';
+import englishErrors from '../../locales/en/errors.json';
+import vietnameseErrors from '../../locales/vi/errors.json';
 import { ApplicationException } from './application.exception';
 import { describeException, errorMessageKeys } from './error-descriptor';
 import {
@@ -7,6 +9,15 @@ import {
 } from './validation-errors';
 
 describe('error descriptors', () => {
+  it('keeps every stable message key present in both locales', () => {
+    const keys = Object.keys(errorMessageKeys).sort();
+    expect(Object.keys(englishErrors).sort()).toEqual(keys);
+    expect(Object.keys(vietnameseErrors).sort()).toEqual(keys);
+    for (const [key, value] of Object.entries(errorMessageKeys)) {
+      expect(value).toBe(`errors.${key}`);
+    }
+  });
+
   it('maps framework exceptions without exposing their raw messages', () => {
     const descriptor = describeException(
       new NotFoundException('private-resource-value'),

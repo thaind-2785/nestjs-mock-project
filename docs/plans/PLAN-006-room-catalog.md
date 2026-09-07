@@ -3,9 +3,9 @@
 - Spec: `docs/specs/SPEC-005-room-catalog.md`
 - Status: In progress
 - Owner: Codex primary agent
-- Reviewer (must be independent): Claude Code, `REVIEW-016` (P3-T02 PR #6 follow-up)
-  and `REVIEW-018` (P3-T03 follow-up); Codex independent review agent, `REVIEW-017`
-  (P3-T03 room-time administration)
+- Reviewer (must be independent): Claude Code, `REVIEW-016` (P3-T02 PR #6 follow-up),
+  `REVIEW-018` (P3-T03 follow-up), and `REVIEW-019` (P3-T04 public catalog); Codex
+  independent review agent, `REVIEW-017` (P3-T03 room-time administration)
 
 The project owner accepted `SPEC-005` and its production-storage, upload-policy,
 reference-catalog, and currency decisions on 2026-09-04. Implement and explain one
@@ -60,7 +60,7 @@ spec adds pixel/dimension processing.
 | `P3-T01` | Accepted contracts, validated catalog/upload/storage policy, locked dependencies, TypeORM entities, and reversible Phase 3 schema exist    | `docs/specs`, `docs/decisions`, `docs/architecture`, `src/config`, `src/rooms/entities`, `src/files` | Create room types, amenities, rooms/version, assignments, windows, attachments, and cleanup persistence | Config/entity unit; schema constraint/index and migration run/revert integration                       | Complete |
 | `P3-T02` | An admin can create/list/read/version-update/deactivate/hard-delete eligible rooms with atomic amenity assignment                          | `src/rooms` admin controller/services/repositories/DTOs; optional reference-catalog APIs             | Uses Phase 3 schema; seed/reference migration only if owner selects fixed catalog                       | Room policy/service unit; CRUD/version/unique/reference/delete integration and admin/user/guest E2E    | Complete |
 | `P3-T03` | Admin nested window APIs enforce target binding, history/use policy seams, and non-overlap under concurrent changes                        | `src/rooms` window controller/service/repository/DTOs                                                | None                                                                                                    | Overlap/containment unit; real MySQL locking/concurrency/adjacency/nested-mismatch integration and E2E | Complete |
-| `P3-T04` | Guests can browse public active rooms and query deterministic window-contained availability with all documented filters                    | `src/rooms` public controller/search service/query DTOs/response DTOs                                | Add indexes only if query-plan evidence requires a compatible migration revision                        | Query policy unit; SQL/filter/pagination integration; public list/detail/date/error/localization E2E   | Complete |
+| `P3-T04` | Guests can browse public active rooms and query deterministic window-contained availability with all documented filters                    | `src/rooms` public controller/search service/query DTOs/response DTOs                                | None: query-plan evidence rejected every candidate index                                                | Query policy unit; SQL/filter/pagination integration; public list/detail/date/error/localization E2E   | Complete |
 | `P3-T05` | Admin thumbnail/album upload, replacement, target-bound delete, atomic reorder, private presign, and durable cleanup retry work end to end | `src/files`, room image controller/DTO mapping, storage adapter, cleanup repository/CLI              | Uses attachment/cleanup schema from P3-T01                                                              | MIME/key/policy unit; MySQL+MinIO transaction/race/failure/retry integration; multipart/RBAC E2E       | Pending  |
 | `P3-T06` | Public/operator documentation agrees and Phase 3 meets its exit gate with independent review findings dispositioned                        | Swagger, locales, `.env.example`, `README.md`, API/database/ADR docs, spec/plan/review               | Prove production migration state; no ad hoc schema changes                                              | Focused regressions, full `npm run verify`, independent security/data/concurrency/storage review       | Pending  |
 
@@ -299,21 +299,38 @@ its own focused evidence.
   amenity assignments, captured with `EXPLAIN` on the executed statements:
   - browse and amenity paths read `rooms` through `idx_rooms_status_type` as a
     covering index; the temporary/filesort comes from the paginated `DISTINCT` id pass
-    that TypeORM emits, not from a missing index.
+    that TypeORM emits, not from a missing index. Replacing `skip`/`take` with
+    `limit`/`offset` was measured too: it saves one statement but loses the covering
+    index on the row query and keeps the sort, so the shape stays as it is and matches
+    the admin list.
   - the type path uses the same index with both columns.
-  - the availability path materializes a semijoin over `room_times` and scanned the
+  - the availability path materializes a semijoin over `room_times` and scans the
     whole table (`key: null`, 2000 rows).
-  - A candidate `rooms (status, id)` index changed no plan on any path and was
-    rejected. A candidate `room_times (status, available_from, available_to, room_id)`
-    turned the availability scan into a covering index read of 668 rows on both the
-    page and count statements, so it ships as
-    `AddPublicRoomSearchIndex1788660000000`, which is additive and reversible.
+  - No index ships. A candidate `rooms (status, id)` changed no plan on any path. A
+    candidate `room_times (status, available_from, available_to, room_id)` did turn the
+    availability scan into a covering read of 668 rows, but with skewed statistics the
+    optimizer then chose it for the overlap `SELECT ... FOR UPDATE` as well: under
+    `REPEATABLE READ` its next-key locks are keyed on `status` first, so window
+    creation for two different rooms blocked with a lock-wait timeout. Pinning that one
+    query with `USE INDEX` restored independence, but Phase 4 resolves and locks the
+    containing window with the same predicate shape, so any status-leading index stays
+    a standing hazard for the phase that matters most. The candidate is rejected and
+    `test/room-admin.integration-spec.ts` now proves cross-room independence: it fails
+    with a lock-wait timeout if such an index returns.
 - Room images are deliberately absent from the public payload until `P3-T05` owns the
   attachment and presign work. `PublicRoomResponseDto` is the single place where the
   thumbnail and the ordered album that `SPEC-005` documents will be added, so no field
   shipped here has to change shape.
-- Focused evidence: unit 9/9 across the search policy and the public OpenAPI contract,
-  the new real-MySQL public search suite 6/6, the Phase 3 schema suite 4/4 including a
-  two-step revert that proves the index migration reverts without dropping tables, and
+- `REVIEW-019` found no Blocker but two High findings, both fixed: the candidate index
+  described above widened the overlap lock scope across rooms, and the public payload
+  reused the admin room-type/amenity DTOs and so published their audit timestamps to
+  anonymous callers. It also drove the consistent-snapshot read, the `page` cap, a
+  non-colliding cross-field price code, dedup-before-cap for amenities, and the shared
+  filter/currency/DTO extraction. Two findings are accepted with rationale: `available`
+  stays list-filtered per `SPEC-005`, and the public catalog stays without a rate
+  limiter because the spec bounds it by page, page size, and filter cardinality.
+- Focused evidence: unit 10/10 across the search policy, the public OpenAPI contract,
+  and locale/message-key parity; the new real-MySQL public search suite 6/6; the room
+  administration suite 13/13 including the new cross-room lock independence case; and
   the public E2E journey 1/1 covering guest access, filters, availability, validation
   details, localization, and generic not-found.

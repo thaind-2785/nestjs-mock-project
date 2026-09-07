@@ -1,29 +1,32 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional, IntersectionType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
   IsDateString,
   IsInt,
-  IsISO4217CurrencyCode,
   IsOptional,
   IsString,
   Matches,
   Max,
-  MaxLength,
   Min,
   ValidateIf,
 } from 'class-validator';
 import { maxAmenityFilterCount } from '../room-search-policy';
-import { trimAndUppercase } from './catalog-transforms';
+import { IsCurrencyCode } from './currency-code.decorator';
 import { hotelDatePattern, hotelDateValidationOptions } from './hotel-date';
 import { PaginationQueryDto } from './pagination-query.dto';
+import { RoomAttributeFilterQueryDto } from './room-filter-query.dto';
 import { decimalIdPattern } from './room-id-param.dto';
 
-// Express exposes a single repeated parameter as a scalar; normalize before validating.
-const toArray = ({ value }: { value: unknown }): unknown => {
+/**
+ * Express exposes a single repeated parameter as a scalar. Deduplicate here so the
+ * cardinality cap measures the effective filter: a checkbox UI that resubmits the
+ * same amenity many times asks for one amenity, not many.
+ */
+const toDistinctArray = ({ value }: { value: unknown }): unknown => {
   if (value === undefined) return undefined;
-  return Array.isArray(value) ? value : [value];
+  return [...new Set(Array.isArray(value) ? value : [value])];
 };
 
 export class RoomStayQueryDto {
@@ -42,55 +45,26 @@ export class RoomStayQueryDto {
   checkOut?: string;
 }
 
-export class SearchRoomsQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({ format: 'date', example: '2026-10-05' })
-  @IsOptional()
-  @IsString()
-  @Matches(hotelDatePattern)
-  @IsDateString(hotelDateValidationOptions)
-  checkIn?: string;
-
-  @ApiPropertyOptional({ format: 'date', example: '2026-10-08' })
-  @IsOptional()
-  @IsString()
-  @Matches(hotelDatePattern)
-  @IsDateString(hotelDateValidationOptions)
-  checkOut?: string;
-
+// The stay pair is validated identically on both public routes, so the search
+// query is the paginated intersection of it rather than a second copy.
+export class SearchRoomsQueryDto extends IntersectionType(
+  RoomStayQueryDto,
+  RoomAttributeFilterQueryDto,
+  PaginationQueryDto,
+) {
   @ApiPropertyOptional({
     type: [String],
     maxItems: maxAmenityFilterCount,
     description:
       'Repeatable amenity ID. A room must have every requested amenity.',
   })
-  @Transform(toArray)
+  @Transform(toDistinctArray)
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(maxAmenityFilterCount)
   @IsString({ each: true })
   @Matches(decimalIdPattern, { each: true })
   amenity?: string[];
-
-  @ApiPropertyOptional({ example: '1', pattern: decimalIdPattern.source })
-  @IsOptional()
-  @IsString()
-  @Matches(decimalIdPattern)
-  roomTypeId?: string;
-
-  @ApiPropertyOptional({ minimum: 1, maximum: 20, type: Number })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(20)
-  beds?: number;
-
-  @ApiPropertyOptional({ maxLength: 50, example: 'CITY' })
-  @Transform(trimAndUppercase)
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  view?: string;
 
   @ApiPropertyOptional({ minimum: 0, type: Number, example: 1000000 })
   @IsOptional()
@@ -114,15 +88,12 @@ export class SearchRoomsQueryDto extends PaginationQueryDto {
     example: 'VND',
     description: 'Required when minPrice or maxPrice is supplied.',
   })
-  @Transform(trimAndUppercase)
   @ValidateIf(
     (query: SearchRoomsQueryDto, value: unknown) =>
       value !== undefined ||
       query.minPrice !== undefined ||
       query.maxPrice !== undefined,
   )
-  @IsString()
-  @IsISO4217CurrencyCode()
-  @Matches(/^[A-Z]{3}$/)
+  @IsCurrencyCode()
   currency?: string;
 }

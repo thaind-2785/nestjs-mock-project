@@ -9,7 +9,6 @@ import { validateEnvironment } from '../src/config/environment.validation';
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
-import { AddPublicRoomSearchIndex1788660000000 } from '../src/database/migrations/1788660000000-AddPublicRoomSearchIndex';
 import {
   AttachmentAssociationType,
   AttachmentObjectType,
@@ -84,7 +83,6 @@ describe('Phase 3 room catalog persistence', () => {
           migrations: [
             CreateAuthRbacSchema1788380000000,
             CreateRoomCatalogSchema1788490000000,
-            AddPublicRoomSearchIndex1788660000000,
           ],
         },
       ),
@@ -221,21 +219,11 @@ describe('Phase 3 room catalog persistence', () => {
   });
 
   it('reverts only the Phase 3 schema and reapplies it cleanly', async () => {
-    // The public search index is additive, so reverting it must leave the
-    // Phase 3 tables in place.
-    expect(await roomTimeIndexNames()).toContain('idx_room_times_status_range');
-    await dataSource.undoLastMigration();
-    expect(await roomTimeIndexNames()).not.toContain(
-      'idx_room_times_status_range',
-    );
-    expect(await phaseThreeTables()).toEqual(['attachments', 'rooms', 'users']);
-
     await dataSource.undoLastMigration();
     expect(await phaseThreeTables()).toEqual(['users']);
 
     await dataSource.runMigrations();
     expect(await phaseThreeTables()).toEqual(['attachments', 'rooms', 'users']);
-    expect(await roomTimeIndexNames()).toContain('idx_room_times_status_range');
   });
 
   async function phaseThreeTables(): Promise<string[]> {
@@ -245,14 +233,6 @@ describe('Phase 3 room catalog persistence', () => {
        ORDER BY TABLE_NAME`,
     );
     return tables.map((row) => row.TABLE_NAME);
-  }
-
-  async function roomTimeIndexNames(): Promise<string[]> {
-    const indexes = await dataSource.query<Array<{ INDEX_NAME: string }>>(
-      `SELECT DISTINCT INDEX_NAME FROM information_schema.statistics
-       WHERE table_schema = DATABASE() AND TABLE_NAME = 'room_times'`,
-    );
-    return indexes.map((row) => row.INDEX_NAME);
   }
 
   async function createCatalogGraph(): Promise<{

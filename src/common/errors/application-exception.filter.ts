@@ -34,8 +34,6 @@ interface ErrorTranslations {
     roomTimeOverlap: string;
     roomTimeRangeInvalid: string;
     roomTypeInUse: string;
-    stayDateRangeIncomplete: string;
-    stayRangeInvalid: string;
     roomTypeNameConflict: string;
     roomTypeNotFound: string;
     roomVersionConflict: string;
@@ -44,6 +42,8 @@ interface ErrorTranslations {
     selfDeactivationForbidden: string;
     sessionInvalid: string;
     serviceUnavailable: string;
+    stayDateRangeIncomplete: string;
+    stayRangeInvalid: string;
     tooManyRequests: string;
     unauthorized: string;
     userInactive: string;

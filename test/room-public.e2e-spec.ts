@@ -22,9 +22,9 @@ import { validateEnvironment } from '../src/config/environment.validation';
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
-import { AddPublicRoomSearchIndex1788660000000 } from '../src/database/migrations/1788660000000-AddPublicRoomSearchIndex';
 import { Attachment } from '../src/files/entities/attachment.entity';
 import { StorageCleanupTask } from '../src/files/entities/storage-cleanup-task.entity';
+import { maxPageNumber } from '../src/rooms/dto/pagination-query.dto';
 import { maxAmenityFilterCount } from '../src/rooms/room-search-policy';
 import { Amenity } from '../src/rooms/entities/amenity.entity';
 import { RoomAmenity } from '../src/rooms/entities/room-amenity.entity';
@@ -142,7 +142,6 @@ describe('Phase 3 public room API (e2e)', () => {
           migrations: [
             CreateAuthRbacSchema1788380000000,
             CreateRoomCatalogSchema1788490000000,
-            AddPublicRoomSearchIndex1788660000000,
           ],
         },
       ),
@@ -185,6 +184,16 @@ describe('Phase 3 public room API (e2e)', () => {
     expect(firstItem).not.toHaveProperty('roomNumber');
     expect(firstItem).not.toHaveProperty('available');
     expect(firstItem).not.toHaveProperty('status');
+    // Nested catalog objects are public shapes, not the admin DTOs, so no audit
+    // timestamp reaches an anonymous caller.
+    expect(Object.keys(firstItem.roomType).sort()).toEqual([
+      'description',
+      'id',
+      'name',
+    ]);
+    for (const amenity of firstItem.amenities) {
+      expect(Object.keys(amenity).sort()).toEqual(['code', 'id', 'name']);
+    }
 
     // Repeated amenity parameters require every requested amenity.
     await guest
@@ -259,7 +268,7 @@ describe('Phase 3 public room API (e2e)', () => {
           maxPrice: 1_000_000,
           currency: 'VND',
         },
-        { field: 'maxPrice' },
+        { field: 'maxPrice', codes: ['priceRangeInverted'] },
       ],
     ] as const) {
       await guest
@@ -273,12 +282,26 @@ describe('Phase 3 public room API (e2e)', () => {
           });
         });
     }
+    // Repeating one amenity asks for one amenity, so the cardinality cap applies
+    // to the deduplicated set.
     await guest
       .get('/api/v1/rooms')
       .query(
         Array.from(
           { length: maxAmenityFilterCount + 1 },
           () => `amenity=${wifiId}`,
+        ).join('&'),
+      )
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toMatchObject({ total: 2 });
+      });
+    await guest
+      .get('/api/v1/rooms')
+      .query(
+        Array.from(
+          { length: maxAmenityFilterCount + 1 },
+          (_value, index) => `amenity=${index + 1}`,
         ).join('&'),
       )
       .expect(400)
@@ -291,6 +314,22 @@ describe('Phase 3 public room API (e2e)', () => {
                 field: 'amenity',
                 codes: ['arrayMaxSize'],
               }),
+            ],
+          },
+        });
+      });
+    // Deep pagination is bounded so one anonymous request cannot demand a huge
+    // OFFSET scan.
+    await guest
+      .get('/api/v1/rooms')
+      .query({ page: maxPageNumber + 1 })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          code: 'VALIDATION_FAILED',
+          details: {
+            errors: [
+              expect.objectContaining({ field: 'page', codes: ['max'] }),
             ],
           },
         });
@@ -314,7 +353,9 @@ describe('Phase 3 public room API (e2e)', () => {
         expect(response.body).toMatchObject({ available: false });
       });
 
-    // Maintenance rooms, absent IDs, and malformed IDs stay indistinguishable.
+    // A hidden room and an absent ID answer identically, so the catalog cannot
+    // be used to enumerate inactive rooms. A malformed ID is a different case:
+    // it never reaches the lookup and is rejected as a validation failure.
     await guest
       .get(`/api/v1/rooms/${hiddenRoomId}`)
       .set('Accept-Language', 'vi')

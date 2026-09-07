@@ -5,7 +5,6 @@ import {
   ArrayUnique,
   IsArray,
   IsEnum,
-  IsISO4217CurrencyCode,
   IsInt,
   IsOptional,
   ValidateIf,
@@ -20,6 +19,7 @@ import { RoomStatus } from '../entities/room.enums';
 import { decimalIdPattern } from './room-id-param.dto';
 
 import { trim, trimAndUppercase } from './catalog-transforms';
+import { IsCurrencyCode } from './currency-code.decorator';
 
 export class CreateRoomDto {
   @ApiProperty({ minLength: 1, maxLength: 50, example: 'A-201' })
@@ -61,10 +61,7 @@ export class CreateRoomDto {
   basePriceAmount!: number;
 
   @ApiProperty({ example: 'VND' })
-  @Transform(trimAndUppercase)
-  @IsString()
-  @IsISO4217CurrencyCode()
-  @Matches(/^[A-Z]{3}$/)
+  @IsCurrencyCode()
   currency!: string;
 
   @ApiPropertyOptional({ enum: RoomStatus, default: RoomStatus.Active })
@@ -123,11 +120,8 @@ export class UpdateRoomDto {
   basePriceAmount?: number;
 
   @ApiPropertyOptional({ example: 'VND' })
-  @Transform(trimAndUppercase)
   @ValidateIf((_object, value: unknown) => value !== undefined)
-  @IsString()
-  @IsISO4217CurrencyCode()
-  @Matches(/^[A-Z]{3}$/)
+  @IsCurrencyCode()
   currency?: string;
 
   @ApiPropertyOptional({ enum: RoomStatus })

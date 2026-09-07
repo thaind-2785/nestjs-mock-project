@@ -42,6 +42,7 @@ describe('Phase 3 room administration persistence', () => {
   let catalog: ReferenceCatalogService;
   let rooms: RoomsService;
   let roomTimes: RoomTimesService;
+  let usageRepository: ZeroRoomTimeUsageRepository;
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
@@ -100,11 +101,8 @@ describe('Phase 3 room administration persistence', () => {
     const connection = new DatabaseConnectionService(dataSource);
     catalog = new ReferenceCatalogService(dataSource, connection);
     rooms = new RoomsService(dataSource, connection);
-    roomTimes = new RoomTimesService(
-      dataSource,
-      connection,
-      new ZeroRoomTimeUsageRepository(),
-    );
+    usageRepository = new ZeroRoomTimeUsageRepository();
+    roomTimes = new RoomTimesService(dataSource, connection, usageRepository);
   });
 
   beforeEach(async () => {
@@ -376,6 +374,8 @@ describe('Phase 3 room administration persistence', () => {
     expect(await roomTimes.list(room.id)).toEqual([
       expect.objectContaining({
         id: first.id,
+        availableFrom: '2026-10-01',
+        availableTo: '2026-10-10',
         status: RoomTimeStatus.Active,
         usage: {
           bookingCount: 0,
@@ -467,6 +467,74 @@ describe('Phase 3 room administration persistence', () => {
         status: RoomTimeStatus.Active,
       }),
     ).toBe(1);
+  });
+
+  it('refuses a window mutation when the usage port omits the window', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-204'));
+    const window = await roomTimes.create(room.id, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+      status: RoomTimeStatus.Active,
+    });
+    const partial = jest
+      .spyOn(usageRepository, 'findByRoomTimeIds')
+      .mockResolvedValue(new Map());
+    try {
+      await expect(roomTimes.delete(room.id, window.id)).rejects.toThrow(
+        /Missing room-time usage/,
+      );
+      await expect(
+        roomTimes.update(room.id, window.id, {
+          status: RoomTimeStatus.Inactive,
+        }),
+      ).rejects.toThrow(/Missing room-time usage/);
+    } finally {
+      partial.mockRestore();
+    }
+    expect(await roomTimes.list(room.id)).toMatchObject([
+      { id: window.id, status: RoomTimeStatus.Active },
+    ]);
+  });
+
+  it('hydrates hotel dates from UTC so no host timezone shifts them', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-203'));
+    const created = await roomTimes.create(room.id, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+      status: RoomTimeStatus.Active,
+    });
+
+    // `timezone: 'Z'` makes the driver hydrate DATE as UTC midnight, so both
+    // columns must format with UTC getters. Without this the API reports the
+    // previous day west of Greenwich and feeds that day into the overlap check.
+    // Jest sandboxes `process.env`, so a host timezone cannot be simulated in
+    // process; this asserts the declaration plus the observable round trip.
+    const metadata = dataSource.getMetadata(RoomTime);
+    for (const property of ['availableFrom', 'availableTo']) {
+      expect(metadata.findColumnWithPropertyName(property)?.utc).toBe(true);
+    }
+
+    const [listed] = await roomTimes.list(room.id);
+    expect(listed).toMatchObject({
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+    });
+    const patched = await roomTimes.update(room.id, created.id, {
+      status: RoomTimeStatus.Inactive,
+    });
+    expect(patched).toMatchObject({
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+    });
+    const stored = await dataSource
+      .getRepository(RoomTime)
+      .createQueryBuilder('roomTime')
+      .select('CAST(roomTime.available_from AS CHAR)', 'availableFrom')
+      .where('roomTime.id = :id', { id: created.id })
+      .getRawOne<{ availableFrom: string }>();
+    expect(stored?.availableFrom).toBe('2026-10-01');
   });
 
   it('waits for the physical-room lock before checking window overlap', async () => {

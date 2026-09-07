@@ -19,16 +19,6 @@ export const emptyRoomTimeUsage: Readonly<RoomTimeUsage> = Object.freeze({
   changeHistoryCount: 0,
 });
 
-export function roomTimeRangesOverlap(
-  first: Pick<RoomTimeState, 'availableFrom' | 'availableTo'>,
-  second: Pick<RoomTimeState, 'availableFrom' | 'availableTo'>,
-): boolean {
-  return (
-    first.availableFrom < second.availableTo &&
-    first.availableTo > second.availableFrom
-  );
-}
-
 export function assertRoomTimeRange(
   range: Pick<RoomTimeState, 'availableFrom' | 'availableTo'>,
 ): void {

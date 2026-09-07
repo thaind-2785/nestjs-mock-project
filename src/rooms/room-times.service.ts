@@ -9,6 +9,7 @@ import { AdminRoomTimeResponseDto } from './dto/room-time-response.dto';
 import { RoomTime } from './entities/room-time.entity';
 import { RoomTimeStatus } from './entities/room.enums';
 import { Room } from './entities/room.entity';
+import { lockRoom } from './room-lock';
 import {
   assertRoomTimeDeleteAllowed,
   assertRoomTimeRange,
@@ -20,7 +21,7 @@ import {
 import { ROOM_TIME_USAGE_REPOSITORY } from './room-time-usage.repository';
 import type { RoomTimeUsageRepository } from './room-time-usage.repository';
 import { hasDefinedUpdate } from './room-version';
-import { roomsErrors } from './rooms.errors';
+import { isDatabaseError, roomsErrors } from './rooms.errors';
 
 @Injectable()
 export class RoomTimesService {
@@ -35,23 +36,28 @@ export class RoomTimesService {
     roomId: string,
     body: CreateRoomTimeDto,
   ): Promise<AdminRoomTimeResponseDto> {
-    assertRoomTimeRange(body);
+    // Resolve the effective status once so the overlap check and the insert can
+    // never disagree through the column default.
+    const candidate: RoomTimeState = {
+      availableFrom: body.availableFrom,
+      availableTo: body.availableTo,
+      status: body.status ?? RoomTimeStatus.Active,
+    };
+    assertRoomTimeRange(candidate);
     await this.databaseConnection.ensureInitialized();
     return this.dataSource.transaction(async (manager) => {
       await lockRoom(manager, roomId);
-      await assertNoActiveOverlap(manager, roomId, body);
+      await assertNoActiveOverlap(manager, roomId, candidate);
       const roomTime = await manager.save(
-        manager.create(RoomTime, {
-          roomId,
-          availableFrom: body.availableFrom,
-          availableTo: body.availableTo,
-          status: body.status,
-        }),
+        manager.create(RoomTime, { roomId, ...candidate }),
       );
       return toAdminRoomTimeResponse(roomTime, emptyRoomTimeUsage);
     });
   }
 
+  // Informational admin list: parent existence, windows, and usage are read
+  // without a transaction, so this is not a decision snapshot and must not be
+  // reused as booking authorization input.
   async list(roomId: string): Promise<AdminRoomTimeResponseDto[]> {
     await this.databaseConnection.ensureInitialized();
     const manager = this.dataSource.manager;
@@ -61,6 +67,7 @@ export class RoomTimesService {
       where: { roomId },
       order: { availableFrom: 'ASC', id: 'ASC' },
     });
+    if (!roomTimes.length) return [];
     const usageByRoomTime = await this.usageRepository.findByRoomTimeIds(
       manager,
       roomTimes.map(({ id }) => id),
@@ -68,7 +75,7 @@ export class RoomTimesService {
     return roomTimes.map((roomTime) =>
       toAdminRoomTimeResponse(
         roomTime,
-        usageByRoomTime.get(roomTime.id) ?? emptyRoomTimeUsage,
+        requireUsage(usageByRoomTime, roomTime.id),
       ),
     );
   }
@@ -83,7 +90,7 @@ export class RoomTimesService {
     return this.dataSource.transaction(async (manager) => {
       await lockRoom(manager, roomId);
       const roomTime = await findLockedRoomTime(manager, roomId, roomTimeId);
-      const usage = await loadUsage(this.usageRepository, manager, roomTimeId);
+      const usage = await this.loadUsage(manager, roomTimeId);
       const next: RoomTimeState = {
         availableFrom: body.availableFrom ?? roomTime.availableFrom,
         availableTo: body.availableTo ?? roomTime.availableTo,
@@ -102,23 +109,45 @@ export class RoomTimesService {
 
   async delete(roomId: string, roomTimeId: string): Promise<void> {
     await this.databaseConnection.ensureInitialized();
-    await this.dataSource.transaction(async (manager) => {
-      await lockRoom(manager, roomId);
-      const roomTime = await findLockedRoomTime(manager, roomId, roomTimeId);
-      const usage = await loadUsage(this.usageRepository, manager, roomTimeId);
-      assertRoomTimeDeleteAllowed(usage);
-      await manager.remove(roomTime);
-    });
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        await lockRoom(manager, roomId);
+        const roomTime = await findLockedRoomTime(manager, roomId, roomTimeId);
+        assertRoomTimeDeleteAllowed(await this.loadUsage(manager, roomTimeId));
+        await manager.remove(roomTime);
+      });
+    } catch (error) {
+      // Phase 4 booking foreign keys make this branch observable if the usage
+      // port and the constraint ever disagree; the contract stays a 409.
+      if (isDatabaseError(error, 'ER_ROW_IS_REFERENCED_2')) {
+        throw roomsErrors.roomTimeHasHistory();
+      }
+      throw error;
+    }
+  }
+
+  private async loadUsage(
+    manager: EntityManager,
+    roomTimeId: string,
+  ): Promise<RoomTimeUsage> {
+    const usages = await this.usageRepository.findByRoomTimeIds(manager, [
+      roomTimeId,
+    ]);
+    return requireUsage(usages, roomTimeId);
   }
 }
 
-async function lockRoom(manager: EntityManager, roomId: string): Promise<Room> {
-  const room = await manager.findOne(Room, {
-    where: { id: roomId },
-    lock: { mode: 'pessimistic_write' },
-  });
-  if (!room) throw roomsErrors.roomNotFound();
-  return room;
+// Unknown usage must block a mutation, never permit one: an absent entry means
+// the port failed its contract, not that the window is unused.
+function requireUsage(
+  usages: ReadonlyMap<string, RoomTimeUsage>,
+  roomTimeId: string,
+): RoomTimeUsage {
+  const usage = usages.get(roomTimeId);
+  if (!usage) {
+    throw new Error(`Missing room-time usage for window ${roomTimeId}`);
+  }
+  return usage;
 }
 
 async function findLockedRoomTime(
@@ -155,22 +184,16 @@ async function assertNoActiveOverlap(
     .andWhere('roomTime.available_to > :availableFrom', {
       availableFrom: candidate.availableFrom,
     })
-    .setLock('pessimistic_write');
+    .setLock('pessimistic_write')
+    // Existence question: one matched row is enough, and it keeps `FOR UPDATE`
+    // off every other overlapping window.
+    .limit(1);
   if (excludedRoomTimeId) {
     builder.andWhere('roomTime.id <> :excludedRoomTimeId', {
       excludedRoomTimeId,
     });
   }
   if (await builder.getOne()) throw roomsErrors.roomTimeOverlap();
-}
-
-async function loadUsage(
-  repository: RoomTimeUsageRepository,
-  manager: EntityManager,
-  roomTimeId: string,
-): Promise<RoomTimeUsage> {
-  const usages = await repository.findByRoomTimeIds(manager, [roomTimeId]);
-  return usages.get(roomTimeId) ?? emptyRoomTimeUsage;
 }
 
 function toAdminRoomTimeResponse(

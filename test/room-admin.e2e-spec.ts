@@ -369,9 +369,31 @@ describe('Phase 3 admin room API (e2e)', () => {
       .expect(200)
       .expect((response) => {
         expect(response.body).toMatchObject([
-          { id: firstWindowId },
-          { id: adjacentWindowId },
+          {
+            id: firstWindowId,
+            availableFrom: '2026-10-01',
+            availableTo: '2026-11-01',
+          },
+          {
+            id: adjacentWindowId,
+            availableFrom: '2026-11-01',
+            availableTo: '2026-12-01',
+          },
         ]);
+      });
+    await adminBrowser
+      .get('/api/v1/admin/rooms/not-an-id/times')
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(400)
+      .expect((response) => {
+        expect(response.body).toMatchObject({ code: 'VALIDATION_FAILED' });
+      });
+    await adminBrowser
+      .delete(`/api/v1/admin/rooms/${roomId}/times/not-an-id`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(400)
+      .expect((response) => {
+        expect(response.body).toMatchObject({ code: 'VALIDATION_FAILED' });
       });
     await adminBrowser
       .patch(`/api/v1/admin/rooms/${roomId}/times/${adjacentWindowId}`)

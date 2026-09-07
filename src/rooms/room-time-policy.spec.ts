@@ -3,7 +3,6 @@ import {
   assertRoomTimeDeleteAllowed,
   assertRoomTimeRange,
   assertRoomTimeUpdateAllowed,
-  roomTimeRangesOverlap,
   RoomTimeUsage,
 } from './room-time-policy';
 
@@ -14,21 +13,6 @@ const unused: RoomTimeUsage = {
 };
 
 describe('room-time policy', () => {
-  it('uses the canonical half-open overlap predicate and accepts adjacency', () => {
-    expect(
-      roomTimeRangesOverlap(
-        { availableFrom: '2026-10-01', availableTo: '2026-10-10' },
-        { availableFrom: '2026-10-09', availableTo: '2026-10-20' },
-      ),
-    ).toBe(true);
-    expect(
-      roomTimeRangesOverlap(
-        { availableFrom: '2026-10-01', availableTo: '2026-10-10' },
-        { availableFrom: '2026-10-10', availableTo: '2026-10-20' },
-      ),
-    ).toBe(false);
-  });
-
   it('rejects a non-increasing hotel-date range', () => {
     expectErrorCode(
       () =>

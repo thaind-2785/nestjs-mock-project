@@ -3,8 +3,9 @@
 - Spec: `docs/specs/SPEC-005-room-catalog.md`
 - Status: In progress
 - Owner: Codex primary agent
-- Reviewer (must be independent): Claude Code, `REVIEW-016` (P3-T02 PR #6 follow-up);
-  `REVIEW-017` (P3-T03 room-time administration)
+- Reviewer (must be independent): Claude Code, `REVIEW-016` (P3-T02 PR #6 follow-up)
+  and `REVIEW-018` (P3-T03 follow-up); Codex independent review agent, `REVIEW-017`
+  (P3-T03 room-time administration)
 
 The project owner accepted `SPEC-005` and its production-storage, upload-policy,
 reference-catalog, and currency decisions on 2026-09-04. Implement and explain one
@@ -261,3 +262,18 @@ its own focused evidence.
   assertion over all four operations.
 - Gate inputs changed after the review, so the focused unit/integration/E2E paths and
   one full `MYSQL_PORT=13306 npm run verify` were rerun after the fixes.
+- `REVIEW-018` then reviewed the committed slice independently and found one real
+  correctness defect: `timezone: 'Z'` plus `date` columns without `utc: true` made a
+  UTC-negative host read every window one day early and feed that day into the range,
+  immutability, and overlap decisions. Both columns now declare `utc: true`, an
+  integration test pins the declaration and the round trip, and the whole suite passes
+  under `TZ=America/New_York` as well as the host timezone.
+- The same review closed the remaining fail-open and reuse gaps: absent usage entries
+  now block a mutation instead of reading as zero usage, `DELETE` maps
+  `ER_ROW_IS_REFERENCED_2` to `ROOM_TIME_HAS_HISTORY`, the overlap existence query is
+  bounded to one locked row, `list` guards the empty-window case, the unreachable
+  overlap predicate is removed in favour of the covered SQL path, `lockRoom` is shared
+  with `RoomsService`, and the OpenAPI 400 contract covers all four routes.
+- Availability windows stay last-write-wins by owner decision: no window version or
+  `If-Match` precondition is added in Phase 3. `SPEC-005` records the semantics and
+  `REVIEW-018` carries it as residual risk for the Phase 3 exit review.

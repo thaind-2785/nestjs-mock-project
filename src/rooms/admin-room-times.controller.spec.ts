@@ -31,6 +31,7 @@ describe('AdminRoomTimesController OpenAPI contract', () => {
     ]);
     expect(Object.keys(collection?.get?.responses ?? {}).sort()).toEqual([
       '200',
+      '400',
       '404',
     ]);
     expect(Object.keys(member?.patch?.responses ?? {}).sort()).toEqual([
@@ -41,6 +42,7 @@ describe('AdminRoomTimesController OpenAPI contract', () => {
     ]);
     expect(Object.keys(member?.delete?.responses ?? {}).sort()).toEqual([
       '204',
+      '400',
       '404',
       '409',
     ]);

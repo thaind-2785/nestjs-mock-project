@@ -159,6 +159,11 @@ history reference. Every mutation locks the physical room first and then selects
 nested window by both IDs. A mismatched room/window tuple returns the same generic
 `404 ROOM_TIME_NOT_FOUND` as an absent window.
 
+Unlike physical rooms, availability windows carry no version and window `PATCH`
+requires no `If-Match` precondition: concurrent admin window edits are last-write-wins
+under the physical-room lock. Hotel dates are stored as `DATE` and hydrated with UTC
+getters, so a window's dates are identical on every deployment timezone.
+
 Stable window errors include `ROOM_TIME_NOT_FOUND`, `ROOM_TIME_RANGE_INVALID`,
 `ROOM_TIME_OVERLAP`, `ROOM_TIME_DATES_IMMUTABLE`, `ROOM_TIME_IN_USE`, and
 `ROOM_TIME_HAS_HISTORY`.

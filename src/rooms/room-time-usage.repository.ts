@@ -5,6 +5,11 @@ import { emptyRoomTimeUsage, RoomTimeUsage } from './room-time-policy';
 export const ROOM_TIME_USAGE_REPOSITORY = Symbol('ROOM_TIME_USAGE_REPOSITORY');
 
 export interface RoomTimeUsageRepository {
+  /**
+   * Must return one entry per requested ID. Phase 4 replaces this port with
+   * locked booking and change-history counts read through `manager`; callers
+   * treat a missing entry as a contract violation, never as zero usage.
+   */
   findByRoomTimeIds(
     manager: EntityManager,
     roomTimeIds: readonly string[],
@@ -14,10 +19,9 @@ export interface RoomTimeUsageRepository {
 @Injectable()
 export class ZeroRoomTimeUsageRepository implements RoomTimeUsageRepository {
   findByRoomTimeIds(
-    manager: EntityManager,
+    _manager: EntityManager,
     roomTimeIds: readonly string[],
   ): Promise<ReadonlyMap<string, RoomTimeUsage>> {
-    void manager;
     return Promise.resolve(
       new Map(
         roomTimeIds.map((roomTimeId) => [

@@ -25,10 +25,12 @@ export class RoomTime extends MutableEntity {
   @JoinColumn({ name: 'room_id' })
   room!: Room;
 
-  @Column({ name: 'available_from', type: 'date' })
+  // `timezone: 'Z'` makes the driver hydrate DATE as UTC midnight, so the column
+  // must format with UTC getters or a UTC-negative host reads one day earlier.
+  @Column({ name: 'available_from', type: 'date', utc: true })
   availableFrom!: string;
 
-  @Column({ name: 'available_to', type: 'date' })
+  @Column({ name: 'available_to', type: 'date', utc: true })
   availableTo!: string;
 
   @Column({

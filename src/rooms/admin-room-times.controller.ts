@@ -61,6 +61,11 @@ export class AdminRoomTimesController {
   @Get()
   @ApiOkResponse({ type: AdminRoomTimeResponseDto, isArray: true })
   @ApiResponse({
+    status: 400,
+    type: ErrorResponseDto,
+    description: 'VALIDATION_FAILED',
+  })
+  @ApiResponse({
     status: 404,
     type: ErrorResponseDto,
     description: 'ROOM_NOT_FOUND',
@@ -97,6 +102,11 @@ export class AdminRoomTimesController {
   @Delete(':roomTimeId')
   @HttpCode(204)
   @ApiNoContentResponse()
+  @ApiResponse({
+    status: 400,
+    type: ErrorResponseDto,
+    description: 'VALIDATION_FAILED',
+  })
   @ApiResponse({
     status: 404,
     type: ErrorResponseDto,

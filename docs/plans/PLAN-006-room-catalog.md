@@ -3,7 +3,8 @@
 - Spec: `docs/specs/SPEC-005-room-catalog.md`
 - Status: In progress
 - Owner: Codex primary agent
-- Reviewer (must be independent): Claude Code, `REVIEW-016` (P3-T02 PR #6 follow-up)
+- Reviewer (must be independent): Claude Code, `REVIEW-016` (P3-T02 PR #6 follow-up);
+  `REVIEW-017` (P3-T03 room-time administration)
 
 The project owner accepted `SPEC-005` and its production-storage, upload-policy,
 reference-catalog, and currency decisions on 2026-09-04. Implement and explain one
@@ -57,7 +58,7 @@ spec adds pixel/dimension processing.
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | -------- |
 | `P3-T01` | Accepted contracts, validated catalog/upload/storage policy, locked dependencies, TypeORM entities, and reversible Phase 3 schema exist    | `docs/specs`, `docs/decisions`, `docs/architecture`, `src/config`, `src/rooms/entities`, `src/files` | Create room types, amenities, rooms/version, assignments, windows, attachments, and cleanup persistence | Config/entity unit; schema constraint/index and migration run/revert integration                       | Complete |
 | `P3-T02` | An admin can create/list/read/version-update/deactivate/hard-delete eligible rooms with atomic amenity assignment                          | `src/rooms` admin controller/services/repositories/DTOs; optional reference-catalog APIs             | Uses Phase 3 schema; seed/reference migration only if owner selects fixed catalog                       | Room policy/service unit; CRUD/version/unique/reference/delete integration and admin/user/guest E2E    | Complete |
-| `P3-T03` | Admin nested window APIs enforce target binding, history/use policy seams, and non-overlap under concurrent changes                        | `src/rooms` window controller/service/repository/DTOs                                                | None                                                                                                    | Overlap/containment unit; real MySQL locking/concurrency/adjacency/nested-mismatch integration and E2E | Pending  |
+| `P3-T03` | Admin nested window APIs enforce target binding, history/use policy seams, and non-overlap under concurrent changes                        | `src/rooms` window controller/service/repository/DTOs                                                | None                                                                                                    | Overlap/containment unit; real MySQL locking/concurrency/adjacency/nested-mismatch integration and E2E | Complete |
 | `P3-T04` | Guests can browse public active rooms and query deterministic window-contained availability with all documented filters                    | `src/rooms` public controller/search service/query DTOs/response DTOs                                | Add indexes only if query-plan evidence requires a compatible migration revision                        | Query policy unit; SQL/filter/pagination integration; public list/detail/date/error/localization E2E   | Pending  |
 | `P3-T05` | Admin thumbnail/album upload, replacement, target-bound delete, atomic reorder, private presign, and durable cleanup retry work end to end | `src/files`, room image controller/DTO mapping, storage adapter, cleanup repository/CLI              | Uses attachment/cleanup schema from P3-T01                                                              | MIME/key/policy unit; MySQL+MinIO transaction/race/failure/retry integration; multipart/RBAC E2E       | Pending  |
 | `P3-T06` | Public/operator documentation agrees and Phase 3 meets its exit gate with independent review findings dispositioned                        | Swagger, locales, `.env.example`, `README.md`, API/database/ADR docs, spec/plan/review               | Prove production migration state; no ad hoc schema changes                                              | Focused regressions, full `npm run verify`, independent security/data/concurrency/storage review       | Pending  |
@@ -159,6 +160,10 @@ its own focused evidence.
 - Storage cleanup uses a narrow leased `storage_cleanup_tasks` table. Pre-upload rows
   close the crash gap before the S3 write; the attachment transaction retires the
   safeguard. This does not activate BullMQ, notifications, or the Phase 7 scheduler.
+- P3-T03 exposes window usage as `bookingCount`, `activeBookingCount`, and
+  `changeHistoryCount` under one `usage` object. A replaceable repository port returns
+  zeros before Phase 4 and will later compute the same contract from locked booking
+  and change-history queries.
 
 ## P3-T01 implementation evidence
 
@@ -231,3 +236,28 @@ its own focused evidence.
   as residual risk; `LOW-02` (missing `ADR-0004` cross-reference) is fixed in this
   spec/plan revision. No gate input changed after the review, so only a
   documentation `format:check` was rerun.
+
+## P3-T03 implementation evidence
+
+- Added admin-only create/list/update/delete APIs nested under
+  `/admin/rooms/:roomId/times`, strict hotel-date DTOs, OpenAPI schemas, and stable
+  localized window errors. Lists are deterministic by `availableFrom`, then ID.
+- Every mutation locks the physical room first and then selects a child by both room
+  and window IDs. Active overlap uses the canonical half-open predicate and a current
+  locking read; inactive overlap and adjacent active ranges remain valid.
+- Added a replaceable booking-usage repository port with a Phase 3 zero-use adapter.
+  Pure policy coverage proves date immutability, active-booking deactivation, and
+  history-protected deletion branches before Phase 4 adds booking tables.
+- Focused unit tests passed 24/24, the real-MySQL room administration suite passed
+  10/10 including concurrent overlap, the deterministic room-lock wait, and nested
+  mismatch, the admin room HTTP journey passed 1/1 including
+  auth/RBAC/validation/localization, and the build passed.
+- `REVIEW-017` returned no Blocker/High finding and both accepted findings are now
+  fixed. `MED-01` added a deterministic real-MySQL assertion that a create waits on
+  the physical-room lock before any window read; its sensitivity was mutation-proven
+  by removing `lockRoom` and by moving it after the overlap check, each of which
+  fails the new test. `LOW-01` completed the OpenAPI error contract with 400/404
+  `ErrorResponseDto` responses on the applicable routes plus a generated-document
+  assertion over all four operations.
+- Gate inputs changed after the review, so the focused unit/integration/E2E paths and
+  one full `MYSQL_PORT=13306 npm run verify` were rerun after the fixes.

@@ -7,6 +7,7 @@ import {
   UpdateRoomTypeDto,
 } from './reference-catalog.dto';
 import { CreateRoomDto, UpdateRoomDto } from './room-request.dto';
+import { CreateRoomTimeDto, UpdateRoomTimeDto } from './room-time-request.dto';
 
 describe('room administration request DTOs', () => {
   it('normalizes trusted catalog codes while retaining strict values', () => {
@@ -114,5 +115,40 @@ describe('room administration request DTOs', () => {
     expect(validateSync(dto)).toEqual([]);
     expect(dto.view).toBe('CITY');
     expect(plainToInstance(ListRoomsQueryDto, { view: '  ' }).view).toBe('');
+  });
+
+  it('accepts strict hotel dates and applies the active window default', () => {
+    const dto = plainToInstance(CreateRoomTimeDto, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-12-01',
+    });
+
+    expect(validateSync(dto)).toEqual([]);
+    expect(dto.status).toBe('ACTIVE');
+  });
+
+  it.each(['2026-02-30', '2026-1-01', '0999-12-31', '2026-10-01T00:00:00Z'])(
+    'rejects non-hotel date %s',
+    (date) => {
+      const dto = plainToInstance(CreateRoomTimeDto, {
+        availableFrom: date,
+        availableTo: '2026-12-01',
+      });
+
+      expect(validateSync(dto).map((error) => error.property)).toContain(
+        'availableFrom',
+      );
+    },
+  );
+
+  it('rejects explicit null window PATCH fields but permits omission', () => {
+    expect(validateSync(plainToInstance(UpdateRoomTimeDto, {}))).toEqual([]);
+    for (const field of ['availableFrom', 'availableTo', 'status']) {
+      expect(
+        validateSync(plainToInstance(UpdateRoomTimeDto, { [field]: null })).map(
+          (error) => error.property,
+        ),
+      ).toContain(field);
+    }
   });
 });

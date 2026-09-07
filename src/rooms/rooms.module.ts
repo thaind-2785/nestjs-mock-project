@@ -6,12 +6,18 @@ import { StorageCleanupTask } from '../files/entities/storage-cleanup-task.entit
 import { AdminAmenitiesController } from './admin-amenities.controller';
 import { AdminRoomTypesController } from './admin-room-types.controller';
 import { AdminRoomsController } from './admin-rooms.controller';
+import { AdminRoomTimesController } from './admin-room-times.controller';
 import { Amenity } from './entities/amenity.entity';
 import { RoomAmenity } from './entities/room-amenity.entity';
 import { RoomTime } from './entities/room-time.entity';
 import { RoomType } from './entities/room-type.entity';
 import { Room } from './entities/room.entity';
 import { ReferenceCatalogService } from './reference-catalog.service';
+import {
+  ROOM_TIME_USAGE_REPOSITORY,
+  ZeroRoomTimeUsageRepository,
+} from './room-time-usage.repository';
+import { RoomTimesService } from './room-times.service';
 import { RoomsService } from './rooms.service';
 
 @Module({
@@ -31,8 +37,24 @@ import { RoomsService } from './rooms.service';
     AdminRoomTypesController,
     AdminAmenitiesController,
     AdminRoomsController,
+    AdminRoomTimesController,
   ],
-  providers: [ReferenceCatalogService, RoomsService],
-  exports: [TypeOrmModule, ReferenceCatalogService, RoomsService],
+  providers: [
+    ReferenceCatalogService,
+    RoomsService,
+    RoomTimesService,
+    ZeroRoomTimeUsageRepository,
+    {
+      provide: ROOM_TIME_USAGE_REPOSITORY,
+      useExisting: ZeroRoomTimeUsageRepository,
+    },
+  ],
+  exports: [
+    TypeOrmModule,
+    ReferenceCatalogService,
+    RoomsService,
+    RoomTimesService,
+    ROOM_TIME_USAGE_REPOSITORY,
+  ],
 })
 export class RoomsModule {}

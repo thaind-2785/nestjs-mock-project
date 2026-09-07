@@ -10,6 +10,13 @@ export class RoomIdParamDto {
   roomId!: string;
 }
 
+export class RoomTimeIdParamDto extends RoomIdParamDto {
+  @ApiProperty({ example: '1', pattern: decimalIdPattern.source })
+  @IsString()
+  @Matches(decimalIdPattern)
+  roomTimeId!: string;
+}
+
 export class RoomTypeIdParamDto {
   @ApiProperty({ example: '1', pattern: decimalIdPattern.source })
   @IsString()

@@ -27,6 +27,12 @@ interface ErrorTranslations {
     roomNotFound: string;
     roomNumberConflict: string;
     roomReferenceNotFound: string;
+    roomTimeDatesImmutable: string;
+    roomTimeHasHistory: string;
+    roomTimeInUse: string;
+    roomTimeNotFound: string;
+    roomTimeOverlap: string;
+    roomTimeRangeInvalid: string;
     roomTypeInUse: string;
     roomTypeNameConflict: string;
     roomTypeNotFound: string;

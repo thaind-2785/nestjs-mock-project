@@ -82,6 +82,42 @@ export const roomsErrors = {
       'ROOM_HAS_HISTORY',
       errorMessageKeys.roomHasHistory,
     ),
+  roomTimeNotFound: () =>
+    new ApplicationException(
+      HttpStatus.NOT_FOUND,
+      'ROOM_TIME_NOT_FOUND',
+      errorMessageKeys.roomTimeNotFound,
+    ),
+  roomTimeRangeInvalid: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'ROOM_TIME_RANGE_INVALID',
+      errorMessageKeys.roomTimeRangeInvalid,
+    ),
+  roomTimeOverlap: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'ROOM_TIME_OVERLAP',
+      errorMessageKeys.roomTimeOverlap,
+    ),
+  roomTimeDatesImmutable: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'ROOM_TIME_DATES_IMMUTABLE',
+      errorMessageKeys.roomTimeDatesImmutable,
+    ),
+  roomTimeInUse: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'ROOM_TIME_IN_USE',
+      errorMessageKeys.roomTimeInUse,
+    ),
+  roomTimeHasHistory: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'ROOM_TIME_HAS_HISTORY',
+      errorMessageKeys.roomTimeHasHistory,
+    ),
   emptyUpdate: () =>
     new ApplicationException(
       HttpStatus.BAD_REQUEST,

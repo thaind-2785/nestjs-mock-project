@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Owner: Codex primary agent
-- Last updated: 2026-09-04
+- Last updated: 2026-09-07
 - Scope: Required
 - Related endpoints / ADRs: `ROOM-01`, `ROOM-02`, `ADMIN-ROOM-01` through
   `ADMIN-ROOM-05`, `ADMIN-TIME-01` through `ADMIN-TIME-04`, `ADMIN-FILE-01`
@@ -146,7 +146,11 @@ room cannot overlap; adjacent windows are valid. A conflict returns
 
 `GET /admin/rooms/:roomId/times` returns active and inactive windows ordered by
 `availableFrom`, then ID, with booking-use counts shaped for Phase 4. Counts are zero
-until booking persistence exists.
+until booking persistence exists. Each item exposes
+`usage: { bookingCount, activeBookingCount, changeHistoryCount }`.
+`activeBookingCount` means `PENDING` plus `CONFIRMED`; the other two counts cover all
+bookings currently referencing the window and all before/after change-history
+references respectively.
 
 `PATCH /admin/rooms/:roomId/times/:roomTimeId` may change dates only if no booking or
 booking-change history references the window. It may deactivate only when no
@@ -301,9 +305,9 @@ version as part of the accepted logical model.
 
 - [x] An admin can create, list, inspect, version-update, deactivate, and safely
       hard-delete eligible rooms; a user/guest cannot call admin routes.
-- [ ] Active-window create/update operations serialize per physical room, reject
+- [x] Active-window create/update operations serialize per physical room, reject
       overlapping windows under concurrency, and accept adjacent windows.
-- [ ] Nested window routes reject room/window mismatch; immutable/in-use/history
+- [x] Nested window routes reject room/window mismatch; immutable/in-use/history
       policies are ready for Phase 4 references.
 - [ ] Public list/detail expose only active rooms and return deterministic filtered
       pagination; a supplied stay is returned only when fully contained in one

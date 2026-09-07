@@ -55,7 +55,7 @@ class FakeGoogleOAuthClient implements GoogleOAuthClientContract {
   }
 }
 
-describe('P3-T02 admin room API (e2e)', () => {
+describe('Phase 3 admin room API (e2e)', () => {
   let app: INestApplication<App>;
   let adminConnection: mysql.Connection;
   let disposableDatabase: string;
@@ -281,6 +281,144 @@ describe('P3-T02 admin room API (e2e)', () => {
           items: [{ id: roomId }],
         });
       });
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/rooms/${roomId}/times`)
+      .send({
+        availableFrom: '2026-10-01',
+        availableTo: '2026-11-01',
+      })
+      .expect(401);
+    await userBrowser
+      .get(`/api/v1/admin/rooms/${roomId}/times`)
+      .set('Authorization', `Bearer ${userAccess}`)
+      .expect(403);
+    await adminBrowser
+      .post(`/api/v1/admin/rooms/${roomId}/times`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({
+        availableFrom: '2026-02-30',
+        availableTo: '2026-03-10',
+      })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body).toMatchObject({ code: 'VALIDATION_FAILED' });
+      });
+    await adminBrowser
+      .post(`/api/v1/admin/rooms/${roomId}/times`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({
+        availableFrom: '2026-10-01',
+        availableTo: '2026-10-01',
+      })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          code: 'ROOM_TIME_RANGE_INVALID',
+        });
+      });
+    const firstWindow = await adminBrowser
+      .post(`/api/v1/admin/rooms/${roomId}/times`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({
+        availableFrom: '2026-10-01',
+        availableTo: '2026-11-01',
+      })
+      .expect(201);
+    const firstWindowId = (firstWindow.body as unknown as { id: string }).id;
+    expect(firstWindow.body).toMatchObject({
+      roomId,
+      availableFrom: '2026-10-01',
+      availableTo: '2026-11-01',
+      status: 'ACTIVE',
+      usage: {
+        bookingCount: 0,
+        activeBookingCount: 0,
+        changeHistoryCount: 0,
+      },
+    });
+    await adminBrowser
+      .post(`/api/v1/admin/rooms/${roomId}/times`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .set('Accept-Language', 'vi')
+      .send({
+        availableFrom: '2026-10-15',
+        availableTo: '2026-11-15',
+      })
+      .expect(409)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          code: 'ROOM_TIME_OVERLAP',
+          message:
+            'Khung thời gian đang hoạt động bị trùng với một khung thời gian khác của phòng này.',
+        });
+      });
+    const adjacentWindow = await adminBrowser
+      .post(`/api/v1/admin/rooms/${roomId}/times`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({
+        availableFrom: '2026-11-01',
+        availableTo: '2026-12-01',
+      })
+      .expect(201);
+    const adjacentWindowId = (adjacentWindow.body as unknown as { id: string })
+      .id;
+    await adminBrowser
+      .get(`/api/v1/admin/rooms/${roomId}/times`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toMatchObject([
+          { id: firstWindowId },
+          { id: adjacentWindowId },
+        ]);
+      });
+    await adminBrowser
+      .patch(`/api/v1/admin/rooms/${roomId}/times/${adjacentWindowId}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({})
+      .expect(400)
+      .expect((response) => {
+        expect(response.body).toMatchObject({ code: 'VALIDATION_FAILED' });
+      });
+    await adminBrowser
+      .patch(`/api/v1/admin/rooms/${roomId}/times/${adjacentWindowId}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({ status: 'INACTIVE' })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toMatchObject({ status: 'INACTIVE' });
+      });
+
+    const secondRoom = await adminBrowser
+      .post('/api/v1/admin/rooms')
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({
+        roomNumber: 'A-202',
+        roomTypeId,
+        bedCount: 2,
+        basePriceAmount: 1_500_000,
+        currency: 'VND',
+      })
+      .expect(201);
+    const secondRoomId = (secondRoom.body as unknown as { id: string }).id;
+    await adminBrowser
+      .patch(`/api/v1/admin/rooms/${secondRoomId}/times/${firstWindowId}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({ status: 'INACTIVE' })
+      .expect(404)
+      .expect((response) => {
+        expect(response.body).toMatchObject({ code: 'ROOM_TIME_NOT_FOUND' });
+      });
+    await adminBrowser
+      .delete(`/api/v1/admin/rooms/${roomId}/times/${adjacentWindowId}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(204);
+    await adminBrowser
+      .delete(`/api/v1/admin/rooms/${secondRoomId}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(204);
+
     await adminBrowser
       .patch(`/api/v1/admin/rooms/${roomId}`)
       .set('Authorization', `Bearer ${adminAccess}`)

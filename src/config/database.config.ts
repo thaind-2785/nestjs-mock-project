@@ -10,6 +10,7 @@ export interface DatabaseConfiguration {
   database: string;
   username: string;
   password: string;
+  poolSize: number;
 }
 
 export function createDatabaseConfiguration(
@@ -21,6 +22,7 @@ export function createDatabaseConfiguration(
     database: environment.MYSQL_DATABASE,
     username: environment.MYSQL_USER,
     password: environment.MYSQL_PASSWORD,
+    poolSize: environment.MYSQL_POOL_SIZE,
   };
 }
 

@@ -1,11 +1,13 @@
 # PLAN-006: Room catalog, availability windows, and images
 
 - Spec: `docs/specs/SPEC-005-room-catalog.md`
-- Status: In progress
+- Status: Complete (Phase 3 exit signed off 2026-09-08)
 - Owner: Codex primary agent
 - Reviewer (must be independent): Claude Code, `REVIEW-016` (P3-T02 PR #6 follow-up),
   `REVIEW-018` (P3-T03 follow-up), and `REVIEW-019` (P3-T04 public catalog); Codex
-  independent review agent, `REVIEW-017` (P3-T03 room-time administration)
+  independent review agent, `REVIEW-017` (P3-T03 room-time administration),
+  `REVIEW-020` (PR #7 mentor follow-up), and `REVIEW-021` (P3-T05 room images);
+  four clean-context Claude Code review agents, `REVIEW-022` (Phase 3 exit)
 
 The project owner accepted `SPEC-005` and its production-storage, upload-policy,
 reference-catalog, and currency decisions on 2026-09-04. Implement and explain one
@@ -62,7 +64,7 @@ spec adds pixel/dimension processing.
 | `P3-T03` | Admin nested window APIs enforce target binding, history/use policy seams, and non-overlap under concurrent changes                        | `src/rooms` window controller/service/repository/DTOs                                                | None                                                                                                    | Overlap/containment unit; real MySQL locking/concurrency/adjacency/nested-mismatch integration and E2E | Complete |
 | `P3-T04` | Guests can browse public active rooms and query deterministic window-contained availability with all documented filters                    | `src/rooms` public controller/search service/query DTOs/response DTOs                                | None: query-plan evidence rejected every candidate index                                                | Query policy unit; SQL/filter/pagination integration; public list/detail/date/error/localization E2E   | Complete |
 | `P3-T05` | Admin thumbnail/album upload, replacement, target-bound delete, atomic reorder, private presign, and durable cleanup retry work end to end | `src/files`, room image controller/DTO mapping, storage adapter, cleanup repository/CLI              | Uses attachment/cleanup schema from P3-T01                                                              | MIME/key/policy unit; MySQL+MinIO transaction/race/failure/retry integration; multipart/RBAC E2E       | Complete |
-| `P3-T06` | Public/operator documentation agrees and Phase 3 meets its exit gate with independent review findings dispositioned                        | Swagger, locales, `.env.example`, `README.md`, API/database/ADR docs, spec/plan/review               | Prove production migration state; no ad hoc schema changes                                              | Focused regressions, full `npm run verify`, independent security/data/concurrency/storage review       | Pending  |
+| `P3-T06` | Public/operator documentation agrees and Phase 3 meets its exit gate with independent review findings dispositioned                        | Swagger, locales, `.env.example`, `README.md`, API/database/ADR docs, spec/plan/review               | Prove production migration state; no ad hoc schema changes                                              | Focused regressions, full `npm run verify`, independent security/data/concurrency/storage review       | Complete |
 
 ### Slice notes
 
@@ -427,12 +429,12 @@ its own focused evidence.
   payload shapes; the admin E2E adds the HTTP journey including 401/403, a client
   filename that never reaches the storage path, `415`/`400`/`413`/`400` rejections,
   reorder, and detach.
-- Not in this slice: `ATTACHMENT_UPLOAD_RATE_LIMIT_MAX` and
-  `ATTACHMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS` are still unconsumed. The upload route
-  is ADMIN-only, and the existing limiter is bound to the auth module's own limits and
-  Redis key prefix, so wiring it means extracting a shared limiter. `P3-T06` either
-  does that or records the accepted residual risk; the configuration must not stay
-  unused past the Phase 3 exit gate.
+- Not in this slice, and **superseded by `P3-T06`**, which extracted the shared
+  limiter and wired both values: at the close of P3-T05,
+  `ATTACHMENT_UPLOAD_RATE_LIMIT_MAX` and
+  `ATTACHMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS` were still unconsumed. The upload
+  route is ADMIN-only, and the limiter of the time was bound to the auth module's own
+  limits and Redis key prefix, so wiring it meant extracting a shared limiter.
 
 ## P3-T05 independent review follow-up (2026-09-08)
 
@@ -496,3 +498,139 @@ its own focused evidence.
   restores broader projections, that unbounded offset, and environment-dependent
   MySQL timezone defaults; prefer a forward fix because UTC consistency protects all
   current/future audit timestamps.
+
+## P3-T06 implementation evidence
+
+- Scope: close the two deferred Phase 3 exit items, make the documentation agree with
+  the running code, prove the production migration state, and run the full gate. No
+  schema change, no new dependency, and no response-shape change.
+- Slice 1 wires the upload rate limit by extracting the limiter instead of leaving
+  `ATTACHMENT_UPLOAD_RATE_LIMIT_MAX`/`_WINDOW_SECONDS` unconsumed, which
+  `REVIEW-021` refused to carry past this gate. `RateLimitService` owns a Redis
+  fixed-window counter and nothing else; authentication and uploads each supply
+  their own scope, discriminator, and limits and keep their own stable error codes.
+  `ADR-0005` records the decision, its fail-closed rule, and the namespace move.
+- The upload budget is charged per authenticated uploader before the room read, the
+  signature check, the generated key, and the storage call, so a refused attempt
+  costs one Redis counter and leaves no attachment row, no safeguard, and no object.
+  A limiter outage answers `503 ATTACHMENT_UPLOAD_UNAVAILABLE` rather than admitting
+  unbounded uploads; exceeding the budget answers
+  `429 ATTACHMENT_UPLOAD_RATE_LIMITED`. Both codes appear in the error descriptor,
+  the translations interface, both locale catalogs, the route's Swagger responses,
+  `SPEC-005`, and the endpoint catalog's `ADMIN-FILE-01` row.
+- Auth scopes are prefixed (`auth-google-start`, `auth-google-callback`,
+  `auth-refresh`), so one shared limiter still gives each surface its own window. The
+  counters move from `AUTH_REDIS_KEY_PREFIX` to `RATE_LIMIT_REDIS_KEY_PREFIX`;
+  `AUTH_REDIS_KEY_PREFIX` keeps only OAuth transactions and session revocations. The
+  limiter is imported by the two modules that use it rather than registered globally.
+- Slice 2 closes the `REVIEW-019` pool question. `MYSQL_POOL_SIZE` (1-100, default 10) sets the mysql2 `connectionLimit`, because every locking write and every public
+  snapshot read holds one connection for its whole transaction. The bound and its
+  sizing rule are documented in `.env.example`, `README.md`, `SPEC-005`, and the
+  database/system-design documents rather than left as a driver default.
+- Migration state proof against a disposable database: `migration:run` applied both
+  migrations and produced the 12 Phase 2/3 tables plus `migrations`; one revert left
+  exactly the five Phase 2 tables plus `migrations`; the second left only
+  `migrations`; a re-run restored all 13. `typeorm schema:log` is deliberately not used as a drift gate
+  here: it rewrites explicitly named constraints/indexes to generated hashes and
+  normalizes the `@VersionColumn` to `int`, so its diff reports naming and driver
+  normalization rather than schema drift. The migration integration suite remains
+  the constraint/index assertion.
+- Focused evidence: unit 187/187 (44 in the affected config/limiter paths); room
+  image integration 17/17 including the new above-budget refusal that leaves no
+  metadata or safeguard and the unreachable-limiter fail-closed case; room
+  admin/search integration 21/21; auth integration 14/14 including new per-scope
+  budget coverage; auth and room-admin E2E 6/6. Build, lint, and `format:check`
+  passed.
+- Fixed four pre-existing type errors that no gate reported: two spec/test files
+  passed a partial environment literal where `EnvironmentVariables` is required, used
+  a plain object where the migration option requires a class, and read `timezone` off
+  the `DataSourceOptions` union. `tsconfig.json` sets `isolatedModules`, so ts-jest
+  transpiles specs without type checking, and `tsconfig.build.json` excludes `test`
+  and `**/*spec.ts`; nothing in `verify` therefore typechecks a test file. The errors
+  were confirmed present at `d524203` before this slice.
+- The owner then approved closing that gap in this slice. `npm run typecheck`
+  (`tsc --noEmit -p tsconfig.json`) is now a `verify` step placed after lint and
+  before the test layers, so a type error never waits for MySQL. It is a real Harness
+  entry command: registered in the manifest with `ignored_artifacts`, implemented
+  with fixed argv in the runtime catalog, and therefore covered by the existing
+  manifest/catalog parity regression. The step was mutation-proven by injecting
+  `const mutationProbe: number = 'not a number'` into a spec, which failed the gate
+  with exit 2 and `TS2322`, and passing again after the revert.
+- Handoff gate (2026-09-08): `MYSQL_PORT=13306 npm run verify` exit 0 with Harness 68
+  subtests plus 10 eval fixtures, Compose contract 8, unit 187/187, integration
+  63/63, E2E 20/20, and a green build. Rerun after the type-error fixes and once more
+  with the new step in the gate: the trace records `command_ref: typecheck` at exit 0,
+  so the gate now has twelve managed steps and the whole project, tests included,
+  typechecks clean.
+- E2E suites that boot the application now set their own
+  `RATE_LIMIT_REDIS_KEY_PREFIX`, because a shared namespace would otherwise let a
+  repeated local run start with a spent budget. The room-admin journey also raises its
+  own upload budget; the refusal itself is proven deterministically in integration,
+  not by a cumulative count that later tests could shift.
+- Compatibility/rollback: both new variables have safe defaults, so an existing
+  deployment needs no new value. Moving authentication counters resets in-flight
+  rate-limit windows exactly once, which widens at most one window. Reverting this
+  slice restores an unlimited upload path and an unbounded connection pool, so prefer
+  a forward fix.
+
+## P3-T06 independent review follow-up (2026-09-08)
+
+- `REVIEW-022` was produced by four clean-context review agents, one per required
+  dimension, none of which authored the slice or saw the author's conclusions. All
+  four returned Approve after fixes: two High, four Medium, and fourteen Low/doc
+  findings, every one dispositioned in the review.
+- `HIGH-01`: no test proved the fixed window ever expired. The unit suite stubs
+  `eval`, so it covered the decision but not the Lua script, and no suite read a TTL
+  or waited a window out. Deleting `EXPIRE` therefore kept the whole gate green while
+  production would have locked out every uploader and login address permanently.
+  `test/rate-limit.integration-spec.ts` now proves expiry, non-extension under
+  repeated attempts, per-scope isolation, and fail-closed behavior against real
+  Redis; the missing-`EXPIRE` mutation fails it.
+- `HIGH-02`: only the TCP handshake was bounded, so a reachable but stalled Redis
+  left fail-closed callers awaiting a promise that never settles, each hung upload
+  still holding its buffered body. `REDIS_TIMEOUT_MS` now bounds connect, each
+  command, and the loading wait for every application Redis client, and the limiter
+  races the whole attempt against that bound.
+- `MED-01`: the budget was charged in the handler, after Multer had buffered the
+  request body, so it bounded storage and metadata work while leaving bandwidth and
+  memory — the actual abuse cost — unbounded. `AttachmentUploadRateLimitGuard` now
+  charges it, because Nest runs guards before interceptors, and exactly one place
+  charges so the configured maximum is not halved.
+  `test/room-image-upload-limit.e2e-spec.ts` pins the ordering over real HTTP: once
+  the budget is spent, an oversized body answers `429`, and reverting the fix makes
+  the same request answer `413`.
+- `MED-02` to `MED-04` and the Low findings closed the remaining gaps: readiness now
+  proves Redis write capability instead of reachability, the shared namespace is
+  required in production, the pool floor matches the three connections one admin room
+  read acquires at once, every Redis client reports errors through the JSON logger
+  instead of ioredis's raw stderr stack, shutdown no longer reopens a socket, the
+  limiter has its own timeout rather than borrowing the health-probe bound, and
+  scopes are validated and typed.
+- Documentation findings corrected claims this slice had overstated: the ADR
+  published an error code the API never emits (`AUTH_UNAVAILABLE`), the evidence
+  claimed endpoint-catalog coverage that did not exist, the SHA-256 digest was
+  described as a privacy control it is not, the gate step list was incomplete and
+  out of order, and the P3-T05 note still asserted the limits were unconsumed.
+- Verification after fixes: the new limiter integration suite 4/4, room image
+  integration 17/17, auth integration 14/14, and the new upload-budget E2E 2/2, plus
+  the two mutation proofs above. `MYSQL_PORT=13306 npm run verify` exit 0 with
+  Harness 68 subtests plus 10 eval fixtures, Compose contract 8, unit 197/197,
+  integration 67/67, E2E 22/22, and a green build. The gate was rerun after the
+  `MED-04` contract landed; the final counts are in the sign-off note below.
+- Owner decisions of 2026-09-08: the reviewer-independence residual is accepted (the
+  reviewers share the author's model family, so a different-vendor pass stays
+  available but is not required); the rate-limit digest stays an unkeyed SHA-256 with
+  the corrected documentation; and `MED-04` was to be closed here rather than
+  deferred, so the pool-exhaustion contract is now defined.
+- Pool contract: acquisition allows four waiters per connection
+  (`queueLimit = MYSQL_POOL_SIZE * 4`, derived so there is one knob) and exhaustion
+  answers `503 DATABASE_OVERLOADED` in both locales, mapped centrally from mysql2's
+  uncoded `Queue limit reached.` error and any TypeORM wrapper around it.
+  `acquireTimeout` was rejected because mysql2 v3 does not implement it, so TypeORM's
+  passthrough would be fiction. Sustained saturation now turns readiness red
+  deliberately, replacing a probe that merely timed out. A real-MySQL case saturates
+  the smallest accepted pool and proves the shed; removing `queueLimit` fails it.
+- Sign-off gate (2026-09-08): `MYSQL_PORT=13306 npm run verify` exit 0 with Harness 68
+  subtests plus 10 eval fixtures, Compose contract 8, unit 199/199, integration 68/68,
+  E2E 22/22, and a green build. Phase 3 exits with every `REVIEW-022` finding
+  dispositioned and the remaining residual risks accepted by the owner.

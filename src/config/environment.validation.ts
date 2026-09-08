@@ -30,8 +30,11 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   MYSQL_DATABASE: string;
   MYSQL_USER: string;
   MYSQL_PASSWORD: string;
+  MYSQL_POOL_SIZE: number;
   REDIS_HOST: string;
   REDIS_PORT: number;
+  REDIS_TIMEOUT_MS: number;
+  RATE_LIMIT_REDIS_KEY_PREFIX: string;
   OBJECT_STORAGE_ENDPOINT?: string;
   OBJECT_STORAGE_REGION: string;
   OBJECT_STORAGE_FORCE_PATH_STYLE: boolean;
@@ -81,8 +84,21 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     then: Joi.string().min(1).required(),
     otherwise: Joi.string().min(1).default('local_mysql_change_me'),
   }),
+  MYSQL_POOL_SIZE: Joi.number().integer().min(4).max(100).default(10),
   REDIS_HOST: Joi.string().hostname().default('127.0.0.1'),
   REDIS_PORT: Joi.number().integer().min(1).max(65_535).default(6379),
+  REDIS_TIMEOUT_MS: Joi.number().integer().min(100).max(10_000).default(1_000),
+  // Required in production: two environments sharing one Redis instance would
+  // otherwise both default to the same namespace and spend each other's budgets.
+  RATE_LIMIT_REDIS_KEY_PREFIX: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.string()
+      .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
+      .required(),
+    otherwise: Joi.string()
+      .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
+      .default('hotel:rate'),
+  }),
   OBJECT_STORAGE_ENDPOINT: Joi.alternatives().conditional('NODE_ENV', {
     is: 'production',
     then: Joi.string()

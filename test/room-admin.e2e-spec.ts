@@ -70,6 +70,8 @@ describe('Phase 3 admin room API (e2e)', () => {
     'GOOGLE_CLIENT_SECRET',
     'GOOGLE_REDIRECT_URI',
     'AUTH_REDIS_KEY_PREFIX',
+    'RATE_LIMIT_REDIS_KEY_PREFIX',
+    'ATTACHMENT_UPLOAD_RATE_LIMIT_MAX',
     'ROOM_IMAGE_MAX_BYTES',
   ];
 
@@ -87,6 +89,11 @@ describe('Phase 3 admin room API (e2e)', () => {
     process.env.GOOGLE_REDIRECT_URI =
       'http://localhost:3000/api/v1/auth/google/callback';
     process.env.AUTH_REDIS_KEY_PREFIX = `hotel:p3-t02:${process.pid}:${randomUUID().replaceAll('-', '')}`;
+    // The shared limiter is real here. This journey needs its own counter namespace
+    // and a budget above the number of uploads it performs; the refusal itself is
+    // proven deterministically in the room image integration suite.
+    process.env.RATE_LIMIT_REDIS_KEY_PREFIX = `hotel:p3-t02-rate:${process.pid}:${randomUUID().replaceAll('-', '')}`;
+    process.env.ATTACHMENT_UPLOAD_RATE_LIMIT_MAX = '60';
     // A small content limit keeps the size-limit case cheap while still crossing the
     // real multipart boundary rather than a mocked one.
     process.env.ROOM_IMAGE_MAX_BYTES = '2048';

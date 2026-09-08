@@ -19,10 +19,13 @@ interface ErrorTranslations {
     attachmentOrderInvalid: string;
     attachmentPairInvalid: string;
     attachmentSizeExceeded: string;
+    attachmentUploadRateLimited: string;
+    attachmentUploadUnavailable: string;
     authenticationFailed: string;
     authorizationUnavailable: string;
     badRequest: string;
     conflict: string;
+    databaseOverloaded: string;
     forbidden: string;
     identityConflict: string;
     internalServerError: string;

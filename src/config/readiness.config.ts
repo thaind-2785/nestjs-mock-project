@@ -14,6 +14,8 @@ export interface ReadinessConfiguration {
     host: string;
     port: number;
   };
+  /** The probe writes here, so it proves the namespace the limiter actually uses. */
+  rateLimitKeyPrefix: string;
   // The probe must target the bucket the application actually writes to, so the
   // connection contract is reused instead of re-read from the environment here.
   storage: ObjectStorageConfiguration;
@@ -28,6 +30,7 @@ export function createReadinessConfiguration(
       host: environment.REDIS_HOST,
       port: environment.REDIS_PORT,
     },
+    rateLimitKeyPrefix: environment.RATE_LIMIT_REDIS_KEY_PREFIX,
     storage: createObjectStorageConfiguration(environment),
   };
 }

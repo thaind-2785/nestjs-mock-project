@@ -42,6 +42,9 @@ export class RoomImagesService {
     roomId: string,
     upload: RoomImageUpload,
   ): Promise<RoomImageResponseDto> {
+    // The uploader's budget is charged by AttachmentUploadRateLimitGuard, before the
+    // multipart body is read. Charging again here would spend two counters per
+    // upload and halve the configured maximum.
     const policy = this.policies.resolve(
       AttachmentObjectType.Room,
       upload.associationType,

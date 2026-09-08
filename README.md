@@ -59,6 +59,21 @@ curl http://localhost:3000/api/v1/health/ready
 unavailable, so use `/health/live` for process probes and `/health/ready` for
 deployment traffic.
 
+`MYSQL_POOL_SIZE` (1-100, default `10`) bounds concurrent MySQL connections. A
+request that locks a room or serves a public availability read holds one connection
+for its whole transaction, so this value is the real cap on concurrent request work;
+keep the total across API instances and CLI runners below the server's
+`max_connections`.
+
+Request budgets share one fail-closed limiter. `AUTH_RATE_LIMIT_*` and
+`ATTACHMENT_UPLOAD_RATE_LIMIT_*` stay separate policies, but their counters live
+together under `RATE_LIMIT_REDIS_KEY_PREFIX` (default `hotel:rate`), while
+`AUTH_REDIS_KEY_PREFIX` keeps only authentication state. Give each environment its
+own prefix when several share a Redis instance. Authenticated admins get a per-user
+upload budget: exceeding it returns `429 ATTACHMENT_UPLOAD_RATE_LIMITED`, and an
+unreachable limiter returns `503 ATTACHMENT_UPLOAD_UNAVAILABLE` rather than allowing
+unlimited uploads. See `docs/decisions/ADR-0005-shared-request-rate-limiting.md`.
+
 Application object-storage settings use provider-neutral `OBJECT_STORAGE_*` names.
 Local defaults point to MinIO; production can instead provide S3 (or another
 S3-compatible provider) values. `OBJECT_STORAGE_ENDPOINT` is optional in production
@@ -209,8 +224,17 @@ npm run test:harness
 npm run verify
 ```
 
-`npm run verify` checks the Harness, formatting, lint, unit tests, Harness regression,
-integration tests, E2E tests, and build. Pull requests and pushes to `main` run the
+`npm run verify` runs twelve managed steps in this order: Harness validation, Harness
+regression tests, Harness behavioral evaluation, the Compose contract tests, the
+Compose configuration check, formatting, lint, whole-project types, unit tests,
+integration tests, E2E tests, and the build. The two Compose steps shell out to the
+Docker Compose CLI early in the gate, so Docker must be available from the start, not
+only for the integration and E2E layers. `npm run
+typecheck` is the type step on its own: it runs `tsc --noEmit` over `tsconfig.json`,
+which includes `src/**/*.spec.ts` and `test/`. Those files are deliberately outside
+the build (`tsconfig.build.json` excludes them) and ts-jest transpiles without type
+checking under `isolatedModules`, so this step is the only thing that typechecks a
+test file. Pull requests and pushes to `main` run the
 same command in GitHub Actions. Making that check mandatory also requires the GitHub
 branch-ruleset setup documented in the Harness architecture.
 

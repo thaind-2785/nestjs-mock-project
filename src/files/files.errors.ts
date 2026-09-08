@@ -57,6 +57,27 @@ export const filesErrors = {
       errorMessageKeys.attachmentSizeExceeded,
     ),
   /**
+   * The uploader spent its shared upload budget. Counting the attempt before the
+   * signature check, the key generation, and the storage call is deliberate: a flood
+   * must cost one Redis counter, not a provider round trip.
+   */
+  attachmentUploadRateLimited: () =>
+    new ApplicationException(
+      HttpStatus.TOO_MANY_REQUESTS,
+      'ATTACHMENT_UPLOAD_RATE_LIMITED',
+      errorMessageKeys.attachmentUploadRateLimited,
+    ),
+  /**
+   * The limiter itself is unreachable. Uploads fail closed, because an unbounded
+   * upload path is a storage-cost and memory risk, not a degraded read.
+   */
+  attachmentUploadUnavailable: () =>
+    new ApplicationException(
+      HttpStatus.SERVICE_UNAVAILABLE,
+      'ATTACHMENT_UPLOAD_UNAVAILABLE',
+      errorMessageKeys.attachmentUploadUnavailable,
+    ),
+  /**
    * The object-storage provider failed or exceeded its bounded timeout. The cause
    * is kept for diagnosis but never published: it can carry bucket names, object
    * keys, and provider text.

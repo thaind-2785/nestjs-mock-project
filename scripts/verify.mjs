@@ -16,6 +16,7 @@ const checks = [
   'compose_config',
   'format_check',
   'lint_check',
+  'typecheck',
   'unit_test',
   'integration_test',
   'e2e_test',

@@ -1,19 +1,31 @@
+import type { MigrationInterface } from 'typeorm';
 import { createDatabaseConfiguration } from '../config/database.config';
+import { validateEnvironment } from '../config/environment.validation';
 import { createTypeOrmOptions } from './database.options';
 import { isP1T04DisposableDatabaseName } from './test-database-name';
 
-describe('createTypeOrmOptions', () => {
-  it('creates a non-synchronizing MySQL configuration', () => {
-    const database = createDatabaseConfiguration({
+/**
+ * Built through the real validator rather than an object literal, so the fixture is
+ * a set of raw variables a deployment could actually provide and every other
+ * variable keeps its validated default.
+ */
+function databaseConfiguration(poolSize: string) {
+  return createDatabaseConfiguration(
+    validateEnvironment({
       NODE_ENV: 'test',
-      PORT: 3000,
-      SWAGGER_ENABLED: false,
       MYSQL_HOST: '127.0.0.1',
-      MYSQL_PORT: 3306,
+      MYSQL_PORT: '3306',
       MYSQL_DATABASE: 'hotel_test',
       MYSQL_USER: 'hotel_app',
       MYSQL_PASSWORD: 'test-password',
-    });
+      MYSQL_POOL_SIZE: poolSize,
+    }),
+  );
+}
+
+describe('createTypeOrmOptions', () => {
+  it('creates a non-synchronizing MySQL configuration', () => {
+    const database = databaseConfiguration('12');
 
     expect(createTypeOrmOptions(database)).toEqual({
       type: 'mysql',
@@ -31,27 +43,30 @@ describe('createTypeOrmOptions', () => {
       synchronize: false,
       logging: false,
       connectTimeout: 5000,
+      extra: { connectionLimit: 12, queueLimit: 48 },
     });
   });
 
   it('allows the CLI to provide only its explicit migration set', () => {
-    const migration = { name: 'fixture' };
-    const database = createDatabaseConfiguration({
-      NODE_ENV: 'test',
-      PORT: 3000,
-      SWAGGER_ENABLED: false,
-      MYSQL_HOST: '127.0.0.1',
-      MYSQL_PORT: 3306,
-      MYSQL_DATABASE: 'hotel_test',
-      MYSQL_USER: 'hotel_app',
-      MYSQL_PASSWORD: 'test-password',
-    });
+    // The option accepts migration classes, so the fixture is one too: a plain
+    // object would not prove that a CLI-supplied set passes through unchanged.
+    class FixtureMigration implements MigrationInterface {
+      public up(): Promise<void> {
+        return Promise.resolve();
+      }
+
+      public down(): Promise<void> {
+        return Promise.resolve();
+      }
+    }
+    const database = databaseConfiguration('8');
 
     expect(
-      createTypeOrmOptions(database, { migrations: [migration] }),
+      createTypeOrmOptions(database, { migrations: [FixtureMigration] }),
     ).toMatchObject({
-      migrations: [migration],
+      migrations: [FixtureMigration],
       timezone: 'Z',
+      extra: { connectionLimit: 8, queueLimit: 32 },
       synchronize: false,
       migrationsRun: false,
     });

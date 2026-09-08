@@ -8,7 +8,7 @@
   `ADMIN-ROOM-05`, `ADMIN-TIME-01` through `ADMIN-TIME-04`, `ADMIN-FILE-01`
   through `ADMIN-FILE-03`, `ADMIN-ROOM-TYPE-01` through
   `ADMIN-ROOM-TYPE-05`, `ADMIN-AMENITY-01` through `ADMIN-AMENITY-05`,
-  `ADR-0002`, `ADR-0003`
+  `ADR-0002`, `ADR-0003`, `ADR-0004`, `ADR-0005`
 
 ## Problem and outcome
 
@@ -232,10 +232,13 @@ clients refresh it by reading the room resource again.
 
 Stable file errors include `ATTACHMENT_NOT_FOUND`, `ATTACHMENT_PAIR_INVALID`,
 `ATTACHMENT_MIME_UNSUPPORTED`, `ATTACHMENT_CONTENT_INVALID`,
-`ATTACHMENT_SIZE_EXCEEDED`, `ATTACHMENT_LIMIT_EXCEEDED`, and
-`ATTACHMENT_ORDER_INVALID`. An unsupported target/association pair returns
+`ATTACHMENT_SIZE_EXCEEDED`, `ATTACHMENT_LIMIT_EXCEEDED`,
+`ATTACHMENT_ORDER_INVALID`, `ATTACHMENT_UPLOAD_RATE_LIMITED`, and
+`ATTACHMENT_UPLOAD_UNAVAILABLE`. An unsupported target/association pair returns
 `400 ATTACHMENT_PAIR_INVALID`; a format outside the accepted list returns
-`415 ATTACHMENT_MIME_UNSUPPORTED`.
+`415 ATTACHMENT_MIME_UNSUPPORTED`. An uploader above its budget returns
+`429 ATTACHMENT_UPLOAD_RATE_LIMITED`, and an unreachable limiter returns
+`503 ATTACHMENT_UPLOAD_UNAVAILABLE` because uploads fail closed.
 
 ### Attachment storage and configuration contract
 
@@ -247,6 +250,12 @@ therefore split by lifetime rather than by surface.
   runner serve every target: presign TTL, bounded storage-call timeout, cleanup
   grace, and the upload rate limit. Cleanup grace must exceed the storage timeout so
   the runner cannot delete an object whose upload is still in flight.
+- The upload rate limit is charged per authenticated uploader through the shared
+  fail-closed limiter of `ADR-0005`, in a route guard that runs before the multipart
+  body is read. A refused attempt therefore costs one Redis counter and no buffered
+  body, no target read, no signature check, no safeguard row, no metadata, and no
+  object. Uploader identity comes from the verified access token, never the request
+  body, so the budget cannot be reset by changing a payload field.
 - Content limits stay per target/association, because the maximum size of a room
   photo is a decision about that surface. A later avatar surface adds its own limits
   without touching the shared ones.
@@ -365,9 +374,14 @@ version as part of the accepted logical model.
   list/detail routes are explicitly public.
 - DTO allowlists and global validation reject unknown or malformed fields. Nested
   attachment/window operations always bind the child to the room in the URL.
-- Upload controls include rate limiting, bounded body size, content-signature
-  verification, allowlisted MIME/extension mapping, random server keys, album count
-  limits, and sanitized errors. SVG and user-supplied paths are not accepted.
+- Upload controls include a per-uploader fail-closed rate limit enforced before the
+  body is read, bounded body size, content-signature verification, allowlisted
+  MIME/extension mapping, random server keys, album count limits, and sanitized
+  errors. SVG and user-supplied paths are not accepted. Rate-limit keys carry a
+  hashed discriminator rather than the raw value, which is a key-shape and
+  key-listing measure and not a defence against an actor who can read Redis; that
+  store holds client identifiers and must stay network-isolated. A limiter outage or
+  stall refuses uploads instead of admitting an unbounded number of them.
 - Private bucket credentials are least privilege for the configured bucket/prefix.
   Presigned URLs are short lived and reveal no write capability.
 - Search bounds page size and filter cardinality; queries use parameters and indexed
@@ -385,7 +399,17 @@ version as part of the accepted logical model.
   conflicts, upload bytes/rejections, storage latency/failures, presign failures,
   and pending/oldest cleanup work.
 - Startup validates storage endpoint/region/bucket/credentials, upload policy,
-  presigned URL TTL, and rate limits before listening.
+  presigned URL TTL, rate limits, the rate-limit key namespace (required in
+  production), the Redis request-path timeout, and the MySQL pool bound before
+  listening. `MYSQL_POOL_SIZE` caps concurrent locking writes and public snapshot
+  reads, so it is an operational limit rather than a tuning detail; its floor is 4
+  because one admin room read already acquires three pool connections at once and
+  readiness shares the same pool. Acquisition is bounded at four waiters per
+  connection, and a saturated pool answers `503 DATABASE_OVERLOADED` rather than
+  queueing without limit.
+- Readiness proves Redis write capability, not just reachability, because rate
+  limiting fails closed: a store that answers `PING` while refusing writes would
+  otherwise take every login and upload down while readiness reported healthy.
 - Operators can retry a bounded batch of persisted file cleanup work through a
   repository command; Phase 7 may schedule the same application service.
 
@@ -411,8 +435,10 @@ version as part of the accepted logical model.
       durable, observable, and successfully retryable.
 - [x] Migration up/down is proven in a disposable MySQL database with
       `synchronize: false`; MinIO integration tests leave only their own scoped data.
-- [ ] OpenAPI, EN/VI messages, runtime examples, database/ADR documentation, full
+- [x] OpenAPI, EN/VI messages, runtime examples, database/ADR documentation, full
       verification, and independent review complete with no unresolved Blocker/High.
+      `REVIEW-022` closed both High and all four Medium findings; the owner accepted
+      the recorded residual risks on 2026-09-08.
 
 ## Test strategy
 
@@ -473,3 +499,11 @@ only after exporting required catalog metadata and deleting only the Phase 3-own
 object prefix through the approved cleanup path. Never recursively delete a bucket
 or local named volume. After bookings reference rooms/windows, use a compatible
 forward fix rather than dropping Phase 3 tables.
+
+Two Phase 3 exit changes are configuration-only. `MYSQL_POOL_SIZE` and
+`RATE_LIMIT_REDIS_KEY_PREFIX` both have safe defaults, so an existing deployment
+needs no new value; set them together with the deploy when the shared MySQL server
+or Redis instance serves more than this environment. Moving authentication counters
+into the shared namespace resets in-flight rate-limit windows exactly once, which
+widens at most one window and is why the change ships with the API rather than
+behind a flag.

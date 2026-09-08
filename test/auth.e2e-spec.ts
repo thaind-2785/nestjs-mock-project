@@ -66,6 +66,7 @@ describe('Google auth and RBAC journey (e2e)', () => {
     'GOOGLE_CLIENT_SECRET',
     'GOOGLE_REDIRECT_URI',
     'AUTH_REDIS_KEY_PREFIX',
+    'RATE_LIMIT_REDIS_KEY_PREFIX',
   ];
 
   beforeAll(async () => {
@@ -82,6 +83,9 @@ describe('Google auth and RBAC journey (e2e)', () => {
     process.env.GOOGLE_REDIRECT_URI =
       'http://localhost:3000/api/v1/auth/google/callback';
     process.env.AUTH_REDIS_KEY_PREFIX = `hotel:e2e:${process.pid}:${randomUUID().replaceAll('-', '')}`;
+    // Rate-limit counters now live in the shared namespace, so the journey needs its
+    // own prefix or a repeated local run would start with a spent login budget.
+    process.env.RATE_LIMIT_REDIS_KEY_PREFIX = `hotel:e2e-rate:${process.pid}:${randomUUID().replaceAll('-', '')}`;
 
     try {
       adminConnection = await mysql.createConnection({

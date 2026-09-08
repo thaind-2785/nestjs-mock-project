@@ -6,6 +6,9 @@ const productionAuthEnvironment = {
   GOOGLE_REDIRECT_URI:
     'https://api.hotel.example.com/api/v1/auth/google/callback',
   JWT_ACCESS_SECRET: 'production_jwt_secret_at_least_32_chars',
+  // Production must name its own limiter namespace: two environments sharing one
+  // Redis instance would otherwise default to the same counters.
+  RATE_LIMIT_REDIS_KEY_PREFIX: 'hotel:production-rate',
 };
 
 describe('validateEnvironment', () => {
@@ -20,8 +23,11 @@ describe('validateEnvironment', () => {
     expect(environment.MYSQL_DATABASE).toBe('hotel_management');
     expect(environment.MYSQL_USER).toBe('hotel_app');
     expect(environment.MYSQL_PASSWORD).toBe('local_mysql_change_me');
+    expect(environment.MYSQL_POOL_SIZE).toBe(10);
     expect(environment.REDIS_HOST).toBe('127.0.0.1');
     expect(environment.REDIS_PORT).toBe(6379);
+    expect(environment.RATE_LIMIT_REDIS_KEY_PREFIX).toBe('hotel:rate');
+    expect(environment.REDIS_TIMEOUT_MS).toBe(1000);
     expect(environment.OBJECT_STORAGE_ENDPOINT).toBe('http://127.0.0.1:9000');
     expect(environment.OBJECT_STORAGE_REGION).toBe('us-east-1');
     expect(environment.OBJECT_STORAGE_FORCE_PATH_STYLE).toBe(true);
@@ -238,7 +244,10 @@ describe('validateEnvironment', () => {
     ['MYSQL_DATABASE', 'hotel database'],
     ['MYSQL_USER', 'hotel user'],
     ['MYSQL_PASSWORD', ''],
+    ['MYSQL_POOL_SIZE', '3'],
     ['REDIS_PORT', '0'],
+    ['REDIS_TIMEOUT_MS', '99'],
+    ['RATE_LIMIT_REDIS_KEY_PREFIX', 'invalid prefix'],
     ['OBJECT_STORAGE_ENDPOINT', 'ftp://private-endpoint'],
     ['OBJECT_STORAGE_BUCKET', 'Hotel Assets'],
     ['ATTACHMENT_PRESIGN_TTL_SECONDS', '59'],

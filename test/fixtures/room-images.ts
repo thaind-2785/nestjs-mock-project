@@ -1,9 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import {
   CreateBucketCommand,
   HeadBucketCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import Redis from 'ioredis';
 import type { DataSource } from 'typeorm';
+import { RateLimitService } from '../../src/common/rate-limit/rate-limit.service';
+import { createRedisConnectionConfiguration } from '../../src/config/redis.config';
 import { createObjectStorageClientOptions } from '../../src/common/storage/object-storage-client';
 import {
   AttachmentsConfiguration,
@@ -42,6 +46,7 @@ export interface RoomImageFixture {
   storage: AttachmentStorageService;
   cleanup: StorageCleanupService;
   policies: AttachmentPolicyRegistry;
+  rateLimit: RateLimitService;
   configuration: AttachmentsConfiguration;
   bucket: string;
   ensureBucket: () => Promise<void>;
@@ -58,6 +63,9 @@ export function createRoomImageFixture(
   connection: DatabaseConnectionService,
   environment: EnvironmentVariables,
   overrides: Partial<AttachmentsConfiguration> = {},
+  // A closed port proves the fail-closed upload path against a real client rather
+  // than a rejecting stub.
+  rateLimitRedisPort: number = environment.REDIS_PORT,
 ): RoomImageFixture {
   const storageConfiguration = createObjectStorageConfiguration(environment);
   const configuration: AttachmentsConfiguration = {
@@ -72,9 +80,28 @@ export function createRoomImageFixture(
     storageConfiguration,
     configuration,
   );
+  // Every fixture owns its own limiter namespace, so a suite never spends or
+  // observes another suite's upload budget.
+  const redisClient = new Redis({
+    host: environment.REDIS_HOST,
+    port: rateLimitRedisPort,
+    lazyConnect: true,
+    enableOfflineQueue: false,
+    maxRetriesPerRequest: 0,
+    connectTimeout: 1_000,
+    retryStrategy: () => null,
+  });
+  const rateLimit = new RateLimitService(redisClient, {
+    redisKeyPrefix: `hotel:test-rate:${process.pid}:${randomUUID().replaceAll('-', '')}`,
+    connection: {
+      ...createRedisConnectionConfiguration(environment),
+      port: rateLimitRedisPort,
+    },
+  });
   const attachments = new AttachmentsService(
     dataSource,
     storage,
+    rateLimit,
     configuration,
   );
   const policies = new AttachmentPolicyRegistry(configuration);
@@ -95,9 +122,13 @@ export function createRoomImageFixture(
       configuration,
     ),
     policies,
+    rateLimit,
     configuration,
     bucket: storageConfiguration.bucket,
     ensureBucket: () => ensureAttachmentBucket(environment),
-    destroy: () => client.destroy(),
+    destroy: () => {
+      client.destroy();
+      redisClient.disconnect();
+    },
   };
 }

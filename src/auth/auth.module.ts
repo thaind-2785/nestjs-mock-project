@@ -4,8 +4,9 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import Redis from 'ioredis';
+import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
+import { reportRedisClientErrors } from '../common/redis/redis-client-errors';
 import { authConfig } from '../config/auth.config';
-import { readinessConfig } from '../config/readiness.config';
 import { DatabaseModule } from '../database/database.module';
 import { UserRoleHistory } from '../users/entities/user-role-history.entity';
 import { UserStatusHistory } from '../users/entities/user-status-history.entity';
@@ -25,9 +26,9 @@ import { AUTH_REDIS_CLIENT, GOOGLE_OAUTH_CLIENT } from './auth.tokens';
 @Module({
   imports: [
     ConfigModule.forFeature(authConfig),
-    ConfigModule.forFeature(readinessConfig),
     DatabaseModule,
     JwtModule.register({}),
+    RateLimitModule,
     TypeOrmModule.forFeature([
       User,
       AuthIdentity,
@@ -44,17 +45,22 @@ import { AUTH_REDIS_CLIENT, GOOGLE_OAUTH_CLIENT } from './auth.tokens';
     SessionService,
     {
       provide: AUTH_REDIS_CLIENT,
-      inject: [readinessConfig.KEY],
-      useFactory: (configuration: ConfigType<typeof readinessConfig>) =>
-        new Redis({
-          host: configuration.redis.host,
-          port: configuration.redis.port,
+      inject: [authConfig.KEY],
+      useFactory: (configuration: ConfigType<typeof authConfig>) => {
+        const client = new Redis({
+          host: configuration.redisConnection.host,
+          port: configuration.redisConnection.port,
           lazyConnect: true,
           enableOfflineQueue: false,
           maxRetriesPerRequest: 0,
-          connectTimeout: configuration.timeoutMs,
+          connectTimeout: configuration.redisConnection.timeoutMs,
+          commandTimeout: configuration.redisConnection.timeoutMs,
+          maxLoadingRetryTime: configuration.redisConnection.timeoutMs,
           retryStrategy: () => null,
-        }),
+        });
+        reportRedisClientErrors(client, 'auth-state');
+        return client;
+      },
     },
     { provide: GOOGLE_OAUTH_CLIENT, useClass: GoogleOAuthClient },
     { provide: APP_GUARD, useClass: AccessTokenGuard },

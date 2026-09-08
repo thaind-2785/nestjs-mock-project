@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -23,6 +24,7 @@ import {
 import type { AuthenticatedPrincipal } from '../auth/auth.types';
 import { CurrentPrincipal } from '../auth/decorators/current-principal.decorator';
 import { AttachmentUploadErrorInterceptor } from '../files/attachment-upload.interceptor';
+import { AttachmentUploadRateLimitGuard } from '../files/attachment-upload-rate-limit.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ErrorResponseDto } from '../common/errors/error-response.dto';
 import { createValidationException } from '../common/errors/validation-errors';
@@ -45,9 +47,11 @@ export class AdminRoomImagesController {
   public constructor(private readonly images: RoomImagesService) {}
 
   @Post()
-  // Multer buffers into memory up to the configured size limit; the limit itself is
-  // registered from configuration in RoomsModule, and the policy re-checks the
-  // accepted size after the signature is verified.
+  // Order matters: guards run before interceptors, so the per-uploader budget is
+  // charged before Multer buffers the body. Multer then buffers into memory up to
+  // the configured size limit, registered from configuration in RoomsModule, and
+  // the policy re-checks the accepted size after the signature is verified.
+  @UseGuards(AttachmentUploadRateLimitGuard)
   @UseInterceptors(AttachmentUploadErrorInterceptor, FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -78,6 +82,18 @@ export class AdminRoomImagesController {
     status: 415,
     type: ErrorResponseDto,
     description: 'ATTACHMENT_MIME_UNSUPPORTED: unsupported declared format.',
+  })
+  @ApiResponse({
+    status: 429,
+    type: ErrorResponseDto,
+    description:
+      'ATTACHMENT_UPLOAD_RATE_LIMITED: the uploader spent its upload budget.',
+  })
+  @ApiResponse({
+    status: 503,
+    type: ErrorResponseDto,
+    description:
+      'ATTACHMENT_UPLOAD_UNAVAILABLE or STORAGE_UNAVAILABLE: uploads fail closed.',
   })
   upload(
     @Param() params: RoomIdParamDto,

@@ -3,9 +3,13 @@ import mysql from 'mysql2/promise';
 import { DataSource } from 'typeorm';
 import { AuthIdentity } from '../src/auth/entities/auth-identity.entity';
 import { AuthSession } from '../src/auth/entities/auth-session.entity';
+import { ApplicationException } from '../src/common/errors/application.exception';
 import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
-import { validateEnvironment } from '../src/config/environment.validation';
+import {
+  EnvironmentVariables,
+  validateEnvironment,
+} from '../src/config/environment.validation';
 import { DatabaseConnectionService } from '../src/database/database-connection.service';
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
@@ -52,6 +56,8 @@ describe('Phase 3 room image persistence', () => {
   let dataSource: DataSource;
   let adminConnection: mysql.Connection;
   let disposableDatabase: string;
+  let environment: EnvironmentVariables;
+  let connection: DatabaseConnectionService;
   let catalog: ReferenceCatalogService;
   let rooms: RoomsService;
   let search: RoomSearchService;
@@ -60,7 +66,7 @@ describe('Phase 3 room image persistence', () => {
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
-    const environment = validateEnvironment(process.env);
+    environment = validateEnvironment(process.env);
     disposableDatabase = `p3_t05_int_${process.pid}_${randomUUID().replaceAll('-', '')}`;
     try {
       adminConnection = await mysql.createConnection({
@@ -112,7 +118,7 @@ describe('Phase 3 room image persistence', () => {
     );
     await dataSource.initialize();
     await dataSource.runMigrations();
-    const connection = new DatabaseConnectionService(dataSource);
+    connection = new DatabaseConnectionService(dataSource);
     catalog = new ReferenceCatalogService(dataSource, connection);
     // A small album limit keeps the count-limit case cheap, and a short grace lets
     // the safeguard test observe the runner on both sides of the due time.
@@ -601,5 +607,63 @@ describe('Phase 3 room image persistence', () => {
     // The list carries the thumbnail only; the album belongs to detail.
     expect(list.items[0]).not.toHaveProperty('images');
     presign.mockRestore();
+  });
+  it('answers the stable attachment error once an uploader is above its budget', async () => {
+    // The budget is charged by AttachmentUploadRateLimitGuard before the multipart
+    // body is read, so this proves the files-level error contract the guard raises.
+    // The route ordering itself is proven over HTTP in room-image-upload-limit.e2e.
+    const limited = createRoomImageFixture(
+      dataSource,
+      connection,
+      environment,
+      {
+        uploadRateLimit: { max: 1, windowSeconds: 60 },
+      },
+    );
+    try {
+      await expect(
+        limited.attachments.assertUploadAllowed(uploaderUserId),
+      ).resolves.toBeUndefined();
+
+      const refused = await limited.attachments
+        .assertUploadAllowed(uploaderUserId)
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      expect(refused).toBeInstanceOf(ApplicationException);
+      expect(refused).toMatchObject({
+        errorCode: 'ATTACHMENT_UPLOAD_RATE_LIMITED',
+      });
+      expect((refused as ApplicationException).getStatus()).toBe(429);
+    } finally {
+      limited.destroy();
+    }
+  });
+
+  it('fails closed when the rate-limit store is unreachable', async () => {
+    const unavailable = createRoomImageFixture(
+      dataSource,
+      connection,
+      environment,
+      {},
+      // A closed port, so the real client refuses rather than a stub rejecting.
+      63_999,
+    );
+    try {
+      const refused = await unavailable.attachments
+        .assertUploadAllowed(uploaderUserId)
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      expect(refused).toBeInstanceOf(ApplicationException);
+      expect(refused).toMatchObject({
+        errorCode: 'ATTACHMENT_UPLOAD_UNAVAILABLE',
+      });
+      expect((refused as ApplicationException).getStatus()).toBe(503);
+    } finally {
+      unavailable.destroy();
+    }
   });
 });

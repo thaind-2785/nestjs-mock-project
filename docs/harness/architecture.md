@@ -64,6 +64,7 @@ flowchart TB
 | `npm run verify`           | Required local and CI gate                 | Ignored test/build artifacts          |
 | `npm run format:check`     | Non-mutating repository format check       | None                                  |
 | `npm run lint:check`       | Non-mutating source lint check             | None                                  |
+| `npm run typecheck`        | Whole-project type check, tests included   | Ignored incremental build info        |
 | `npm run test:unit`        | Unit test layer                            | Ignored test artifacts                |
 | `npm run test:integration` | Integration test layer                     | Ignored test artifacts                |
 | `npm run test:e2e`         | E2E test layer                             | Local test socket                     |

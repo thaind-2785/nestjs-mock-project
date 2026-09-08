@@ -26,6 +26,7 @@ import { CurrentPrincipal } from './decorators/current-principal.decorator';
 import { Public } from './decorators/public.decorator';
 import { AccessTokenResponseDto } from './dto/access-token-response.dto';
 import { GoogleCallbackQueryDto } from './dto/google-callback-query.dto';
+import type { AuthRateLimitScope } from './auth-redis.service';
 import { AuthService } from './auth.service';
 import {
   clearOAuthStateCookieOptions,
@@ -167,7 +168,10 @@ export class AuthController {
     );
   }
 
-  private async authRateLimit(request: Request, scope: string): Promise<void> {
+  private async authRateLimit(
+    request: Request,
+    scope: AuthRateLimitScope,
+  ): Promise<void> {
     await this.auth.assertRateLimit(scope, rateLimitKey(request));
   }
 }

@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { DataSource, EntityManager } from 'typeorm';
+import { RateLimitService } from '../common/rate-limit/rate-limit.service';
 import { attachmentsConfig } from '../config/attachments.config';
 import { AttachmentPolicy } from './attachment-policy';
 import { verifyAttachmentContent } from './attachment-signature';
@@ -56,9 +57,32 @@ export class AttachmentsService {
   public constructor(
     private readonly dataSource: DataSource,
     private readonly storage: AttachmentStorageService,
+    private readonly rateLimit: RateLimitService,
     @Inject(attachmentsConfig.KEY)
     private readonly configuration: ConfigType<typeof attachmentsConfig>,
   ) {}
+
+  /**
+   * The per-uploader upload budget, which is attachment infrastructure rather than a
+   * per-target product rule: one storage adapter and one bucket serve every target,
+   * so the cost of a flood is shared too. The owning module calls this before it
+   * touches its target, so a rejected attempt costs one Redis counter and never a
+   * signature check, a generated key, a safeguard row, or a provider round trip.
+   */
+  public async assertUploadAllowed(uploaderUserId: string): Promise<void> {
+    let allowed: boolean;
+    try {
+      allowed = await this.rateLimit.consume({
+        scope: 'attachment-upload',
+        discriminator: uploaderUserId,
+        max: this.configuration.uploadRateLimit.max,
+        windowSeconds: this.configuration.uploadRateLimit.windowSeconds,
+      });
+    } catch {
+      throw filesErrors.attachmentUploadUnavailable();
+    }
+    if (!allowed) throw filesErrors.attachmentUploadRateLimited();
+  }
 
   /**
    * Everything that must happen before the target lock, in this order: verify the

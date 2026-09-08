@@ -186,6 +186,7 @@ export const commandCatalog = Object.freeze({
   build: npmCommand(['run', 'build']),
   format_check: npmCommand(['run', 'format:check']),
   lint_check: npmCommand(['run', 'lint:check']),
+  typecheck: npmCommand(['run', 'typecheck']),
   unit_test: npmCommand(['run', 'test:unit']),
   integration_test: npmCommand(['run', 'test:integration']),
   e2e_test: npmCommand(['run', 'test:e2e']),

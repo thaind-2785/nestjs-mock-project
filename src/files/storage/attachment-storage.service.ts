@@ -1,4 +1,9 @@
-import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnApplicationShutdown,
+} from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import {
   DeleteObjectCommand,
@@ -25,6 +30,8 @@ export interface AttachmentUpload {
  */
 @Injectable()
 export class AttachmentStorageService implements OnApplicationShutdown {
+  private readonly logger = new Logger(AttachmentStorageService.name);
+
   public constructor(
     @Inject(ATTACHMENT_STORAGE_CLIENT) private readonly client: S3Client,
     @Inject(objectStorageConfig.KEY)
@@ -36,7 +43,7 @@ export class AttachmentStorageService implements OnApplicationShutdown {
   public async putObject(upload: AttachmentUpload): Promise<void> {
     // ContentLength is sent explicitly so the provider rejects a truncated body
     // instead of storing a partial object under a key metadata will point at.
-    await this.execute((abortSignal) =>
+    await this.execute('put', (abortSignal) =>
       this.client.send(
         new PutObjectCommand({
           Bucket: this.storage.bucket,
@@ -57,7 +64,7 @@ export class AttachmentStorageService implements OnApplicationShutdown {
    */
   public async deleteObject(objectKey: string): Promise<void> {
     try {
-      await this.execute((abortSignal) =>
+      await this.execute('delete', (abortSignal) =>
         this.client.send(
           new DeleteObjectCommand({
             Bucket: this.storage.bucket,
@@ -84,6 +91,11 @@ export class AttachmentStorageService implements OnApplicationShutdown {
         { expiresIn: this.attachments.presignTtlSeconds },
       );
     } catch (error) {
+      this.logger.error({
+        event: 'attachment_storage_failure',
+        operation: 'presign',
+        errorCode: 'STORAGE_UNAVAILABLE',
+      });
       throw filesErrors.storageUnavailable(error);
     }
   }
@@ -93,6 +105,7 @@ export class AttachmentStorageService implements OnApplicationShutdown {
   }
 
   private async execute<T>(
+    operationName: 'put' | 'delete',
     operation: (abortSignal: AbortSignal) => Promise<T>,
   ): Promise<T> {
     const abortController = new AbortController();
@@ -105,6 +118,11 @@ export class AttachmentStorageService implements OnApplicationShutdown {
       return await operation(abortController.signal);
     } catch (error) {
       if (isMissingObjectError(error)) throw error;
+      this.logger.error({
+        event: 'attachment_storage_failure',
+        operation: operationName,
+        errorCode: 'STORAGE_UNAVAILABLE',
+      });
       throw filesErrors.storageUnavailable(error);
     } finally {
       clearTimeout(timeout);

@@ -39,12 +39,16 @@ hard target deletion detaches associations.
 Phase 3 persists narrow `storage_cleanup_tasks` records rather than starting the
 Phase 5 general outbox early. The API creates a unique-key cleanup safeguard before
 the S3-compatible upload, with `available_at` beyond the bounded storage-call
-timeout. In the target-locked metadata transaction, successful attachment insertion
-deletes that safeguard. Upload/provider/metadata failure leaves an eventually
-claimable task, and object deletion is idempotent even when the upload never created
-the key. Replacement and detach insert immediately available cleanup work in the
-same transaction that removes the live association. Claimers use an expiring lease;
-Phase 7 can schedule the same bounded service without changing attachment semantics.
+timeout. The metadata completion transaction locks that safeguard row before
+inserting the live attachment; if a cleanup worker has already claimed or removed
+it, completion aborts instead of publishing metadata for an object that may be
+deleted. Upload/provider/metadata failure leaves an eventually claimable task, and
+object deletion is idempotent even when the upload never created the key.
+Replacement and detach insert immediately available cleanup work in the same
+transaction that removes the live association. Claimers use an expiring lease and
+claim one row immediately before each bounded provider call, so later rows in a
+batch cannot outlive their leases. Phase 7 can schedule the same bounded service
+without changing attachment semantics.
 
 ## Consequences
 
@@ -58,5 +62,6 @@ reorder, and cleanup retry.
 
 The cleanup safeguard adds one operational table and a small write before uploads,
 but removes the crash window in which an uploaded object could have neither live
-metadata nor a durable deletion intent. It remains intentionally separate from
-notification delivery semantics.
+metadata nor a durable deletion intent. The completion lock closes the second
+window between a successful provider write and the target-locked metadata commit.
+It remains intentionally separate from notification delivery semantics.

@@ -62,7 +62,7 @@ export class RoomSearchService {
       const roomIds = rooms.map((room) => room.id);
       const [amenitiesByRoom, imagesByRoom] = await Promise.all([
         loadAmenitiesByRoom(manager, roomIds),
-        this.images.loadImageSets(manager, roomIds),
+        this.images.loadThumbnails(manager, roomIds),
       ]);
       return {
         // Every returned room already satisfies the containment filter, so the

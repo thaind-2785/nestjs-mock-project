@@ -11,6 +11,7 @@ import {
   findTargetAttachments,
   insertAttachment,
   insertUploadSafeguard,
+  lockUploadSafeguard,
   rewriteAttachmentPositions,
   scheduleDetachedCleanup,
 } from './attachment-metadata';
@@ -115,6 +116,16 @@ export class AttachmentsService {
     staged: StagedUpload,
     uploaderUserId: string,
   ): Promise<AttachmentCommit> {
+    // Claim the safeguard row before making any metadata live. A cleanup worker
+    // that already owns the row wins and this transaction must roll back; otherwise
+    // the worker could delete the object between the upload and this insert.
+    const safeguard = await lockUploadSafeguard(manager, staged.objectKey);
+    if (!safeguard || safeguard.lockExpiresAt !== null) {
+      throw filesErrors.storageUnavailable(
+        new Error('Upload safeguard is no longer available'),
+      );
+    }
+
     const target = this.targetOf(staged);
     const existing = await findTargetAttachments(manager, target);
 

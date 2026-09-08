@@ -2,7 +2,7 @@ import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { HealthIndicatorService } from '@nestjs/terminus';
-import { ListBucketsCommand } from '@aws-sdk/client-s3';
+import { HeadBucketCommand } from '@aws-sdk/client-s3';
 import { DataSource } from 'typeorm';
 import { readinessConfig } from '../config/readiness.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
@@ -25,7 +25,7 @@ export type RedisReadinessClientFactory = () => RedisReadinessClient;
 export interface StorageReadinessClient {
   destroy(): void;
   send(
-    command: ListBucketsCommand,
+    command: HeadBucketCommand,
     options?: { abortSignal?: AbortSignal },
   ): Promise<unknown>;
 }
@@ -101,7 +101,10 @@ export class ReadinessService implements OnApplicationShutdown {
   private async checkStorage(): Promise<ReadinessProbeResult> {
     try {
       await this.withTimeout((abortSignal) =>
-        this.storageClient.send(new ListBucketsCommand({}), { abortSignal }),
+        this.storageClient.send(
+          new HeadBucketCommand({ Bucket: this.configuration.storage.bucket }),
+          { abortSignal },
+        ),
       );
       this.healthIndicator.check('storage').up();
       return { dependency: 'storage', healthy: true };

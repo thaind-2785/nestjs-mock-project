@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method */
 import { HealthIndicatorService } from '@nestjs/terminus';
+import { HeadBucketCommand } from '@aws-sdk/client-s3';
 import { DataSource } from 'typeorm';
 import { ReadinessConfiguration } from '../config/readiness.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
@@ -70,6 +71,9 @@ describe('ReadinessService', () => {
     expect(jest.mocked(redisClient.ping)).toHaveBeenCalledTimes(1);
     expect(jest.mocked(redisClient.disconnect)).toHaveBeenCalledTimes(1);
     expect(jest.mocked(storageClient.send)).toHaveBeenCalledTimes(1);
+    const [command] = jest.mocked(storageClient.send).mock.calls[0];
+    expect(command).toBeInstanceOf(HeadBucketCommand);
+    expect(command.input.Bucket).toBe('hotel-assets');
   });
 
   it('returns only sanitized dependency classes for failures', async () => {

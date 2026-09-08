@@ -149,6 +149,32 @@ export class RoomImagesService {
     return sets;
   }
 
+  /**
+   * Public list responses expose only the thumbnail. Avoid signing every album
+   * object on a page when the caller cannot see those URLs anyway.
+   */
+  public async loadThumbnails(
+    manager: EntityManager,
+    roomIds: readonly string[],
+  ): Promise<Map<string, RoomImageSet>> {
+    const sets = new Map<string, RoomImageSet>();
+    if (!roomIds.length) return sets;
+
+    const thumbnails = await findAttachmentsByTargets(
+      manager,
+      AttachmentObjectType.Room,
+      roomIds,
+      AttachmentAssociationType.Thumbnail,
+    );
+    for (const roomId of roomIds) {
+      const [thumbnail] = await this.toRoomImageResponses(
+        thumbnails.get(roomId) ?? [],
+      );
+      sets.set(roomId, { thumbnail: thumbnail ?? null, album: [] });
+    }
+    return sets;
+  }
+
   private async toRoomImageResponses(
     attachments: readonly Attachment[],
   ): Promise<RoomImageResponseDto[]> {

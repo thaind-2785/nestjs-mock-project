@@ -345,6 +345,11 @@ version as part of the accepted logical model.
   locks/revalidates the target. The attachment insert and retirement of that
   safeguard commit atomically. A crash/provider/metadata failure therefore leaves
   cleanup work for a missing or orphan object, and no active attachment is returned.
+- The metadata completion transaction locks the upload safeguard row before inserting
+  the live attachment. A cleanup worker that already claimed or removed that row
+  wins; completion aborts and never publishes metadata for an object that may be
+  deleted concurrently. Cleanup claims one row immediately before each provider
+  call, so a batch cannot let later rows outlive their leases.
 - Replace/delete commits detachment plus durable cleanup work atomically, then makes
   a bounded best-effort object deletion. A provider timeout/error does not restore
   detached metadata. Pending cleanup remains observable and retryable; Phase 7 later
@@ -397,14 +402,14 @@ version as part of the accepted logical model.
       active window.
 - [ ] Phase 4 can add confirmed-booking exclusion without changing the public
       room/date request contract or client-selected window IDs.
-- [ ] Valid thumbnail/album uploads use generated keys and private storage; spoofed,
+- [x] Valid thumbnail/album uploads use generated keys and private storage; spoofed,
       unsupported, oversized, over-count, and unauthorized uploads are rejected.
-- [ ] Thumbnail replacement leaves exactly one active position `0`; album complete-
+- [x] Thumbnail replacement leaves exactly one active position `0`; album complete-
       list reorder is atomic; every delete/reorder is target-bound.
-- [ ] Upload versus hard-delete and delete versus reorder races cannot create an
+- [x] Upload versus hard-delete and delete versus reorder races cannot create an
       active orphan/cross-room association; cleanup provider failures remain
       durable, observable, and successfully retryable.
-- [ ] Migration up/down is proven in a disposable MySQL database with
+- [x] Migration up/down is proven in a disposable MySQL database with
       `synchronize: false`; MinIO integration tests leave only their own scoped data.
 - [ ] OpenAPI, EN/VI messages, runtime examples, database/ADR documentation, full
       verification, and independent review complete with no unresolved Blocker/High.

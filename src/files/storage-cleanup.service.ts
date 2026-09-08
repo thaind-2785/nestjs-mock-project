@@ -1,7 +1,7 @@
 import { hostname } from 'node:os';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
-import { DataSource, In } from 'typeorm';
+import { DataSource } from 'typeorm';
 import { attachmentsConfig } from '../config/attachments.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import { StorageCleanupTask } from './entities/storage-cleanup-task.entity';
@@ -31,6 +31,8 @@ export interface StorageCleanupResult {
  */
 @Injectable()
 export class StorageCleanupService {
+  private readonly logger = new Logger(StorageCleanupService.name);
+
   public constructor(
     private readonly dataSource: DataSource,
     private readonly databaseConnection: DatabaseConnectionService,
@@ -44,14 +46,17 @@ export class StorageCleanupService {
   ): Promise<StorageCleanupResult> {
     await this.databaseConnection.ensureInitialized();
     const workerId = (options.workerId ?? hostname()).slice(0, 100);
-    const tasks = await this.claim(
-      options.batchSize ?? defaultCleanupBatchSize,
-      workerId,
-    );
-
+    const batchSize = options.batchSize ?? defaultCleanupBatchSize;
+    const tasks: StorageCleanupTask[] = [];
     let deleted = 0;
     let retryable = 0;
-    for (const task of tasks) {
+    for (let index = 0; index < batchSize; index += 1) {
+      // Claim one row immediately before its provider call. A batch-level lease
+      // expires while later rows wait behind an earlier slow delete, allowing a
+      // second worker to process the same row concurrently.
+      const task = await this.claimOne(workerId);
+      if (!task) break;
+      tasks.push(task);
       try {
         await this.storage.deleteObject(task.objectKey);
         await this.dataSource.manager.delete(StorageCleanupTask, {
@@ -63,19 +68,25 @@ export class StorageCleanupService {
         // delay keeps a failing provider from being hammered by the next run.
         await this.release(task.id);
         retryable += 1;
+        this.logger.warn({
+          event: 'storage_cleanup_retryable',
+          taskId: task.id,
+          reason: task.reason,
+          attempts: task.attempts + 1,
+          errorCode: 'STORAGE_UNAVAILABLE',
+        });
       }
     }
-    return { claimed: tasks.length, deleted, retryable };
+    const result = { claimed: tasks.length, deleted, retryable };
+    this.logger.log({ event: 'storage_cleanup_batch_completed', ...result });
+    return result;
   }
 
   /**
    * Claims due work under `FOR UPDATE SKIP LOCKED`, so two workers never process
    * the same row and neither waits for the other.
    */
-  private claim(
-    batchSize: number,
-    workerId: string,
-  ): Promise<StorageCleanupTask[]> {
+  private claimOne(workerId: string): Promise<StorageCleanupTask | null> {
     return this.dataSource.transaction(async (manager) => {
       const now = new Date();
       const candidates = await manager
@@ -92,15 +103,15 @@ export class StorageCleanupService {
         )
         .orderBy('task.available_at', 'ASC')
         .addOrderBy('task.id', 'ASC')
-        .limit(batchSize)
+        .limit(1)
         .getMany();
-      if (!candidates.length) return [];
+      if (!candidates.length) return null;
 
       // The lease outlives the bounded storage call by construction: configuration
       // rejects a cleanup grace that is not greater than the storage timeout.
       await manager.update(
         StorageCleanupTask,
-        { id: In(candidates.map(({ id }) => id)) },
+        { id: candidates[0].id },
         {
           lockedAt: now,
           lockExpiresAt: new Date(
@@ -110,7 +121,7 @@ export class StorageCleanupService {
           attempts: () => 'attempts + 1',
         },
       );
-      return candidates;
+      return candidates[0];
     });
   }
 

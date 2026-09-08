@@ -107,6 +107,25 @@ export async function insertUploadSafeguard(
   });
 }
 
+/**
+ * The safeguard is the hand-off lock between object storage and metadata. A
+ * completion transaction must lock it before inserting the live row: if the
+ * cleanup worker already claimed (or removed) it, this upload must abort instead
+ * of publishing metadata for an object that may be deleted concurrently.
+ */
+export function lockUploadSafeguard(
+  manager: EntityManager,
+  objectKey: string,
+): Promise<StorageCleanupTask | null> {
+  return manager.findOne(StorageCleanupTask, {
+    where: {
+      objectKey,
+      reason: StorageCleanupReason.UploadSafeguard,
+    },
+    lock: { mode: 'pessimistic_write' },
+  });
+}
+
 /** Retires the safeguard in the same transaction that makes the object live. */
 export async function deleteUploadSafeguard(
   manager: EntityManager,

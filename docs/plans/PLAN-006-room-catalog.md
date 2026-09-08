@@ -434,6 +434,27 @@ its own focused evidence.
   does that or records the accepted residual risk; the configuration must not stay
   unused past the Phase 3 exit gate.
 
+## P3-T05 independent review follow-up (2026-09-08)
+
+- The review found a cleanup/upload hand-off race: a safeguard could expire while an
+  upload waited for the room lock, allowing cleanup to delete the object before
+  metadata committed. Completion now pessimistically locks the safeguard row and
+  aborts when it is missing or already leased; the real-MySQL integration suite
+  deterministically proves that no attachment metadata is created in that race.
+- Readiness now uses `HeadBucket` against the configured bucket instead of the
+  account-wide `ListBuckets` operation. The readiness unit test asserts the command
+  and bucket, preserving least-privilege production credentials and detecting a
+  missing configured bucket.
+- Public list reads now load/presign thumbnails only; detail/admin reads retain the
+  complete album. Cleanup claims one task immediately before each provider call, so
+  every lease covers one bounded operation rather than an entire sequential batch.
+- The review added upload-vs-hard-delete and delete-vs-reorder MySQL concurrency
+  regressions, plus structured storage/cleanup failure events that never log object
+  keys or provider bodies. Focused unit/integration/E2E checks, build, lint, format,
+  and `git diff --check` passed after the fixes. The final
+  `MYSQL_PORT=13306 npm run verify` gate is green: Harness 68, Compose 8, unit
+  181/181, integration 60/60, E2E 20/20, and build.
+
 ## PR #7 mentor-review follow-up (2026-09-08)
 
 - The owner authorized all eight mentor threads. Reuse P3-T03/P3-T04 and preserve

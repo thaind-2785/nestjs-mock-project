@@ -27,6 +27,7 @@ import { RoomStatus } from '../src/rooms/entities/room.enums';
 import { ReferenceCatalogService } from '../src/rooms/reference-catalog.service';
 import { RoomSearchService } from '../src/rooms/room-search.service';
 import { RoomsService } from '../src/rooms/rooms.service';
+import { lockRoom } from '../src/rooms/room-lock';
 import { UserRole, UserStatus } from '../src/users/entities/user.enums';
 import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
@@ -117,7 +118,7 @@ describe('Phase 3 room image persistence', () => {
     // the safeguard test observe the runner on both sides of the due time.
     fixture = createRoomImageFixture(dataSource, connection, environment, {
       roomImage: { maxBytes: 4_096, maxAlbumCount: 2 },
-      storageTimeoutMs: 2_000,
+      storageTimeoutMs: 500,
       cleanupGraceMs: 1_200,
     });
     rooms = new RoomsService(dataSource, connection, fixture.images);
@@ -337,6 +338,54 @@ describe('Phase 3 room image persistence', () => {
     expect(gone.status).toBe(404);
   });
 
+  it('aborts metadata commit when cleanup wins while upload waits for the room lock', async () => {
+    const roomId = await createRoom('A-104-RACE');
+    const blocker = dataSource.createQueryRunner();
+    await blocker.connect();
+    await blocker.startTransaction();
+    await lockRoom(blocker.manager, roomId);
+
+    try {
+      const uploadPromise = upload(roomId, AttachmentAssociationType.Album);
+      let safeguard: StorageCleanupTask | null = null;
+      let objectReady = false;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        safeguard = await dataSource.manager.findOneBy(StorageCleanupTask, {});
+        if (safeguard) {
+          const response = await fetch(
+            await fixture.storage.createPresignedGetUrl(safeguard.objectKey),
+          );
+          if (response.status === 200) {
+            objectReady = true;
+            break;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(safeguard).not.toBeNull();
+      expect(objectReady).toBe(true);
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, fixture.configuration.cleanupGraceMs + 150),
+      );
+      expect(await fixture.cleanup.run()).toEqual({
+        claimed: 1,
+        deleted: 1,
+        retryable: 0,
+      });
+
+      await blocker.commitTransaction();
+      await expect(uploadPromise).rejects.toMatchObject({
+        errorCode: 'STORAGE_UNAVAILABLE',
+      });
+      expect(await dataSource.manager.count(Attachment)).toBe(0);
+      expect(await dataSource.manager.count(StorageCleanupTask)).toBe(0);
+    } finally {
+      if (blocker.isTransactionActive) await blocker.rollbackTransaction();
+      await blocker.release();
+    }
+  });
+
   it('retries a cleanup task whose provider call failed', async () => {
     const roomId = await createRoom('A-105');
     const image = await upload(roomId, AttachmentAssociationType.Album);
@@ -461,6 +510,46 @@ describe('Phase 3 room image persistence', () => {
     expect(rows[0].position).toBe(0);
   });
 
+  it('serializes upload versus hard-delete without leaving live attachment metadata', async () => {
+    const roomId = await createRoom('A-111-RACE');
+
+    await Promise.allSettled([
+      upload(roomId, AttachmentAssociationType.Album),
+      rooms.delete(roomId),
+    ]);
+
+    expect(await dataSource.manager.findOneBy(Room, { id: roomId })).toBeNull();
+    expect(await readAttachments(roomId)).toHaveLength(0);
+
+    await new Promise((resolve) =>
+      setTimeout(resolve, fixture.configuration.cleanupGraceMs + 150),
+    );
+    await fixture.cleanup.run({ batchSize: 10 });
+    expect(await dataSource.manager.count(StorageCleanupTask)).toBe(0);
+  });
+
+  it('serializes delete versus reorder without resurrecting a room or attachment', async () => {
+    const roomId = await createRoom('A-112-RACE');
+    const first = await upload(roomId, AttachmentAssociationType.Album);
+    const second = await upload(roomId, AttachmentAssociationType.Album);
+
+    await Promise.allSettled([
+      fixture.images.reorder(roomId, [second.id, first.id]),
+      rooms.delete(roomId),
+    ]);
+
+    expect(await dataSource.manager.findOneBy(Room, { id: roomId })).toBeNull();
+    expect(await readAttachments(roomId)).toHaveLength(0);
+    expect(await dataSource.manager.count(StorageCleanupTask)).toBe(2);
+
+    expect(await fixture.cleanup.run({ batchSize: 10 })).toMatchObject({
+      claimed: 2,
+      deleted: 2,
+      retryable: 0,
+    });
+    expect(await dataSource.manager.count(StorageCleanupTask)).toBe(0);
+  });
+
   it('detaches media when the room is hard-deleted and the runner drains it', async () => {
     const roomId = await createRoom('A-112');
     const thumbnail = await upload(roomId, AttachmentAssociationType.Thumbnail);
@@ -504,9 +593,13 @@ describe('Phase 3 room image persistence', () => {
     }
     expect((await fetch(detail.images?.[0].url ?? '')).status).toBe(200);
 
+    const presign = jest.spyOn(fixture.storage, 'createPresignedGetUrl');
+    presign.mockClear();
     const list = await search.search({ page: 1, pageSize: 20 });
     expect(list.items[0].thumbnail?.url ?? '').toContain('X-Amz-Signature');
+    expect(presign).toHaveBeenCalledTimes(1);
     // The list carries the thumbnail only; the album belongs to detail.
     expect(list.items[0]).not.toHaveProperty('images');
+    presign.mockRestore();
   });
 });

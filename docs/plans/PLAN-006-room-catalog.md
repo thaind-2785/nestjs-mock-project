@@ -43,11 +43,11 @@ vertical slice at a time; do not batch later slices into the current handoff.
 
 The accepted and locked P3-T01 dependency delta is:
 
-| Package                                  | Purpose                                                |
-| ---------------------------------------- | ------------------------------------------------------ |
-| `@aws-sdk/s3-request-presigner@3.1120.0` | Short-lived reads from a private S3-compatible bucket  |
-| `file-type@21.3.4`                       | Signature-based image format verification              |
-| `@types/multer@2.2.0` (development)      | Typed bounded multipart handling with the Nest adapter |
+| Package                                  | Purpose                                                            |
+| ---------------------------------------- | ------------------------------------------------------------------ |
+| `@aws-sdk/s3-request-presigner@3.1120.0` | Short-lived reads from a private S3-compatible bucket              |
+| ~~`file-type@21.3.4`~~                   | Removed in P3-T05: three accepted signatures are verified directly |
+| `@types/multer@2.2.0` (development)      | Typed bounded multipart handling with the Nest adapter             |
 
 Reuse the locked `@aws-sdk/client-s3` and Nest Express adapter. Use Node `crypto`
 for UUID/random object keys. Do not add an image transformer unless the accepted
@@ -169,7 +169,8 @@ its own focused evidence.
 ## P3-T01 implementation evidence
 
 - Locked `@aws-sdk/s3-request-presigner@3.1120.0` to the existing S3 client version,
-  reused the locked `file-type@21.3.4`, and added `@types/multer@2.2.0` for the later
+  reused the locked `file-type@21.3.4` (removed again in P3-T05, see the revision
+  below), and added `@types/multer@2.2.0` for the later
   multipart boundary.
 - Added fail-fast room-image policy validation for size/count/presign/rate/storage-
   timeout/cleanup-grace values; cleanup grace must exceed the storage timeout.
@@ -371,14 +372,23 @@ its own focused evidence.
   real upload against a fresh local stack needs the bucket to exist. Decide with the
   upload slice whether to add a one-shot Compose init service (it also needs the
   `compose:smoke`/`compose:ci` service lists) or to document a manual step.
-- Open decision for the upload slice: `file-type@21.3.4` from the accepted dependency
-  delta is ESM-only. In this CommonJS repository a dynamic `await import('file-type')`
-  fails under Jest with `A dynamic import callback was invoked without
---experimental-vm-modules`, and passes with that flag (verified both ways). Either
-  add the experimental flag to every Jest script, or verify the three accepted image
-  signatures directly and drop the dependency. This is the third ESM/CommonJS
-  incident in this repository, so `docs/logs/error-log.md` gets the entry once the
-  owner picks the resolution.
+- Dependency-delta revision, owner-approved: `file-type@21.3.4` is ESM-only and this
+  repository compiles and tests through CommonJS. Under Jest a static import does not
+  resolve at all (`Cannot find module 'file-type'`, with or without the flag), and a
+  dynamic import needs `--experimental-vm-modules` on every Jest script; both were
+  measured. The accepted allowlist is exactly three raster formats, so
+  `src/files/attachment-signature.ts` verifies their signatures directly and the
+  direct dependency is removed. It stays in the tree transitively through
+  `@nestjs/common@11.2.3`, which also ships `load-esm` for exactly this problem, so
+  keeping it as a direct dependency bought nothing. Third ESM/CommonJS incident here;
+  recorded in `docs/logs/error-log.md`.
+- Signature verification is deliberately not content scanning: bytes beginning with an
+  accepted header are stored even when unrelated data trails them, and the unit suite
+  pins that as a documented boundary. Size and count limits bound what a caller can
+  store, and objects are served only as presigned reads with their verified content
+  type. The declared header is rejected first (`415 ATTACHMENT_MIME_UNSUPPORTED`), then
+  the bytes decide (`400 ATTACHMENT_CONTENT_INVALID`, `413 ATTACHMENT_SIZE_EXCEEDED`),
+  so an accepted header over other content cannot pass.
 
 ## PR #7 mentor-review follow-up (2026-09-08)
 

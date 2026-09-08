@@ -20,6 +20,19 @@ export const filesErrors = {
       'ATTACHMENT_MIME_UNSUPPORTED',
       errorMessageKeys.attachmentMimeUnsupported,
     ),
+  /** The bytes are not one of the accepted formats, whatever the client declared. */
+  attachmentContentInvalid: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'ATTACHMENT_CONTENT_INVALID',
+      errorMessageKeys.attachmentContentInvalid,
+    ),
+  attachmentSizeExceeded: () =>
+    new ApplicationException(
+      HttpStatus.PAYLOAD_TOO_LARGE,
+      'ATTACHMENT_SIZE_EXCEEDED',
+      errorMessageKeys.attachmentSizeExceeded,
+    ),
   /**
    * The object-storage provider failed or exceeded its bounded timeout. The cause
    * is kept for diagnosis but never published: it can carry bucket names, object

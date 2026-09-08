@@ -265,6 +265,18 @@ argument at all, so a client-supplied name cannot become a storage path. Groupin
 target before association keeps every object of one room under a single prefix, which
 is what target deletion and cleanup reconciliation scan.
 
+Content acceptance runs in a fixed order so a client cannot pass an accepted header
+over other bytes: the declared type is rejected first with
+`415 ATTACHMENT_MIME_UNSUPPORTED`, then the content itself decides with
+`400 ATTACHMENT_CONTENT_INVALID` for bytes that are not an accepted format (including
+a container that merely resembles one) and `413 ATTACHMENT_SIZE_EXCEEDED` above the
+per-surface limit. Detection reads only the leading signature bytes of the accepted
+formats, so classification never depends on buffering more than that. This is
+signature verification, not content scanning: bytes beginning with an accepted header
+are stored even when unrelated data trails them, which is why objects are served only
+as presigned reads carrying their verified content type, and why size and count limits
+bound what a caller can store.
+
 The bucket stays private: reads are short-lived presigned GETs, never public URLs.
 Every provider call is bounded by the configured timeout and surfaces one sanitized
 `503 STORAGE_UNAVAILABLE`; the provider cause is retained for diagnosis and never

@@ -12,8 +12,10 @@ interface ErrorTranslations {
     amenityCodeConflict: string;
     amenityInUse: string;
     amenityNotFound: string;
+    attachmentContentInvalid: string;
     attachmentMimeUnsupported: string;
     attachmentPairInvalid: string;
+    attachmentSizeExceeded: string;
     authenticationFailed: string;
     authorizationUnavailable: string;
     badRequest: string;

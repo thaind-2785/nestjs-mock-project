@@ -58,8 +58,10 @@ All paths below are under `/api/v1`.
   refresh cookie, and returns `204`.
 - `GET /me` returns exactly `{ id, email, displayName, role, status }`.
 - `GET /admin/users` requires `ADMIN`, accepts optional `query`, `role`, `status`,
-  `page` (default 1), and `pageSize` (default 20, maximum 100), and returns
-  `{ items, page, pageSize, total }` without provider subjects or token data.
+  `page` (default 1, maximum 10000), and `pageSize` (default 20, maximum 100), and
+  returns `{ items, page, pageSize, total }` without provider subjects or token data.
+  Those bounds are the shared paginated-query contract every list route inherits, so
+  no list route accepts an unbounded offset.
 - `GET /admin/users/:userId` requires `ADMIN` and returns the safe profile plus
   `createdAt`/`updatedAt`; an absent ID returns generic `404 USER_NOT_FOUND`.
 - `PATCH /admin/users/:userId/status` requires `ADMIN` and

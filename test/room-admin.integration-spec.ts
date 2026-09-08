@@ -17,7 +17,7 @@ import {
 import { Attachment } from '../src/files/entities/attachment.entity';
 import { StorageCleanupTask } from '../src/files/entities/storage-cleanup-task.entity';
 import { ListRoomsQueryDto } from '../src/rooms/dto/list-rooms-query.dto';
-import { ReferenceCatalogQueryDto } from '../src/rooms/dto/pagination-query.dto';
+import { ReferenceCatalogQueryDto } from '../src/rooms/dto/reference-catalog-query.dto';
 import { Amenity } from '../src/rooms/entities/amenity.entity';
 import { RoomAmenity } from '../src/rooms/entities/room-amenity.entity';
 import { RoomTime } from '../src/rooms/entities/room-time.entity';
@@ -25,6 +25,7 @@ import { RoomType } from '../src/rooms/entities/room-type.entity';
 import { Room } from '../src/rooms/entities/room.entity';
 import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { ReferenceCatalogService } from '../src/rooms/reference-catalog.service';
+import { lockRoom } from '../src/rooms/room-lock';
 import { ZeroRoomTimeUsageRepository } from '../src/rooms/room-time-usage.repository';
 import { RoomTimesService } from '../src/rooms/room-times.service';
 import { RoomsService } from '../src/rooms/rooms.service';
@@ -601,6 +602,55 @@ describe('Phase 3 room administration persistence', () => {
       await other.release();
       await holder.release();
     }
+  });
+
+  it('locks a room with mutable/version state but without unused audit columns', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-703'));
+    let lockSql = '';
+    const captured = jest
+      .spyOn(dataSource.logger, 'logQuery')
+      .mockImplementation((sql) => {
+        if (/FROM `rooms` .*FOR UPDATE/i.test(sql)) lockSql = sql;
+      });
+
+    try {
+      const locked = await dataSource.transaction((manager) =>
+        lockRoom(manager, room.id),
+      );
+      expect(locked).toMatchObject({
+        id: room.id,
+        roomTypeId: type.id,
+        roomNumber: 'A-703',
+        version: '1',
+      });
+      // Exactly the mutable/version state every caller needs carries a value: no
+      // audit column or relation is hydrated, and `LockedRoom` makes reading one a
+      // compile error. Class fields always exist, so assert the populated ones.
+      const hydrated = Object.entries(locked)
+        .filter(([, value]) => value !== undefined)
+        .map(([field]) => field)
+        .sort();
+      expect(hydrated).toEqual([
+        'basePriceAmount',
+        'bedCount',
+        'currency',
+        'id',
+        'roomNumber',
+        'roomTypeId',
+        'status',
+        'version',
+        'viewCode',
+      ]);
+    } finally {
+      captured.mockRestore();
+    }
+
+    expect(lockSql).not.toBe('');
+    const projection = lockSql.slice(0, lockSql.search(/\sFROM\s/i));
+    expect(projection).toContain('version');
+    expect(projection).not.toContain('created_at');
+    expect(projection).not.toContain('updated_at');
   });
 
   it('waits for the physical-room lock before checking window overlap', async () => {

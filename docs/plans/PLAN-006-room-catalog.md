@@ -334,3 +334,45 @@ its own focused evidence.
   administration suite 13/13 including the new cross-room lock independence case; and
   the public E2E journey 1/1 covering guest access, filters, availability, validation
   details, localization, and generic not-found.
+
+## PR #7 mentor-review follow-up (2026-09-08)
+
+- The owner authorized all eight mentor threads. Reuse P3-T03/P3-T04 and preserve
+  their API, schema, room-first lock order, and rejected status-leading index
+  decision; this follow-up does not add a migration or alter a response shape.
+- Slice 1: move shared pagination and hotel-date constants into concern-specific
+  common constant modules, move room-search types into a focused type module, and
+  keep room-only filter policy constants inside the room module. Avoid a single
+  project-wide catch-all constants file.
+- Slice 2: give `RoomSearchService` explicit public/private method visibility,
+  extract query-building/filter/mapping responsibilities into named methods, and
+  project only the public room/room-type columns used by list/detail mapping.
+  `lockRoom` projects the complete mutable/version state required by every existing
+  caller, while deliberately omitting unused audit fields and relations.
+- Slice 3: enforce UTC at the MySQL server default/session boundary in Compose while
+  retaining mysql2 `timezone: 'Z'` and TypeORM `DATE` column `utc: true`. Pin the
+  Compose command contract and assert the real TypeORM session reports `+00:00`.
+- Slice 4: make the paginated-query contract genuinely project-wide.
+  `PaginationQueryDto` moves to `src/common/dto`, the rooms module keeps only its own
+  `ReferenceCatalogQueryDto`, and `ListUsersQueryDto` inherits the shared bounds
+  instead of re-declaring `pageSize` limits and accepting an unbounded `page`.
+- Index disposition: no index change. Existing 2,000-row `EXPLAIN` evidence found a
+  residual availability scan, but the helpful status-leading candidate widened
+  `SELECT ... FOR UPDATE` next-key locks across physical rooms. Keep the concurrency
+  regression and revisit read indexes with Phase 4's final locking query shapes.
+- Verification: run focused DTO/policy, Compose contract, database/room-search/room-
+  administration integration, and public/admin HTTP checks as affected; then one
+  full `MYSQL_PORT=13306 npm run verify`, independent review, and disposition every
+  finding before handoff.
+- Evidence (2026-09-08): `MYSQL_PORT=13306 npm run verify` exit 0 before independent
+  review — Harness 49 subtests + 10 eval fixtures, Compose contract 8, unit 110/110,
+  integration 42/42, E2E 19/19, build green. `REVIEW-020` then found the pagination
+  contract was still duplicated in the users module; the gate was rerun after that
+  fix with unit 113/113 and integration 42/42.
+- Compatibility/rollback: the schema is unchanged and every response shape is
+  compatible. The one request-contract change is deliberate: `GET /admin/users` now
+  rejects `page` above 10000 with `400 VALIDATION_FAILED` instead of running an
+  unbounded offset scan, matching the room list routes and `SPEC-004`. Reverting
+  restores broader projections, that unbounded offset, and environment-dependent
+  MySQL timezone defaults; prefer a forward fix because UTC consistency protects all
+  current/future audit timestamps.

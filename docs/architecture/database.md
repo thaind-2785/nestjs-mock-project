@@ -269,6 +269,19 @@ erDiagram
 | `idempotency_keys`        | unique `(actor_user_id, operation, idempotency_key)`; index `expires_at`                                                                                                                                                        |
 | `schedule_runs`           | unique `(job_key, period_key)` for cron idempotency                                                                                                                                                                             |
 
+## Temporal storage contract
+
+MySQL's default and every application session use UTC. Local Compose pins
+`--default-time-zone=+00:00`; managed environments must configure the equivalent
+server/session setting and verify it before serving traffic. The mysql2 connection
+uses `timezone: 'Z'` so UTC `DATETIME(6)` audit values hydrate as instants.
+
+Hotel stay/window values remain timezone-free MySQL `DATE` columns represented as
+`YYYY-MM-DD` strings. Those columns also declare TypeORM `utc: true`: the server UTC
+setting controls database temporal operations, while the column option prevents an
+application host west of UTC from formatting a driver-hydrated date one day early.
+Both safeguards are required.
+
 MySQL cannot express either interval rule as a simple unique constraint. Creating or
 changing a `room_times` row locks its physical room and rejects overlap with another
 active window; adjacent windows are valid. A requested stay must be fully contained

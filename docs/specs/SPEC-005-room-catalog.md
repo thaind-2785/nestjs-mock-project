@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Owner: Codex primary agent
-- Last updated: 2026-09-07
+- Last updated: 2026-09-08
 - Scope: Required
 - Related endpoints / ADRs: `ROOM-01`, `ROOM-02`, `ADMIN-ROOM-01` through
   `ADMIN-ROOM-05`, `ADMIN-TIME-01` through `ADMIN-TIME-04`, `ADMIN-FILE-01`
@@ -100,10 +100,10 @@ Status defaults to `ACTIVE`. Referenced room type and amenities must exist.
 
 Admin list/detail responses expose the physical room number, room type, amenities,
 base price, currency, status, timestamps, and numeric `version`. Admin list accepts
-optional `query`, `status`, `roomTypeId`, `beds`, `view`, `page` (default 1), and
-`pageSize` (default 20, maximum 100), ordered by room ID ascending. `query` matches
-the room number or room-type name. The `view` filter is trimmed and uppercased
-at the DTO boundary.
+optional `query`, `status`, `roomTypeId`, `beds`, `view`, `page` (default 1,
+maximum 10000), and `pageSize` (default 20, maximum 100), ordered by room ID
+ascending. `query` matches the room number or room-type name. The `view` filter is
+trimmed and uppercased at the DTO boundary.
 
 `PATCH /admin/rooms/:roomId` is a partial update but requires the current version in
 `If-Match: "<version>"`. Missing/empty headers return `428 ROOM_VERSION_REQUIRED`; malformed or unsupported
@@ -184,7 +184,8 @@ window is sufficient; Phase 4 additionally excludes room-wide overlapping
 
 A `currency` without price bounds narrows the catalog to that currency. Repeated
 `amenity` values are deduplicated and then capped at 20, `page` is capped at 10000
-because deep pagination costs a large offset scan, and a `maxPrice` below `minPrice`
+by the shared paginated-query contract because deep pagination costs a large offset
+scan, and a `maxPrice` below `minPrice`
 returns `400 VALIDATION_FAILED`. A `checkOut` that does not advance past
 `checkIn` returns `400 STAY_RANGE_INVALID`.
 
@@ -194,6 +195,11 @@ amenities, thumbnail, and `available` only when a date pair was supplied. It doe
 expose the physical room number. `GET /rooms/:roomId` returns the same public fields
 plus ordered active album images; an optional date pair follows the same rules.
 Inactive/maintenance rooms return generic `404 ROOM_NOT_FOUND` publicly.
+
+The public list and detail persistence reads project only the room and room-type
+columns needed by those response shapes. Filtering columns may remain in SQL
+predicates without being hydrated into application entities; internal room numbers,
+status/version state, and audit timestamps are not fetched by the public room query.
 
 The catalog and availability fields ship with the public search slice; the thumbnail
 and album fields are added by the room image slice that owns attachment storage and
@@ -260,6 +266,11 @@ window range check/index; attachment target/association/position uniqueness and
 target lookup. Dates use MySQL `DATE`, timestamps use UTC `DATETIME(6)`, money uses
 unsigned integer minor units, and TypeORM `synchronize` remains disabled.
 
+Every supported environment keeps MySQL's global/default and connection-session
+timezone at UTC. The mysql2/TypeORM connection also parses temporal values as UTC,
+while every calendar-only `DATE` column declares TypeORM's `utc: true`; database UTC
+and date hydration are complementary contracts and neither replaces the other.
+
 MySQL cannot enforce window interval uniqueness or the polymorphic attachment
 foreign key. Services therefore lock the physical room before interval changes and
 resolve/lock allowlisted targets before attachment mutations. The migration `down`
@@ -300,7 +311,8 @@ version as part of the accepted logical model.
 - Private bucket credentials are least privilege for the configured bucket/prefix.
   Presigned URLs are short lived and reveal no write capability.
 - Search bounds page size and filter cardinality; queries use parameters and indexed
-  predicates. No public response exposes exact room numbers or inactive inventory.
+  predicates and hydrate only the public room projection. No public response exposes
+  exact room numbers or inactive inventory.
 - Concurrent room deletion/upload and delete/reorder operations serialize on the
   target room. Cross-room IDs never authorize or mutate another room's attachment.
 

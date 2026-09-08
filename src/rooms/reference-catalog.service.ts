@@ -7,7 +7,7 @@ import {
   UpdateAmenityDto,
   UpdateRoomTypeDto,
 } from './dto/reference-catalog.dto';
-import { ReferenceCatalogQueryDto } from './dto/pagination-query.dto';
+import { ReferenceCatalogQueryDto } from './dto/reference-catalog-query.dto';
 import {
   AmenityResponseDto,
   PaginatedAmenitiesResponseDto,

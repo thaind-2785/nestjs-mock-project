@@ -6,8 +6,11 @@ import {
   Matches,
   ValidateIf,
 } from 'class-validator';
+import {
+  hotelDatePattern,
+  hotelDateValidationOptions,
+} from '../../common/constants/hotel-date.constants';
 import { RoomTimeStatus } from '../entities/room.enums';
-import { hotelDatePattern, hotelDateValidationOptions } from './hotel-date';
 
 export class CreateRoomTimeDto {
   @ApiProperty({ format: 'date', example: '2026-10-01' })

@@ -12,10 +12,13 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
-import { maxAmenityFilterCount } from '../room-search-policy';
+import {
+  hotelDatePattern,
+  hotelDateValidationOptions,
+} from '../../common/constants/hotel-date.constants';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { maxAmenityFilterCount } from '../room-search.constants';
 import { IsCurrencyCode } from './currency-code.decorator';
-import { hotelDatePattern, hotelDateValidationOptions } from './hotel-date';
-import { PaginationQueryDto } from './pagination-query.dto';
 import { RoomAttributeFilterQueryDto } from './room-filter-query.dto';
 import { decimalIdPattern } from './room-id-param.dto';
 

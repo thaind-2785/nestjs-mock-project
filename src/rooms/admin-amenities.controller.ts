@@ -18,7 +18,7 @@ import {
 } from '@nestjs/swagger';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/entities/user.enums';
-import { ReferenceCatalogQueryDto } from './dto/pagination-query.dto';
+import { ReferenceCatalogQueryDto } from './dto/reference-catalog-query.dto';
 import {
   CreateAmenityDto,
   UpdateAmenityDto,

@@ -24,8 +24,8 @@ import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/17
 import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
 import { Attachment } from '../src/files/entities/attachment.entity';
 import { StorageCleanupTask } from '../src/files/entities/storage-cleanup-task.entity';
-import { maxPageNumber } from '../src/rooms/dto/pagination-query.dto';
-import { maxAmenityFilterCount } from '../src/rooms/room-search-policy';
+import { maxPageNumber } from '../src/common/constants/pagination.constants';
+import { maxAmenityFilterCount } from '../src/rooms/room-search.constants';
 import { Amenity } from '../src/rooms/entities/amenity.entity';
 import { RoomAmenity } from '../src/rooms/entities/room-amenity.entity';
 import { RoomTime } from '../src/rooms/entities/room-time.entity';

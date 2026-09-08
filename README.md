@@ -111,6 +111,12 @@ Local endpoints are MySQL `127.0.0.1:3306`, Redis `127.0.0.1:6379`, MinIO S3
 through `.env` when necessary. MinIO and Mailpit update checks are disabled, so
 starting the stack does not call real storage or mail providers.
 
+Compose pins MySQL's default/session timezone to UTC. Production and other managed
+MySQL environments must enforce the equivalent `+00:00` session contract; the
+application's mysql2 `timezone: 'Z'` parsing option does not configure the database
+server itself. Calendar-only hotel dates remain MySQL `DATE` values and separately
+use TypeORM's UTC date hydration.
+
 ```bash
 # Non-destructive lifecycle: both commands preserve named volumes
 docker compose stop

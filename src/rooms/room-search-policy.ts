@@ -1,22 +1,5 @@
 import { roomsErrors } from './rooms.errors';
-
-/** Public search caps repeated amenity filters so one request cannot fan out. */
-export const maxAmenityFilterCount = 20;
-
-export interface StayRange {
-  checkIn: string;
-  checkOut: string;
-}
-
-export interface StayQuery {
-  checkIn?: string;
-  checkOut?: string;
-}
-
-export interface PriceQuery {
-  minPrice?: number;
-  maxPrice?: number;
-}
+import type { PriceQuery, StayQuery, StayRange } from './room-search.types';
 
 /**
  * Dates are an all-or-none pair: without them the catalog browses and claims no

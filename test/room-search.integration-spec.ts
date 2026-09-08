@@ -154,6 +154,41 @@ describe('Phase 3 public room search', () => {
     ]);
   });
 
+  it('hydrates only the room and room-type columns published by the public mapper', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-201'));
+    const queries: string[] = [];
+    const captured = jest
+      .spyOn(dataSource.logger, 'logQuery')
+      .mockImplementation((sql) => queries.push(sql));
+
+    try {
+      await search.search(query({}));
+      await search.get(room.id, {});
+    } finally {
+      captured.mockRestore();
+    }
+
+    const publicRoomReads = queries.filter((sql) =>
+      /FROM `rooms` `(room|Room)`/.test(sql),
+    );
+    expect(publicRoomReads.length).toBeGreaterThanOrEqual(2);
+    const projections = publicRoomReads
+      .map((sql) => sql.slice(0, sql.search(/\sFROM\s/i)))
+      .join('\n');
+    expect(projections).toContain('bed_count');
+    expect(projections).toContain('base_price_amount');
+    for (const internalColumn of [
+      'room_number',
+      'status',
+      'version',
+      'created_at',
+      'updated_at',
+    ]) {
+      expect(projections).not.toContain(internalColumn);
+    }
+  });
+
   it('applies all-of amenity semantics without duplicating rooms or inflating total', async () => {
     const type = await catalog.createRoomType({ name: 'Deluxe' });
     const wifi = await catalog.createAmenity({ code: 'WIFI', name: 'Wi-Fi' });

@@ -51,6 +51,9 @@ test('declares persistent volumes and disables external update checks', () => {
     compose.services.mysql.environment.MYSQL_PASSWORD,
     /^\$\{MYSQL_PASSWORD:-/,
   );
+  assert.ok(
+    compose.services.mysql.command.includes('--default-time-zone=+00:00'),
+  );
   assert.match(
     compose.services.minio.environment.MINIO_ROOT_PASSWORD,
     /^\$\{MINIO_ROOT_PASSWORD:-/,

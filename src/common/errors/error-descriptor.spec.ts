@@ -18,6 +18,16 @@ describe('error descriptors', () => {
     }
   });
 
+  // One canonical order for the key list and both catalogs. Without this, a new key
+  // lands in three different places and reviewers diff reordered files instead of
+  // the actual change.
+  it('keeps the key list and both catalogs in one canonical order', () => {
+    const keys = Object.keys(errorMessageKeys);
+    expect(keys).toEqual([...keys].sort());
+    expect(Object.keys(englishErrors)).toEqual(keys);
+    expect(Object.keys(vietnameseErrors)).toEqual(keys);
+  });
+
   it('maps framework exceptions without exposing their raw messages', () => {
     const descriptor = describeException(
       new NotFoundException('private-resource-value'),

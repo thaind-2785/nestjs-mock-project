@@ -9,8 +9,8 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { decimalIdPattern } from '../../common/constants/identifier.constants';
 import { trimAndUppercase } from './catalog-transforms';
-import { decimalIdPattern } from './room-id-param.dto';
 
 /**
  * Room attribute filters shared by the admin list and the public catalog so both

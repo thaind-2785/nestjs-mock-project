@@ -28,13 +28,13 @@ describe('validateEnvironment', () => {
     expect(environment.OBJECT_STORAGE_BUCKET).toBe('hotel-assets');
     expect(environment.OBJECT_STORAGE_ACCESS_KEY).toBe('hotel_local');
     expect(environment.OBJECT_STORAGE_SECRET_KEY).toBe('local_minio_change_me');
+    expect(environment.ATTACHMENT_PRESIGN_TTL_SECONDS).toBe(900);
+    expect(environment.ATTACHMENT_UPLOAD_RATE_LIMIT_MAX).toBe(10);
+    expect(environment.ATTACHMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
+    expect(environment.ATTACHMENT_STORAGE_TIMEOUT_MS).toBe(10_000);
+    expect(environment.ATTACHMENT_CLEANUP_GRACE_MS).toBe(60_000);
     expect(environment.ROOM_IMAGE_MAX_BYTES).toBe(5 * 1_024 * 1_024);
     expect(environment.ROOM_IMAGE_MAX_ALBUM_COUNT).toBe(20);
-    expect(environment.ROOM_IMAGE_PRESIGN_TTL_SECONDS).toBe(900);
-    expect(environment.ROOM_IMAGE_UPLOAD_RATE_LIMIT_MAX).toBe(10);
-    expect(environment.ROOM_IMAGE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
-    expect(environment.ROOM_IMAGE_STORAGE_TIMEOUT_MS).toBe(10_000);
-    expect(environment.ROOM_IMAGE_CLEANUP_GRACE_MS).toBe(60_000);
     expect(environment.HEALTH_CHECK_TIMEOUT_MS).toBe(1000);
     expect(environment.GOOGLE_AUTH_ENABLED).toBe(false);
     expect(environment.AUTH_SUCCESS_REDIRECT_URI).toBe('/api/docs');
@@ -206,8 +206,31 @@ describe('validateEnvironment', () => {
         MINIO_ENDPOINT: 'http://127.0.0.1:9900',
       }),
     ).toThrow(
-      'Environment validation failed for obsolete variables: MINIO_ENDPOINT. Use OBJECT_STORAGE_* instead.',
+      'Environment validation failed for obsolete variables: MINIO_ENDPOINT -> OBJECT_STORAGE_ENDPOINT',
     );
+  });
+
+  // Attachment infrastructure limits stopped being room-specific. A stale value
+  // must fail closed with its replacement instead of silently using the default.
+  it('rejects room-scoped names for shared attachment limits', () => {
+    expect(() =>
+      validateEnvironment({
+        ROOM_IMAGE_STORAGE_TIMEOUT_MS: '5000',
+        ROOM_IMAGE_CLEANUP_GRACE_MS: '20000',
+      }),
+    ).toThrow(
+      'Environment validation failed for obsolete variables: ROOM_IMAGE_STORAGE_TIMEOUT_MS -> ATTACHMENT_STORAGE_TIMEOUT_MS, ROOM_IMAGE_CLEANUP_GRACE_MS -> ATTACHMENT_CLEANUP_GRACE_MS',
+    );
+  });
+
+  it('keeps room content limits under their room-scoped names', () => {
+    const environment = validateEnvironment({
+      ROOM_IMAGE_MAX_BYTES: '2097152',
+      ROOM_IMAGE_MAX_ALBUM_COUNT: '8',
+    });
+
+    expect(environment.ROOM_IMAGE_MAX_BYTES).toBe(2_097_152);
+    expect(environment.ROOM_IMAGE_MAX_ALBUM_COUNT).toBe(8);
   });
 
   it.each([
@@ -218,13 +241,13 @@ describe('validateEnvironment', () => {
     ['REDIS_PORT', '0'],
     ['OBJECT_STORAGE_ENDPOINT', 'ftp://private-endpoint'],
     ['OBJECT_STORAGE_BUCKET', 'Hotel Assets'],
+    ['ATTACHMENT_PRESIGN_TTL_SECONDS', '59'],
+    ['ATTACHMENT_UPLOAD_RATE_LIMIT_MAX', '0'],
+    ['ATTACHMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS', '0'],
+    ['ATTACHMENT_STORAGE_TIMEOUT_MS', '99'],
+    ['ATTACHMENT_CLEANUP_GRACE_MS', '10000'],
     ['ROOM_IMAGE_MAX_BYTES', '1023'],
     ['ROOM_IMAGE_MAX_ALBUM_COUNT', '0'],
-    ['ROOM_IMAGE_PRESIGN_TTL_SECONDS', '59'],
-    ['ROOM_IMAGE_UPLOAD_RATE_LIMIT_MAX', '0'],
-    ['ROOM_IMAGE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS', '0'],
-    ['ROOM_IMAGE_STORAGE_TIMEOUT_MS', '99'],
-    ['ROOM_IMAGE_CLEANUP_GRACE_MS', '10000'],
     ['HEALTH_CHECK_TIMEOUT_MS', '99'],
   ])('rejects invalid database configuration %s', (field, value) => {
     expect(() => validateEnvironment({ [field]: value })).toThrow(

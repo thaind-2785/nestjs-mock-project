@@ -16,11 +16,11 @@ import {
   hotelDatePattern,
   hotelDateValidationOptions,
 } from '../../common/constants/hotel-date.constants';
+import { decimalIdPattern } from '../../common/constants/identifier.constants';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { maxAmenityFilterCount } from '../room-search.constants';
 import { IsCurrencyCode } from './currency-code.decorator';
 import { RoomAttributeFilterQueryDto } from './room-filter-query.dto';
-import { decimalIdPattern } from './room-id-param.dto';
 
 /**
  * Express exposes a single repeated parameter as a scalar. Deduplicate here so the

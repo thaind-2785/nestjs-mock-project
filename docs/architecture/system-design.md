@@ -79,6 +79,10 @@ flowchart LR
   privilege bucket credentials. Polymorphic attachment targets are resolved through
   an allowlisted object/association registry before insert; orphan reconciliation is
   observable and idempotent. Prefer presigned download URLs for private exports.
+- One object-storage adapter serves every attachable target. Keys are
+  `attachments/<target>/<target-id>/<association>/<uuid>.<extension>` from trusted
+  server data, every provider call is bounded by a configured timeout, and object
+  deletion is idempotent so cleanup retries are safe.
 - Rate-limit auth, booking creation, uploads, and export creation. Redact tokens,
   cookies, OAuth codes, and provider payloads from logs.
 - Readiness verifies required dependencies; liveness verifies only the process.

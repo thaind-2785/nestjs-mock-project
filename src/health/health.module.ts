@@ -3,6 +3,7 @@ import { ConfigModule, ConfigType } from '@nestjs/config';
 import { S3Client } from '@aws-sdk/client-s3';
 import Redis from 'ioredis';
 import { TerminusModule } from '@nestjs/terminus';
+import { createObjectStorageClientOptions } from '../common/storage/object-storage-client';
 import { readinessConfig } from '../config/readiness.config';
 import { DatabaseModule } from '../database/database.module';
 import { HealthController } from './health.controller';
@@ -11,7 +12,6 @@ import {
   READINESS_STORAGE_CLIENT,
 } from './readiness.tokens';
 import { ReadinessService } from './readiness.service';
-import { createStorageClientOptions } from './storage-client.options';
 
 @Module({
   imports: [
@@ -40,7 +40,7 @@ import { createStorageClientOptions } from './storage-client.options';
       provide: READINESS_STORAGE_CLIENT,
       inject: [readinessConfig.KEY],
       useFactory: (configuration: ConfigType<typeof readinessConfig>) =>
-        new S3Client(createStorageClientOptions(configuration.storage)),
+        new S3Client(createObjectStorageClientOptions(configuration.storage)),
     },
   ],
 })

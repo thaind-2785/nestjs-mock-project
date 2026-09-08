@@ -335,6 +335,51 @@ its own focused evidence.
   the public E2E journey 1/1 covering guest access, filters, availability, validation
   details, localization, and generic not-found.
 
+## P3-T05 slice 1 evidence: attachment storage and configuration (2026-09-08)
+
+- Attachments are polymorphic by `ADR-0003`, so the foundation is built for every
+  attachable target rather than for room images alone. Configuration is split by
+  lifetime: `ATTACHMENT_*` infrastructure limits are shared by one storage adapter
+  and one cleanup runner, while content limits stay per surface (`ROOM_IMAGE_*`).
+  The five renamed variables fail closed with their replacement, so a stale
+  deployment cannot fall back to a default.
+- `src/config/object-storage.config.ts` is now the single connection contract; the
+  readiness probe composes it instead of re-reading the same variables, and one
+  `createObjectStorageClientOptions` builder serves both consumers.
+- `AttachmentPolicyRegistry` is deny-by-default and registers a pair only when it has
+  both an owning endpoint and accepted limits. The declared `USER+AVATAR` pair is
+  therefore absent until its surface ships, and the unit suite asserts that rather
+  than assuming the cross product of both enums is valid.
+- `buildAttachmentObjectKey` takes no filename argument at all, which makes
+  "never use a client filename as a storage path" a property of the signature rather
+  than a rule reviewers must remember. Keys group by target before association so
+  target deletion and cleanup reconciliation scan one prefix.
+- `AttachmentStorageService` is the only path to the provider: every call is bounded
+  by the configured timeout, failures map to one sanitized `503 STORAGE_UNAVAILABLE`
+  with the cause kept for diagnosis only, and delete is idempotent because cleanup
+  retries replay it. Error codes follow `SPEC-005` (`ATTACHMENT_PAIR_INVALID`,
+  `ATTACHMENT_MIME_UNSUPPORTED`, `STORAGE_UNAVAILABLE`), and the message-key list,
+  translation interface, and both locale catalogs now share one canonical order with
+  a test that fails when they drift.
+- Focused evidence: config 43/43, files/common unit 44/44, and the new MinIO
+  integration suite 3/3, which proves an anonymous read of the object is refused
+  (403), the presigned read returns the exact bytes and content type, delete then
+  makes the read 404 and a repeated delete still succeeds, and an unreachable
+  provider fails within the bounded timeout instead of hanging.
+- The private bucket is provisioned outside the application; only the integration
+  suite creates it on demand. Compose has no bucket bootstrap service, so the first
+  real upload against a fresh local stack needs the bucket to exist. Decide with the
+  upload slice whether to add a one-shot Compose init service (it also needs the
+  `compose:smoke`/`compose:ci` service lists) or to document a manual step.
+- Open decision for the upload slice: `file-type@21.3.4` from the accepted dependency
+  delta is ESM-only. In this CommonJS repository a dynamic `await import('file-type')`
+  fails under Jest with `A dynamic import callback was invoked without
+--experimental-vm-modules`, and passes with that flag (verified both ways). Either
+  add the experimental flag to every Jest script, or verify the three accepted image
+  signatures directly and drop the dependency. This is the third ESM/CommonJS
+  incident in this repository, so `docs/logs/error-log.md` gets the entry once the
+  owner picks the resolution.
+
 ## PR #7 mentor-review follow-up (2026-09-08)
 
 - The owner authorized all eight mentor threads. Reuse P3-T03/P3-T04 and preserve

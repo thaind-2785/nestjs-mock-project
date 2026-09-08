@@ -4,12 +4,22 @@ export const nodeEnvironments = ['development', 'test', 'production'] as const;
 
 export type NodeEnvironment = (typeof nodeEnvironments)[number];
 
-const obsoleteObjectStorageVariables = [
-  'MINIO_ENDPOINT',
-  'MINIO_BUCKET',
-  'MINIO_ACCESS_KEY',
-  'MINIO_SECRET_KEY',
-] as const;
+// Renamed variables fail closed with their replacement rather than being ignored,
+// so a stale deployment cannot silently fall back to a default.
+const obsoleteVariableReplacements: Readonly<Record<string, string>> = {
+  MINIO_ENDPOINT: 'OBJECT_STORAGE_ENDPOINT',
+  MINIO_BUCKET: 'OBJECT_STORAGE_BUCKET',
+  MINIO_ACCESS_KEY: 'OBJECT_STORAGE_ACCESS_KEY',
+  MINIO_SECRET_KEY: 'OBJECT_STORAGE_SECRET_KEY',
+  // Attachment infrastructure limits are not room-specific: rooms, avatars, and any
+  // later attachable target share one storage adapter and one cleanup runner.
+  ROOM_IMAGE_PRESIGN_TTL_SECONDS: 'ATTACHMENT_PRESIGN_TTL_SECONDS',
+  ROOM_IMAGE_STORAGE_TIMEOUT_MS: 'ATTACHMENT_STORAGE_TIMEOUT_MS',
+  ROOM_IMAGE_CLEANUP_GRACE_MS: 'ATTACHMENT_CLEANUP_GRACE_MS',
+  ROOM_IMAGE_UPLOAD_RATE_LIMIT_MAX: 'ATTACHMENT_UPLOAD_RATE_LIMIT_MAX',
+  ROOM_IMAGE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS:
+    'ATTACHMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS',
+};
 
 export interface EnvironmentVariables extends Record<string, unknown> {
   NODE_ENV: NodeEnvironment;
@@ -28,13 +38,13 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   OBJECT_STORAGE_BUCKET: string;
   OBJECT_STORAGE_ACCESS_KEY: string;
   OBJECT_STORAGE_SECRET_KEY: string;
+  ATTACHMENT_PRESIGN_TTL_SECONDS: number;
+  ATTACHMENT_UPLOAD_RATE_LIMIT_MAX: number;
+  ATTACHMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: number;
+  ATTACHMENT_STORAGE_TIMEOUT_MS: number;
+  ATTACHMENT_CLEANUP_GRACE_MS: number;
   ROOM_IMAGE_MAX_BYTES: number;
   ROOM_IMAGE_MAX_ALBUM_COUNT: number;
-  ROOM_IMAGE_PRESIGN_TTL_SECONDS: number;
-  ROOM_IMAGE_UPLOAD_RATE_LIMIT_MAX: number;
-  ROOM_IMAGE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: number;
-  ROOM_IMAGE_STORAGE_TIMEOUT_MS: number;
-  ROOM_IMAGE_CLEANUP_GRACE_MS: number;
   HEALTH_CHECK_TIMEOUT_MS: number;
   GOOGLE_AUTH_ENABLED: boolean;
   GOOGLE_CLIENT_ID?: string;
@@ -101,6 +111,33 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     then: Joi.string().min(8).required(),
     otherwise: Joi.string().min(8).default('local_minio_change_me'),
   }),
+  ATTACHMENT_PRESIGN_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(60)
+    .max(3_600)
+    .default(900),
+  ATTACHMENT_UPLOAD_RATE_LIMIT_MAX: Joi.number()
+    .integer()
+    .min(1)
+    .max(1_000)
+    .default(10),
+  ATTACHMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: Joi.number()
+    .integer()
+    .min(1)
+    .max(3_600)
+    .default(60),
+  ATTACHMENT_STORAGE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30_000)
+    .default(10_000),
+  // A safeguard must outlive the bounded storage call it protects, or the cleanup
+  // runner could delete an object whose upload is still in flight.
+  ATTACHMENT_CLEANUP_GRACE_MS: Joi.number()
+    .integer()
+    .greater(Joi.ref('ATTACHMENT_STORAGE_TIMEOUT_MS'))
+    .max(900_000)
+    .default(60_000),
   ROOM_IMAGE_MAX_BYTES: Joi.number()
     .integer()
     .min(1_024)
@@ -111,31 +148,6 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(1)
     .max(100)
     .default(20),
-  ROOM_IMAGE_PRESIGN_TTL_SECONDS: Joi.number()
-    .integer()
-    .min(60)
-    .max(3_600)
-    .default(900),
-  ROOM_IMAGE_UPLOAD_RATE_LIMIT_MAX: Joi.number()
-    .integer()
-    .min(1)
-    .max(1_000)
-    .default(10),
-  ROOM_IMAGE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: Joi.number()
-    .integer()
-    .min(1)
-    .max(3_600)
-    .default(60),
-  ROOM_IMAGE_STORAGE_TIMEOUT_MS: Joi.number()
-    .integer()
-    .min(100)
-    .max(30_000)
-    .default(10_000),
-  ROOM_IMAGE_CLEANUP_GRACE_MS: Joi.number()
-    .integer()
-    .greater(Joi.ref('ROOM_IMAGE_STORAGE_TIMEOUT_MS'))
-    .max(900_000)
-    .default(60_000),
   HEALTH_CHECK_TIMEOUT_MS: Joi.number()
     .integer()
     .min(100)
@@ -230,12 +242,12 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
 export function validateEnvironment(
   rawEnvironment: Record<string, unknown>,
 ): EnvironmentVariables {
-  const presentObsoleteVariables = obsoleteObjectStorageVariables.filter(
-    (variable) => rawEnvironment[variable] !== undefined,
-  );
+  const presentObsoleteVariables = Object.entries(obsoleteVariableReplacements)
+    .filter(([variable]) => rawEnvironment[variable] !== undefined)
+    .map(([variable, replacement]) => `${variable} -> ${replacement}`);
   if (presentObsoleteVariables.length > 0) {
     throw new Error(
-      `Environment validation failed for obsolete variables: ${presentObsoleteVariables.join(', ')}. Use OBJECT_STORAGE_* instead.`,
+      `Environment validation failed for obsolete variables: ${presentObsoleteVariables.join(', ')}`,
     );
   }
 

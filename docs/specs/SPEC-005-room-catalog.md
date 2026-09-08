@@ -233,7 +233,46 @@ clients refresh it by reading the room resource again.
 Stable file errors include `ATTACHMENT_NOT_FOUND`, `ATTACHMENT_PAIR_INVALID`,
 `ATTACHMENT_MIME_UNSUPPORTED`, `ATTACHMENT_CONTENT_INVALID`,
 `ATTACHMENT_SIZE_EXCEEDED`, `ATTACHMENT_LIMIT_EXCEEDED`, and
-`ATTACHMENT_ORDER_INVALID`.
+`ATTACHMENT_ORDER_INVALID`. An unsupported target/association pair returns
+`400 ATTACHMENT_PAIR_INVALID`; a format outside the accepted list returns
+`415 ATTACHMENT_MIME_UNSUPPORTED`.
+
+### Attachment storage and configuration contract
+
+Attachments are not a room-only feature: `ADR-0003` allows `ROOM+THUMBNAIL`,
+`ROOM+ALBUM`, and `USER+AVATAR` against one polymorphic table. Configuration is
+therefore split by lifetime rather than by surface.
+
+- Infrastructure limits are shared, because one storage adapter and one cleanup
+  runner serve every target: presign TTL, bounded storage-call timeout, cleanup
+  grace, and the upload rate limit. Cleanup grace must exceed the storage timeout so
+  the runner cannot delete an object whose upload is still in flight.
+- Content limits stay per target/association, because the maximum size of a room
+  photo is a decision about that surface. A later avatar surface adds its own limits
+  without touching the shared ones.
+- Renamed configuration fails closed: a deployment still carrying a room-scoped name
+  for a shared limit is rejected with its replacement rather than silently defaulted.
+
+One registry owns the allowed pairs and their limits, and it is deny-by-default: an
+unregistered pair is rejected, never defaulted. A pair is registered only when it has
+both an owning endpoint and accepted content limits, so the API never claims support
+it does not have; the declared avatar pair stays unregistered until its surface ships.
+
+Object keys are generated entirely server-side as
+`attachments/<target>/<target-id>/<association>/<uuid>.<extension>`, where the
+extension comes from the verified format. The key-building function takes no filename
+argument at all, so a client-supplied name cannot become a storage path. Grouping by
+target before association keeps every object of one room under a single prefix, which
+is what target deletion and cleanup reconciliation scan.
+
+The bucket stays private: reads are short-lived presigned GETs, never public URLs.
+Every provider call is bounded by the configured timeout and surfaces one sanitized
+`503 STORAGE_UNAVAILABLE`; the provider cause is retained for diagnosis and never
+placed in a response body. Object deletion is idempotent by contract — a provider
+reporting the object absent already satisfies the caller — because cleanup retries
+and crash recovery replay the same delete. The private bucket itself is provisioned
+outside the application with least-privilege credentials that need no bucket-creation
+right; only the local integration suite creates it on demand.
 
 ## Business rules and state transitions
 

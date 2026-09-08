@@ -15,9 +15,8 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { decimalIdPattern } from '../../common/constants/identifier.constants';
 import { RoomStatus } from '../entities/room.enums';
-import { decimalIdPattern } from './room-id-param.dto';
-
 import { trim, trimAndUppercase } from './catalog-transforms';
 import { IsCurrencyCode } from './currency-code.decorator';
 

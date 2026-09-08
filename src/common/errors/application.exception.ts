@@ -7,7 +7,11 @@ export class ApplicationException extends HttpException {
     readonly errorCode: string,
     readonly messageKey: ErrorMessageKey,
     readonly details?: unknown,
+    // Kept for server-side diagnosis only. `describeException` publishes the code,
+    // message key, and details, never the cause, so provider text, bucket names,
+    // and object keys stay out of the response body.
+    cause?: unknown,
   ) {
-    super(messageKey, statusCode);
+    super(messageKey, statusCode, cause === undefined ? undefined : { cause });
   }
 }

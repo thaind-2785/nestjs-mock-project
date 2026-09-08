@@ -3,6 +3,10 @@ import {
   EnvironmentVariables,
   validateEnvironment,
 } from './environment.validation';
+import {
+  createObjectStorageConfiguration,
+  ObjectStorageConfiguration,
+} from './object-storage.config';
 
 export interface ReadinessConfiguration {
   timeoutMs: number;
@@ -10,14 +14,9 @@ export interface ReadinessConfiguration {
     host: string;
     port: number;
   };
-  storage: {
-    endpoint?: string;
-    region: string;
-    forcePathStyle: boolean;
-    bucket: string;
-    accessKey: string;
-    secretKey: string;
-  };
+  // The probe must target the bucket the application actually writes to, so the
+  // connection contract is reused instead of re-read from the environment here.
+  storage: ObjectStorageConfiguration;
 }
 
 export function createReadinessConfiguration(
@@ -29,14 +28,7 @@ export function createReadinessConfiguration(
       host: environment.REDIS_HOST,
       port: environment.REDIS_PORT,
     },
-    storage: {
-      endpoint: environment.OBJECT_STORAGE_ENDPOINT,
-      region: environment.OBJECT_STORAGE_REGION,
-      forcePathStyle: environment.OBJECT_STORAGE_FORCE_PATH_STYLE,
-      bucket: environment.OBJECT_STORAGE_BUCKET,
-      accessKey: environment.OBJECT_STORAGE_ACCESS_KEY,
-      secretKey: environment.OBJECT_STORAGE_SECRET_KEY,
-    },
+    storage: createObjectStorageConfiguration(environment),
   };
 }
 

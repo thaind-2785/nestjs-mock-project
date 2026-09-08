@@ -67,6 +67,15 @@ set it for an explicitly addressed S3-compatible provider. Set
 `OBJECT_STORAGE_FORCE_PATH_STYLE=false` for normal cloud S3 and `true` for the local
 MinIO default. `MINIO_*` names configure only the local Compose container.
 
+Attachment settings are split by lifetime. `ATTACHMENT_*` limits are shared by every
+attachable target, because one storage adapter and one cleanup runner serve all of
+them: presign TTL, the bounded storage-call timeout, cleanup grace, and the upload
+rate limit. Content limits stay per surface, so room photos use `ROOM_IMAGE_MAX_BYTES`
+and `ROOM_IMAGE_MAX_ALBUM_COUNT` while a later avatar surface adds its own. A stale
+room-scoped name for a shared limit is rejected at startup with its replacement, never
+silently defaulted. The bucket stays private and is provisioned outside the
+application; API responses expose short-lived presigned reads instead of object keys.
+
 When enabled, Swagger UI is served at `/api/docs` and its JSON document at
 `/api/docs-json`. HTTP completion logs are JSON and contain timestamp, request ID,
 method, normalized route, status, and duration; request/response bodies and headers

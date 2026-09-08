@@ -5,21 +5,27 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { createObjectStorageClientOptions } from '../common/storage/object-storage-client';
 import { attachmentsConfig } from '../config/attachments.config';
 import { objectStorageConfig } from '../config/object-storage.config';
+import { DatabaseModule } from '../database/database.module';
 import { AttachmentPolicyRegistry } from './attachment-policy';
+import { AttachmentsService } from './attachments.service';
 import { Attachment } from './entities/attachment.entity';
 import { StorageCleanupTask } from './entities/storage-cleanup-task.entity';
+import { StorageCleanupService } from './storage-cleanup.service';
 import { AttachmentStorageService } from './storage/attachment-storage.service';
 import { ATTACHMENT_STORAGE_CLIENT } from './storage/attachment-storage.tokens';
 
 @Module({
   imports: [
     ConfigModule.forFeature(objectStorageConfig),
+    DatabaseModule,
     ConfigModule.forFeature(attachmentsConfig),
     TypeOrmModule.forFeature([Attachment, StorageCleanupTask]),
   ],
   providers: [
     AttachmentPolicyRegistry,
+    AttachmentsService,
     AttachmentStorageService,
+    StorageCleanupService,
     {
       provide: ATTACHMENT_STORAGE_CLIENT,
       inject: [objectStorageConfig.KEY],
@@ -27,6 +33,12 @@ import { ATTACHMENT_STORAGE_CLIENT } from './storage/attachment-storage.tokens';
         new S3Client(createObjectStorageClientOptions(configuration)),
     },
   ],
-  exports: [TypeOrmModule, AttachmentPolicyRegistry, AttachmentStorageService],
+  exports: [
+    TypeOrmModule,
+    AttachmentPolicyRegistry,
+    AttachmentsService,
+    AttachmentStorageService,
+    StorageCleanupService,
+  ],
 })
 export class FilesModule {}

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, Matches } from 'class-validator';
+import { IsString, IsUUID, Matches } from 'class-validator';
 import { decimalIdPattern } from '../../common/constants/identifier.constants';
 
 export class RoomIdParamDto {
@@ -28,4 +28,10 @@ export class AmenityIdParamDto {
   @IsString()
   @Matches(decimalIdPattern)
   amenityId!: string;
+}
+
+export class RoomImageIdParamDto extends RoomIdParamDto {
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID('4')
+  attachmentId!: string;
 }

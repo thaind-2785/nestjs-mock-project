@@ -23,6 +23,7 @@
     "migration:run": "typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts",
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
     "auth:bootstrap-admin": "ts-node -r tsconfig-paths/register src/cli/bootstrap-admin.ts",
+    "files:storage-cleanup": "ts-node -r tsconfig-paths/register src/cli/storage-cleanup.ts",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.mjs\" \"docs/**/*.md\" \".agents/skills/**/*.md\" \".github/**/*.yml\" \".harness/*.yaml\" \".harness/*.json\" \"*.md\"",
     "start": "nest start",

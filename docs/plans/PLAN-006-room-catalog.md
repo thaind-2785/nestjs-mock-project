@@ -61,7 +61,7 @@ spec adds pixel/dimension processing.
 | `P3-T02` | An admin can create/list/read/version-update/deactivate/hard-delete eligible rooms with atomic amenity assignment                          | `src/rooms` admin controller/services/repositories/DTOs; optional reference-catalog APIs             | Uses Phase 3 schema; seed/reference migration only if owner selects fixed catalog                       | Room policy/service unit; CRUD/version/unique/reference/delete integration and admin/user/guest E2E    | Complete |
 | `P3-T03` | Admin nested window APIs enforce target binding, history/use policy seams, and non-overlap under concurrent changes                        | `src/rooms` window controller/service/repository/DTOs                                                | None                                                                                                    | Overlap/containment unit; real MySQL locking/concurrency/adjacency/nested-mismatch integration and E2E | Complete |
 | `P3-T04` | Guests can browse public active rooms and query deterministic window-contained availability with all documented filters                    | `src/rooms` public controller/search service/query DTOs/response DTOs                                | None: query-plan evidence rejected every candidate index                                                | Query policy unit; SQL/filter/pagination integration; public list/detail/date/error/localization E2E   | Complete |
-| `P3-T05` | Admin thumbnail/album upload, replacement, target-bound delete, atomic reorder, private presign, and durable cleanup retry work end to end | `src/files`, room image controller/DTO mapping, storage adapter, cleanup repository/CLI              | Uses attachment/cleanup schema from P3-T01                                                              | MIME/key/policy unit; MySQL+MinIO transaction/race/failure/retry integration; multipart/RBAC E2E       | Pending  |
+| `P3-T05` | Admin thumbnail/album upload, replacement, target-bound delete, atomic reorder, private presign, and durable cleanup retry work end to end | `src/files`, room image controller/DTO mapping, storage adapter, cleanup repository/CLI              | Uses attachment/cleanup schema from P3-T01                                                              | MIME/key/policy unit; MySQL+MinIO transaction/race/failure/retry integration; multipart/RBAC E2E       | Complete |
 | `P3-T06` | Public/operator documentation agrees and Phase 3 meets its exit gate with independent review findings dispositioned                        | Swagger, locales, `.env.example`, `README.md`, API/database/ADR docs, spec/plan/review               | Prove production migration state; no ad hoc schema changes                                              | Focused regressions, full `npm run verify`, independent security/data/concurrency/storage review       | Pending  |
 
 ### Slice notes
@@ -389,6 +389,50 @@ its own focused evidence.
   type. The declared header is rejected first (`415 ATTACHMENT_MIME_UNSUPPORTED`), then
   the bytes decide (`400 ATTACHMENT_CONTENT_INVALID`, `413 ATTACHMENT_SIZE_EXCEEDED`),
   so an accepted header over other content cannot pass.
+
+## P3-T05 slice 2 evidence: room image lifecycle (2026-09-08)
+
+- Ordering is the whole design. `stageUpload` verifies the bytes, generates the key,
+  commits the cleanup safeguard, and writes the object with no database transaction
+  open; only then does the room-locked transaction enforce the association rules,
+  insert metadata, and retire the safeguard. A crash or a rejected upload therefore
+  leaves a claimable safeguard rather than an object nobody intends to delete, and no
+  request holds a row lock across a provider call.
+- The target lock stays in the module that owns the target: `rooms` locks the physical
+  room and calls the `files` primitives inside that transaction. That keeps the
+  polymorphic registry in `files` without a circular dependency, and it is why two
+  concurrent album uploads to one room get positions 0 and 1 instead of colliding on
+  the unique `(object_type, object_id, association_type, position)` key.
+- Reorder and delete rewrite positions through a fixed offset first, because MySQL
+  checks that unique key per row rather than at statement end. The offset exceeds any
+  configured album and stays inside the column's range.
+- Every mutation matches ID plus the full target tuple, so a foreign attachment ID and
+  an absent one both answer `404 ATTACHMENT_NOT_FOUND`.
+- The multipart boundary and the content policy report one code: Multer's byte limit
+  comes from the same configuration value the policy re-checks, and the framework's
+  generic payload error is mapped to `413 ATTACHMENT_SIZE_EXCEEDED`.
+- The cleanup runner claims only due, unleased work under `FOR UPDATE SKIP LOCKED`,
+  takes a lease that outlives the bounded storage call, and relies on delete being
+  idempotent. A provider failure releases the lease with a delay and keeps the task,
+  so cleanup is retryable and observable rather than lost.
+- Presigned URLs necessarily address their object, so the bucket and key appear in the
+  URL path. Keys embed a random UUID for that reason, the grant expires, and the
+  payload carries no credential. `SPEC-005` now states this instead of implying the
+  key is hidden.
+- Focused evidence: unit 181/181; the new room-image integration suite 12/12 against
+  real MySQL and MinIO, covering the presigned round trip, thumbnail replacement,
+  album limit, safeguard-before-grace and after-grace behaviour, provider-failure
+  retry with lease release, contiguous positions after delete, cross-room refusal,
+  reorder validation, both concurrency cases, room hard delete, and the admin/public
+  payload shapes; the admin E2E adds the HTTP journey including 401/403, a client
+  filename that never reaches the storage path, `415`/`400`/`413`/`400` rejections,
+  reorder, and detach.
+- Not in this slice: `ATTACHMENT_UPLOAD_RATE_LIMIT_MAX` and
+  `ATTACHMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS` are still unconsumed. The upload route
+  is ADMIN-only, and the existing limiter is bound to the auth module's own limits and
+  Redis key prefix, so wiring it means extracting a shared limiter. `P3-T06` either
+  does that or records the accepted residual risk; the configuration must not stay
+  unused past the Phase 3 exit gate.
 
 ## PR #7 mentor-review follow-up (2026-09-08)
 

@@ -277,7 +277,11 @@ are stored even when unrelated data trails them, which is why objects are served
 as presigned reads carrying their verified content type, and why size and count limits
 bound what a caller can store.
 
-The bucket stays private: reads are short-lived presigned GETs, never public URLs.
+The bucket stays private: reads are short-lived presigned GETs, never public URLs. A
+presigned URL necessarily addresses its object, so the bucket and key appear in the
+URL path; what it never carries is a credential, and the grant expires. Keys embed a
+random UUID for that reason: one URL reveals no other object's address, and no key can
+be guessed from a room number or upload name.
 Every provider call is bounded by the configured timeout and surfaces one sanitized
 `503 STORAGE_UNAVAILABLE`; the provider cause is retained for diagnosis and never
 placed in a response body. Object deletion is idempotent by contract — a provider

@@ -20,6 +20,29 @@ export const filesErrors = {
       'ATTACHMENT_MIME_UNSUPPORTED',
       errorMessageKeys.attachmentMimeUnsupported,
     ),
+  /**
+   * Generic by design: a mismatched attachment ID, a foreign target, and an absent
+   * row are indistinguishable, so an admin of one room cannot probe another's media.
+   */
+  attachmentNotFound: () =>
+    new ApplicationException(
+      HttpStatus.NOT_FOUND,
+      'ATTACHMENT_NOT_FOUND',
+      errorMessageKeys.attachmentNotFound,
+    ),
+  attachmentLimitExceeded: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'ATTACHMENT_LIMIT_EXCEEDED',
+      errorMessageKeys.attachmentLimitExceeded,
+    ),
+  /** The reorder payload is not exactly the current album, so no order is implied. */
+  attachmentOrderInvalid: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'ATTACHMENT_ORDER_INVALID',
+      errorMessageKeys.attachmentOrderInvalid,
+    ),
   /** The bytes are not one of the accepted formats, whatever the client declared. */
   attachmentContentInvalid: () =>
     new ApplicationException(

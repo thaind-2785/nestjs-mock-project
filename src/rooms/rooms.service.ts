@@ -25,6 +25,7 @@ import {
   toRoomTypeResponse,
 } from './reference-catalog.service';
 import { applyRoomAttributeFilters } from './room-filters';
+import { RoomImageSet, RoomImagesService } from './room-images.service';
 import { lockRoom } from './room-lock';
 import { hasDefinedUpdate } from './room-version';
 import { isDatabaseError, roomsErrors } from './rooms.errors';
@@ -34,6 +35,7 @@ export class RoomsService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly databaseConnection: DatabaseConnectionService,
+    private readonly images: RoomImagesService,
   ) {}
 
   async create(body: CreateRoomDto): Promise<AdminRoomResponseDto> {
@@ -91,16 +93,18 @@ export class RoomsService {
       .skip((query.page - 1) * query.pageSize)
       .take(query.pageSize)
       .getManyAndCount();
-    const amenitiesByRoom = await loadAmenitiesByRoom(
-      this.dataSource.manager,
-      rooms.map((room) => room.id),
-    );
+    const roomIds = rooms.map((room) => room.id);
+    const [amenitiesByRoom, imagesByRoom] = await Promise.all([
+      loadAmenitiesByRoom(this.dataSource.manager, roomIds),
+      this.images.loadImageSets(this.dataSource.manager, roomIds),
+    ]);
     return {
       items: rooms.map((room) =>
         toAdminRoomResponse(
           room,
           room.roomType,
           amenitiesByRoom.get(room.id) ?? [],
+          imagesByRoom.get(room.id),
         ),
       ),
       page: query.page,
@@ -116,13 +120,15 @@ export class RoomsService {
       relations: { roomType: true },
     });
     if (!room) throw roomsErrors.roomNotFound();
-    const amenitiesByRoom = await loadAmenitiesByRoom(this.dataSource.manager, [
-      room.id,
+    const [amenitiesByRoom, imagesByRoom] = await Promise.all([
+      loadAmenitiesByRoom(this.dataSource.manager, [room.id]),
+      this.images.loadImageSets(this.dataSource.manager, [room.id]),
     ]);
     return toAdminRoomResponse(
       room,
       room.roomType,
       amenitiesByRoom.get(room.id) ?? [],
+      imagesByRoom.get(room.id),
     );
   }
 
@@ -199,7 +205,15 @@ export class RoomsService {
             ? references.amenities
             : ((await loadAmenitiesByRoom(manager, [room.id])).get(room.id) ??
               []);
-        return toAdminRoomResponse(saved, references.roomType, amenities);
+        const imagesByRoom = await this.images.loadImageSets(manager, [
+          room.id,
+        ]);
+        return toAdminRoomResponse(
+          saved,
+          references.roomType,
+          amenities,
+          imagesByRoom.get(room.id),
+        );
       });
     } catch (error) {
       if (isDatabaseError(error, 'ER_DUP_ENTRY')) {
@@ -287,10 +301,13 @@ export async function loadAmenitiesByRoom(
   return result;
 }
 
+const emptyImageSet: RoomImageSet = { thumbnail: null, album: [] };
+
 function toAdminRoomResponse(
   room: Room,
   roomType: RoomType,
   amenities: Amenity[],
+  images: RoomImageSet = emptyImageSet,
 ): AdminRoomResponseDto {
   return {
     id: room.id,
@@ -302,6 +319,8 @@ function toAdminRoomResponse(
     currency: room.currency,
     status: room.status,
     amenities: amenities.map(toAmenityResponse),
+    thumbnail: images.thumbnail,
+    images: images.album,
     version: Number(room.version),
     createdAt: room.createdAt.toISOString(),
     updatedAt: room.updatedAt.toISOString(),

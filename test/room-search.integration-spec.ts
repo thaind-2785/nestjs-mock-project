@@ -29,6 +29,10 @@ import { RoomsService } from '../src/rooms/rooms.service';
 import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
+import {
+  createRoomImageFixture,
+  RoomImageFixture,
+} from './fixtures/room-images';
 
 jest.setTimeout(30_000);
 
@@ -37,6 +41,7 @@ describe('Phase 3 public room search', () => {
   let adminConnection: mysql.Connection;
   let disposableDatabase: string;
   let catalog: ReferenceCatalogService;
+  let imageFixture: RoomImageFixture;
   let rooms: RoomsService;
   let roomTimes: RoomTimesService;
   let search: RoomSearchService;
@@ -97,13 +102,14 @@ describe('Phase 3 public room search', () => {
     await dataSource.runMigrations();
     const connection = new DatabaseConnectionService(dataSource);
     catalog = new ReferenceCatalogService(dataSource, connection);
-    rooms = new RoomsService(dataSource, connection);
+    imageFixture = createRoomImageFixture(dataSource, connection, environment);
+    rooms = new RoomsService(dataSource, connection, imageFixture.images);
     roomTimes = new RoomTimesService(
       dataSource,
       connection,
       new ZeroRoomTimeUsageRepository(),
     );
-    search = new RoomSearchService(dataSource, connection);
+    search = new RoomSearchService(dataSource, connection, imageFixture.images);
   });
 
   beforeEach(async () => {
@@ -427,6 +433,7 @@ describe('Phase 3 public room search', () => {
   }
 
   afterAll(async () => {
+    imageFixture?.destroy();
     if (dataSource?.isInitialized) await dataSource.destroy();
     if (adminConnection && disposableDatabase) {
       try {

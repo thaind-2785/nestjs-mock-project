@@ -76,6 +76,11 @@ room-scoped name for a shared limit is rejected at startup with its replacement,
 silently defaulted. The bucket stays private and is provisioned outside the
 application; API responses expose short-lived presigned reads instead of object keys.
 
+Pending object-storage cleanup is drained by `npm run files:storage-cleanup`
+(`-- --batch-size <n>` to bound one run). It claims only tasks whose grace period has
+passed, takes an expiring lease so a crashed run recovers on its own, and is safe to
+run repeatedly because object deletion is idempotent.
+
 When enabled, Swagger UI is served at `/api/docs` and its JSON document at
 `/api/docs-json`. HTTP completion logs are JSON and contain timestamp, request ID,
 method, normalized route, status, and duration; request/response bodies and headers

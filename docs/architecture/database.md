@@ -257,17 +257,44 @@ erDiagram
 | `rooms`                   | unique `room_number`; indexes `(status, room_type_id)`, `bed_count`, `view_code`                                                                                                                                                |
 | `room_amenities`          | composite PK plus reverse index `(amenity_id, room_id)`                                                                                                                                                                         |
 | `room_times`              | `CHECK (available_from < available_to)`; `(room_id, status, available_from)`. A status-leading index is deliberately absent: the overlap read locks through this index, so a global one would spread its gap locks across rooms |
-| `bookings`                | `CHECK (check_in < check_out)`; window/date/status and user/date indexes                                                                                                                                                        |
+| `bookings`                | `CHECK (check_in < check_out)` and safe-integer `price_amount`; unique public ULID plus window/date/status and user/date indexes                                                                                                |
 | `booking_status_history`  | `(booking_id, created_at)`; no updates/deletes in application                                                                                                                                                                   |
 | `booking_change_history`  | `(booking_id, created_at)`; append-only; stores window/date before and after                                                                                                                                                    |
 | `attachments`             | unique object key and `(object_type, object_id, association_type, position)`                                                                                                                                                    |
 | `storage_cleanup_tasks`   | unique object key; claim index `(available_at, lock_expires_at)`                                                                                                                                                                |
 | `reviews`                 | unique `booking_id`; check `rating BETWEEN 1 AND 5`                                                                                                                                                                             |
 | `payment_provider_events` | unique `(provider, provider_event_id)`; index `(payment_id, created_at)`                                                                                                                                                        |
-| `outbox_events`           | unique `idempotency_key`; claim index `(status, available_at, lock_expires_at)`                                                                                                                                                 |
+| `outbox_events`           | unique `idempotency_key`; claim index `(status, available_at, lock_expires_at)`; status/lease/processed-time shape is checked                                                                                                   |
 | `email_deliveries`        | unique `(outbox_event_id, recipient, template_key)`                                                                                                                                                                             |
-| `idempotency_keys`        | unique `(actor_user_id, operation, idempotency_key)`; index `expires_at`                                                                                                                                                        |
+| `idempotency_keys`        | unique `(actor_user_id, operation, idempotency_key)`; index `expires_at`; pending/completed response shape is checked                                                                                                           |
 | `schedule_runs`           | unique `(job_key, period_key)` for cron idempotency                                                                                                                                                                             |
+
+## Phase 4 persistence contract
+
+`CreateBookingCoreSchema1788580000000` creates the first five Phase 4 tables:
+`bookings`, `booking_status_history`, `booking_change_history`,
+`idempotency_keys`, and `outbox_events`. It is additive on the accepted Phase 2/3
+schema and uses restrictive foreign keys; production rollback is a compatible
+forward fix after its first write.
+
+`bookings.public_id` is an ASCII `CHAR(26)` public ULID while joins retain internal
+unsigned `BIGINT` keys. Price snapshots are unsigned integer minor units bounded to
+the JavaScript-safe range, and all stay dates are MySQL `DATE` values represented as
+UTC-safe `YYYY-MM-DD` strings by TypeORM. Booking statuses are `PENDING`,
+`CONFIRMED`, `REJECTED`, `CANCELLED_BY_USER`, `CANCELLED_BY_ADMIN`, and
+`COMPLETED`; history tables are append-only and therefore omit `updated_at`.
+
+An `idempotency_keys` row is either `PENDING` with neither stored response field, or
+`COMPLETED` with both `response_status` and `response_body`. The unique actor /
+operation / key tuple lets the creation transaction store and replay one exact result.
+Expired records are retained until the Phase 7 cleanup owner runs; retaining longer
+than the configured minimum is safe because it only refuses a changed reuse.
+
+An `outbox_events` row is exactly one of: `PENDING` with no lease or processed time,
+`PROCESSING` with a complete lease, or `PROCESSED` with no lease and a processed time.
+The unique logical event key prevents duplicate notification intent. Phase 4 writes
+these rows atomically with booking state; Phase 5 claims them using `FOR UPDATE SKIP
+LOCKED` and performs delivery.
 
 ## Connection and concurrency bounds
 

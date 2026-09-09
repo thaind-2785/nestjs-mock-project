@@ -33,6 +33,7 @@ describe('createRateLimitConfiguration', () => {
         OBJECT_STORAGE_ENDPOINT: 'https://storage.example.com',
         OBJECT_STORAGE_ACCESS_KEY: 'production-access-key',
         OBJECT_STORAGE_SECRET_KEY: 'production-secret-key',
+        HOTEL_TIMEZONE: 'Asia/Ho_Chi_Minh',
       }),
     ).toThrow(/RATE_LIMIT_REDIS_KEY_PREFIX/);
   });

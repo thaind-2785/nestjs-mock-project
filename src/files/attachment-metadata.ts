@@ -69,9 +69,8 @@ export async function insertAttachment(
   manager: EntityManager,
   attachment: AttachmentInsert,
 ): Promise<Attachment> {
-  const id = randomUUID();
-  await manager.insert(Attachment, {
-    id,
+  const entity = manager.create(Attachment, {
+    id: randomUUID(),
     uploaderUserId: attachment.uploaderUserId,
     objectType: attachment.objectType,
     objectId: attachment.objectId,
@@ -81,7 +80,8 @@ export async function insertAttachment(
     mimeType: attachment.mimeType,
     sizeBytes: String(attachment.sizeBytes),
   });
-  return manager.findOneByOrFail(Attachment, { id });
+  await manager.insert(Attachment, entity);
+  return entity;
 }
 
 /**
@@ -185,9 +185,28 @@ export async function rewriteAttachmentPositions(
     })
     .execute();
 
-  for (const [position, attachmentId] of orderedAttachmentIds.entries()) {
-    await manager.update(Attachment, { id: attachmentId }, { position });
-  }
+  const positionCases = orderedAttachmentIds
+    .map((attachmentId, position) => `WHEN :id${position} THEN ${position}`)
+    .join(' ');
+  const positionParameters = Object.fromEntries(
+    orderedAttachmentIds.map((attachmentId, position) => [
+      `id${position}`,
+      attachmentId,
+    ]),
+  );
+  await manager
+    .createQueryBuilder()
+    .update(Attachment)
+    .set({ position: () => `CASE id ${positionCases} ELSE position END` })
+    .where(
+      'object_type = :objectType AND object_id = :objectId AND association_type = :associationType',
+      target,
+    )
+    .andWhere('id IN (:...attachmentIds)', {
+      attachmentIds: orderedAttachmentIds,
+    })
+    .setParameters(positionParameters)
+    .execute();
 }
 
 /**
@@ -203,6 +222,15 @@ export async function findAttachmentsByTargets(
   const grouped = new Map<string, Attachment[]>();
   if (!objectIds.length) return grouped;
   const attachments = await manager.find(Attachment, {
+    select: {
+      id: true,
+      objectId: true,
+      associationType: true,
+      position: true,
+      objectKey: true,
+      mimeType: true,
+      sizeBytes: true,
+    },
     where: {
       objectType,
       objectId: In([...objectIds]),

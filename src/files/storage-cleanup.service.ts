@@ -89,9 +89,10 @@ export class StorageCleanupService {
   private claimOne(workerId: string): Promise<StorageCleanupTask | null> {
     return this.dataSource.transaction(async (manager) => {
       const now = new Date();
-      const candidates = await manager
+      const candidate = await manager
         .getRepository(StorageCleanupTask)
         .createQueryBuilder('task')
+        .select(['task.id', 'task.objectKey', 'task.reason', 'task.attempts'])
         .setLock('pessimistic_write')
         .setOnLocked('skip_locked')
         // Never before `available_at`: an upload safeguard is still protecting an
@@ -103,15 +104,14 @@ export class StorageCleanupService {
         )
         .orderBy('task.available_at', 'ASC')
         .addOrderBy('task.id', 'ASC')
-        .limit(1)
-        .getMany();
-      if (!candidates.length) return null;
+        .getOne();
+      if (!candidate) return null;
 
       // The lease outlives the bounded storage call by construction: configuration
       // rejects a cleanup grace that is not greater than the storage timeout.
       await manager.update(
         StorageCleanupTask,
-        { id: candidates[0].id },
+        { id: candidate.id },
         {
           lockedAt: now,
           lockExpiresAt: new Date(
@@ -121,7 +121,7 @@ export class StorageCleanupService {
           attempts: () => 'attempts + 1',
         },
       );
-      return candidates[0];
+      return candidate;
     });
   }
 

@@ -1,6 +1,6 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, In } from 'typeorm';
 import { RateLimitService } from '../common/rate-limit/rate-limit.service';
 import { attachmentsConfig } from '../config/attachments.config';
 import { AttachmentPolicy } from './attachment-policy';
@@ -22,30 +22,12 @@ import { StorageCleanupTask } from './entities/storage-cleanup-task.entity';
 import { filesErrors } from './files.errors';
 import { buildAttachmentObjectKey } from './storage/attachment-object-key';
 import { AttachmentStorageService } from './storage/attachment-storage.service';
-
-export interface StagedUpload {
-  policy: AttachmentPolicy;
-  objectId: string;
-  objectKey: string;
-  mimeType: string;
-  sizeBytes: number;
-}
-
-export interface AttachmentCommit {
-  attachment: Attachment;
-  /** Objects the commit detached. Deleting them is best-effort after commit. */
-  detachedObjectKeys: string[];
-}
-
-export interface AttachmentRead {
-  id: string;
-  associationType: string;
-  position: number;
-  mimeType: string;
-  sizeBytes: number;
-  url: string;
-  expiresAt: string;
-}
+import {
+  AttachmentCommit,
+  AttachmentRead,
+  AttachmentStageInput,
+  StagedUpload,
+} from './attachments.types';
 
 /**
  * Target-agnostic attachment mechanics. The owning module locks and revalidates its
@@ -54,6 +36,8 @@ export interface AttachmentRead {
  */
 @Injectable()
 export class AttachmentsService {
+  private readonly logger = new Logger(AttachmentsService.name);
+
   public constructor(
     private readonly dataSource: DataSource,
     private readonly storage: AttachmentStorageService,
@@ -91,12 +75,7 @@ export class AttachmentsService {
    * crash at any point after the safeguard commit leaves claimable cleanup work
    * instead of an unreferenced object.
    */
-  public async stageUpload(input: {
-    policy: AttachmentPolicy;
-    objectId: string;
-    declaredMimeType: string;
-    body: Buffer;
-  }): Promise<StagedUpload> {
+  public async stageUpload(input: AttachmentStageInput): Promise<StagedUpload> {
     const mimeType = verifyAttachmentContent({
       policy: input.policy,
       declaredMimeType: input.declaredMimeType,
@@ -153,32 +132,26 @@ export class AttachmentsService {
     const target = this.targetOf(staged);
     const existing = await findTargetAttachments(manager, target);
 
-    // A singleton association is replaced rather than rejected; a multi-item one is
-    // bounded by its configured count.
-    const detachedObjectKeys: string[] = [];
-    if (staged.policy.maxCount === 1) {
-      for (const attachment of existing) {
-        await manager.delete(Attachment, { id: attachment.id });
-        detachedObjectKeys.push(attachment.objectKey);
-      }
-    } else if (existing.length >= staged.policy.maxCount) {
-      throw filesErrors.attachmentLimitExceeded();
-    }
+    const uploadTarget = await this.prepareUploadTarget(
+      manager,
+      existing,
+      staged.policy,
+    );
 
     const attachment = await insertAttachment(manager, {
       ...target,
       uploaderUserId,
       // Positions stay contiguous and zero-based, so the next one is the count of
       // the rows that survive this commit.
-      position: staged.policy.maxCount === 1 ? 0 : existing.length,
+      position: uploadTarget.position,
       objectKey: staged.objectKey,
       mimeType: staged.mimeType,
       sizeBytes: staged.sizeBytes,
     });
-    await scheduleDetachedCleanup(manager, detachedObjectKeys);
+    await scheduleDetachedCleanup(manager, uploadTarget.detachedObjectKeys);
     await deleteUploadSafeguard(manager, staged.objectKey);
 
-    return { attachment, detachedObjectKeys };
+    return { attachment, detachedObjectKeys: uploadTarget.detachedObjectKeys };
   }
 
   /**
@@ -244,18 +217,24 @@ export class AttachmentsService {
   public async deleteDetachedObjects(
     objectKeys: readonly string[],
   ): Promise<void> {
-    for (const objectKey of objectKeys) {
-      const deleted = await this.storage
-        .deleteObject(objectKey)
-        .then(() => true)
-        .catch(() => false);
-      if (!deleted) continue;
-      await this.dataSource.manager
-        .delete(StorageCleanupTask, {
+    const results = await Promise.allSettled(
+      objectKeys.map(async (objectKey) => {
+        await this.storage.deleteObject(objectKey);
+        await this.dataSource.manager.delete(StorageCleanupTask, {
           objectKey,
           reason: StorageCleanupReason.DetachedObject,
-        })
-        .catch(() => undefined);
+        });
+      }),
+    );
+    const deferredCount = results.filter(
+      (result) => result.status === 'rejected',
+    ).length;
+    if (deferredCount) {
+      this.logger.warn({
+        event: 'attachment_detached_cleanup_deferred',
+        deferredCount,
+        errorCode: 'ATTACHMENT_CLEANUP_DEFERRED',
+      });
     }
   }
 
@@ -285,5 +264,26 @@ export class AttachmentsService {
       objectId: staged.objectId,
       associationType: staged.policy.associationType,
     };
+  }
+
+  private async prepareUploadTarget(
+    manager: EntityManager,
+    existing: readonly Attachment[],
+    policy: AttachmentPolicy,
+  ): Promise<{ detachedObjectKeys: string[]; position: number }> {
+    if (policy.maxCount !== 1) {
+      if (existing.length >= policy.maxCount) {
+        throw filesErrors.attachmentLimitExceeded();
+      }
+      return { detachedObjectKeys: [], position: existing.length };
+    }
+
+    const detachedObjectKeys = existing.map(({ objectKey }) => objectKey);
+    if (detachedObjectKeys.length) {
+      await manager.delete(Attachment, {
+        id: In(existing.map(({ id }) => id)),
+      });
+    }
+    return { detachedObjectKeys, position: 0 };
   }
 }

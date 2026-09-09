@@ -25,9 +25,9 @@ import type { AuthenticatedPrincipal } from '../auth/auth.types';
 import { CurrentPrincipal } from '../auth/decorators/current-principal.decorator';
 import { AttachmentUploadErrorInterceptor } from '../files/attachment-upload.interceptor';
 import { AttachmentUploadRateLimitGuard } from '../files/attachment-upload-rate-limit.guard';
+import { RequiredAttachmentFilePipe } from '../files/required-attachment-file.pipe';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ErrorResponseDto } from '../common/errors/error-response.dto';
-import { createValidationException } from '../common/errors/validation-errors';
 import { UserRole } from '../users/entities/user.enums';
 import { RoomImageIdParamDto } from './dto/room-id-param.dto';
 import {
@@ -98,17 +98,9 @@ export class AdminRoomImagesController {
   upload(
     @Param() params: RoomIdParamDto,
     @Body() body: UploadRoomImageDto,
-    @UploadedFile() file: Express.Multer.File | undefined,
+    @UploadedFile(new RequiredAttachmentFilePipe()) file: Express.Multer.File,
     @CurrentPrincipal() principal: AuthenticatedPrincipal,
   ): Promise<RoomImageResponseDto> {
-    // The multipart part is required, so its absence is reported the same way the
-    // global pipe reports any missing field rather than as a storage error.
-    if (!file?.buffer?.length) {
-      throw createValidationException([
-        { property: 'file', constraints: { isDefined: 'file is required' } },
-      ]);
-    }
-
     return this.images.upload(params.roomId, {
       associationType: body.associationType,
       uploaderUserId: principal.userId,

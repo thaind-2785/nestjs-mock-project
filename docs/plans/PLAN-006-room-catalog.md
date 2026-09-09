@@ -650,10 +650,14 @@ its own focused evidence.
   object deletion runs independently with `Promise.allSettled`; a deferred cleanup is
   recorded as one structured event without storage keys or provider payloads. The
   storage adapter and cleanup runner retain their existing boundary-failure events.
-- The controller's missing multipart-file check is deliberately retained: it maps an
-  HTTP input error before calling the service, not a business decision. Moving it to
-  the service would violate the transport-only controller/service boundary in
-  `AGENTS.md`.
+- The required multipart-file check now lives in `RequiredAttachmentFilePipe` at the
+  HTTP boundary. The controller binds only a validated file and the service remains
+  independent of Multer and HTTP validation.
+- Pipe-specific evidence: typecheck and lint passed; pipe/interceptor/guard unit
+  tests 10/10 and the existing room-admin E2E 2/2 prove the missing-file response is
+  unchanged (`400 VALIDATION_FAILED`, field `file`). The preceding full gate covers
+  the earlier review fixes; this isolated transport refactor will enter the next PR
+  handoff gate rather than claiming that prior result for new code.
 - Focused evidence before final handoff: typecheck and lint passed; relevant unit
   tests 51/51; room-image plus attachment-storage integration 20/20; upload-limit
   E2E 2/2. The integration runner emitted its pre-existing post-completion open-handle

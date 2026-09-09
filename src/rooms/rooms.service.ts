@@ -24,6 +24,8 @@ import {
   toAmenityResponse,
   toRoomTypeResponse,
 } from './reference-catalog.service';
+import { applyRoomAttributeFilters } from './room-filters';
+import { lockRoom } from './room-lock';
 import { hasDefinedUpdate } from './room-version';
 import { isDatabaseError, roomsErrors } from './rooms.errors';
 
@@ -83,19 +85,7 @@ export class RoomsService {
     }
     if (query.status)
       builder.andWhere('room.status = :status', { status: query.status });
-    if (query.roomTypeId) {
-      builder.andWhere('room.room_type_id = :roomTypeId', {
-        roomTypeId: query.roomTypeId,
-      });
-    }
-    if (query.beds !== undefined) {
-      builder.andWhere('room.bed_count = :beds', { beds: query.beds });
-    }
-    if (query.view) {
-      builder.andWhere('room.view_code = :view', {
-        view: query.view,
-      });
-    }
+    applyRoomAttributeFilters(builder, query);
     const [rooms, total] = await builder
       .orderBy('room.id', 'ASC')
       .skip((query.page - 1) * query.pageSize)
@@ -147,11 +137,7 @@ export class RoomsService {
       return await this.dataSource.transaction(async (manager) => {
         // The row lock keeps the scalar update and complete amenity replacement in
         // one serial order; the caller's version still detects a stale admin form.
-        const room = await manager.findOne(Room, {
-          where: { id: roomId },
-          lock: { mode: 'pessimistic_write' },
-        });
-        if (!room) throw roomsErrors.roomNotFound();
+        const room = await lockRoom(manager, roomId);
         if (room.version !== expectedVersion) {
           throw roomsErrors.roomVersionConflict();
         }
@@ -227,11 +213,7 @@ export class RoomsService {
     await this.databaseConnection.ensureInitialized();
     try {
       await this.dataSource.transaction(async (manager) => {
-        const room = await manager.findOne(Room, {
-          where: { id: roomId },
-          lock: { mode: 'pessimistic_write' },
-        });
-        if (!room) throw roomsErrors.roomNotFound();
+        const room = await lockRoom(manager, roomId);
 
         const attachments = await manager.find(Attachment, {
           where: { objectType: AttachmentObjectType.Room, objectId: roomId },
@@ -286,7 +268,7 @@ async function replaceAmenityAssignments(
   );
 }
 
-async function loadAmenitiesByRoom(
+export async function loadAmenitiesByRoom(
   manager: EntityManager,
   roomIds: string[],
 ): Promise<Map<string, Amenity[]>> {

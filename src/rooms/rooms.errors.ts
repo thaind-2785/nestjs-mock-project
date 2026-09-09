@@ -82,6 +82,63 @@ export const roomsErrors = {
       'ROOM_HAS_HISTORY',
       errorMessageKeys.roomHasHistory,
     ),
+  roomTimeNotFound: () =>
+    new ApplicationException(
+      HttpStatus.NOT_FOUND,
+      'ROOM_TIME_NOT_FOUND',
+      errorMessageKeys.roomTimeNotFound,
+    ),
+  roomTimeRangeInvalid: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'ROOM_TIME_RANGE_INVALID',
+      errorMessageKeys.roomTimeRangeInvalid,
+    ),
+  roomTimeOverlap: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'ROOM_TIME_OVERLAP',
+      errorMessageKeys.roomTimeOverlap,
+    ),
+  roomTimeDatesImmutable: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'ROOM_TIME_DATES_IMMUTABLE',
+      errorMessageKeys.roomTimeDatesImmutable,
+    ),
+  roomTimeInUse: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'ROOM_TIME_IN_USE',
+      errorMessageKeys.roomTimeInUse,
+    ),
+  roomTimeHasHistory: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'ROOM_TIME_HAS_HISTORY',
+      errorMessageKeys.roomTimeHasHistory,
+    ),
+  stayDateRangeIncomplete: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'DATE_RANGE_INCOMPLETE',
+      errorMessageKeys.stayDateRangeIncomplete,
+    ),
+  stayRangeInvalid: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'STAY_RANGE_INVALID',
+      errorMessageKeys.stayRangeInvalid,
+    ),
+  priceRangeInvalid: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'VALIDATION_FAILED',
+      errorMessageKeys.validationFailed,
+      // Not a class-validator constraint name: a client must be able to tell an
+      // inverted range from `maxPrice` failing its own `@Min(0)`.
+      { errors: [{ field: 'maxPrice', codes: ['priceRangeInverted'] }] },
+    ),
   emptyUpdate: () =>
     new ApplicationException(
       HttpStatus.BAD_REQUEST,

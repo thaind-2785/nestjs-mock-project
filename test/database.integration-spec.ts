@@ -103,6 +103,21 @@ describe('TypeORM MySQL migration integration', () => {
     }
   });
 
+  it('opens application database sessions in UTC', async () => {
+    const [timezone] = await (dataSource as DataSource).query<
+      Array<{ globalTimeZone: string; sessionTimeZone: string }>
+    >(
+      `SELECT
+         @@GLOBAL.time_zone AS globalTimeZone,
+         @@SESSION.time_zone AS sessionTimeZone`,
+    );
+
+    expect(timezone).toEqual({
+      globalTimeZone: '+00:00',
+      sessionTimeZone: '+00:00',
+    });
+  });
+
   afterAll(async () => {
     if (dataSource?.isInitialized) await dataSource.destroy();
     if (adminConnection && disposableDatabase) {

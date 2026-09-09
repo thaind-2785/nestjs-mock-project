@@ -17,7 +17,7 @@ import {
 import { Attachment } from '../src/files/entities/attachment.entity';
 import { StorageCleanupTask } from '../src/files/entities/storage-cleanup-task.entity';
 import { ListRoomsQueryDto } from '../src/rooms/dto/list-rooms-query.dto';
-import { ReferenceCatalogQueryDto } from '../src/rooms/dto/pagination-query.dto';
+import { ReferenceCatalogQueryDto } from '../src/rooms/dto/reference-catalog-query.dto';
 import { Amenity } from '../src/rooms/entities/amenity.entity';
 import { RoomAmenity } from '../src/rooms/entities/room-amenity.entity';
 import { RoomTime } from '../src/rooms/entities/room-time.entity';
@@ -25,6 +25,9 @@ import { RoomType } from '../src/rooms/entities/room-type.entity';
 import { Room } from '../src/rooms/entities/room.entity';
 import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { ReferenceCatalogService } from '../src/rooms/reference-catalog.service';
+import { lockRoom } from '../src/rooms/room-lock';
+import { ZeroRoomTimeUsageRepository } from '../src/rooms/room-time-usage.repository';
+import { RoomTimesService } from '../src/rooms/room-times.service';
 import { RoomsService } from '../src/rooms/rooms.service';
 import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
@@ -33,12 +36,14 @@ import { UserRole, UserStatus } from '../src/users/entities/user.enums';
 
 jest.setTimeout(30_000);
 
-describe('P3-T02 room administration persistence', () => {
+describe('Phase 3 room administration persistence', () => {
   let dataSource: DataSource;
   let adminConnection: mysql.Connection;
   let disposableDatabase: string;
   let catalog: ReferenceCatalogService;
   let rooms: RoomsService;
+  let roomTimes: RoomTimesService;
+  let usageRepository: ZeroRoomTimeUsageRepository;
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
@@ -97,6 +102,8 @@ describe('P3-T02 room administration persistence', () => {
     const connection = new DatabaseConnectionService(dataSource);
     catalog = new ReferenceCatalogService(dataSource, connection);
     rooms = new RoomsService(dataSource, connection);
+    usageRepository = new ZeroRoomTimeUsageRepository();
+    roomTimes = new RoomTimesService(dataSource, connection, usageRepository);
   });
 
   beforeEach(async () => {
@@ -326,6 +333,405 @@ describe('P3-T02 room administration persistence', () => {
     }
   });
 
+  it('manages ordered windows, accepts adjacency, and rejects active overlap', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-201'));
+    const first = await roomTimes.create(room.id, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-10',
+      status: RoomTimeStatus.Active,
+    });
+    const adjacent = await roomTimes.create(room.id, {
+      availableFrom: '2026-10-10',
+      availableTo: '2026-10-20',
+      status: RoomTimeStatus.Active,
+    });
+    const inactiveOverlap = await roomTimes.create(room.id, {
+      availableFrom: '2026-10-05',
+      availableTo: '2026-10-15',
+      status: RoomTimeStatus.Inactive,
+    });
+
+    await expect(
+      roomTimes.create(room.id, {
+        availableFrom: '2026-10-09',
+        availableTo: '2026-10-11',
+        status: RoomTimeStatus.Active,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_OVERLAP' });
+    await expect(
+      roomTimes.create(room.id, {
+        availableFrom: '2026-11-01',
+        availableTo: '2026-11-01',
+        status: RoomTimeStatus.Active,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_RANGE_INVALID' });
+    await expect(
+      roomTimes.update(room.id, inactiveOverlap.id, {
+        status: RoomTimeStatus.Active,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_OVERLAP' });
+
+    expect(await roomTimes.list(room.id)).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        availableFrom: '2026-10-01',
+        availableTo: '2026-10-10',
+        status: RoomTimeStatus.Active,
+        usage: {
+          bookingCount: 0,
+          activeBookingCount: 0,
+          changeHistoryCount: 0,
+        },
+      }),
+      expect.objectContaining({
+        id: inactiveOverlap.id,
+        status: RoomTimeStatus.Inactive,
+      }),
+      expect.objectContaining({
+        id: adjacent.id,
+        status: RoomTimeStatus.Active,
+      }),
+    ]);
+
+    const movedInactive = await roomTimes.update(room.id, inactiveOverlap.id, {
+      availableFrom: '2026-10-08',
+      availableTo: '2026-10-18',
+    });
+    expect(movedInactive).toMatchObject({
+      availableFrom: '2026-10-08',
+      availableTo: '2026-10-18',
+      status: RoomTimeStatus.Inactive,
+    });
+    await roomTimes.delete(room.id, inactiveOverlap.id);
+    expect(await roomTimes.list(room.id)).toHaveLength(2);
+  });
+
+  it('serializes concurrent active-window creation and activation on the physical room', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-201'));
+
+    const attempts = await Promise.allSettled([
+      roomTimes.create(room.id, {
+        availableFrom: '2026-10-01',
+        availableTo: '2026-10-20',
+        status: RoomTimeStatus.Active,
+      }),
+      roomTimes.create(room.id, {
+        availableFrom: '2026-10-10',
+        availableTo: '2026-10-30',
+        status: RoomTimeStatus.Active,
+      }),
+    ]);
+
+    expect(
+      attempts.filter((attempt) => attempt.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      attempts.find((attempt) => attempt.status === 'rejected'),
+    ).toMatchObject({ reason: { errorCode: 'ROOM_TIME_OVERLAP' } });
+    expect(
+      await dataSource.getRepository(RoomTime).countBy({
+        roomId: room.id,
+        status: RoomTimeStatus.Active,
+      }),
+    ).toBe(1);
+
+    const updateRoom = await rooms.create(roomInput(type.id, [], 'A-202'));
+    const firstInactive = await roomTimes.create(updateRoom.id, {
+      availableFrom: '2026-11-01',
+      availableTo: '2026-11-20',
+      status: RoomTimeStatus.Inactive,
+    });
+    const secondInactive = await roomTimes.create(updateRoom.id, {
+      availableFrom: '2026-11-10',
+      availableTo: '2026-11-30',
+      status: RoomTimeStatus.Inactive,
+    });
+    const updateAttempts = await Promise.allSettled([
+      roomTimes.update(updateRoom.id, firstInactive.id, {
+        status: RoomTimeStatus.Active,
+      }),
+      roomTimes.update(updateRoom.id, secondInactive.id, {
+        status: RoomTimeStatus.Active,
+      }),
+    ]);
+    expect(
+      updateAttempts.filter((attempt) => attempt.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      updateAttempts.find((attempt) => attempt.status === 'rejected'),
+    ).toMatchObject({ reason: { errorCode: 'ROOM_TIME_OVERLAP' } });
+    expect(
+      await dataSource.getRepository(RoomTime).countBy({
+        roomId: updateRoom.id,
+        status: RoomTimeStatus.Active,
+      }),
+    ).toBe(1);
+  });
+
+  it('refuses a window mutation when the usage port omits the window', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-204'));
+    const window = await roomTimes.create(room.id, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+      status: RoomTimeStatus.Active,
+    });
+    const partial = jest
+      .spyOn(usageRepository, 'findByRoomTimeIds')
+      .mockResolvedValue(new Map());
+    try {
+      await expect(roomTimes.delete(room.id, window.id)).rejects.toThrow(
+        /Missing room-time usage/,
+      );
+      await expect(
+        roomTimes.update(room.id, window.id, {
+          status: RoomTimeStatus.Inactive,
+        }),
+      ).rejects.toThrow(/Missing room-time usage/);
+    } finally {
+      partial.mockRestore();
+    }
+    expect(await roomTimes.list(room.id)).toMatchObject([
+      { id: window.id, status: RoomTimeStatus.Active },
+    ]);
+  });
+
+  it('hydrates hotel dates from UTC so no host timezone shifts them', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-203'));
+    const created = await roomTimes.create(room.id, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+      status: RoomTimeStatus.Active,
+    });
+
+    // `timezone: 'Z'` makes the driver hydrate DATE as UTC midnight, so both
+    // columns must format with UTC getters. Without this the API reports the
+    // previous day west of Greenwich and feeds that day into the overlap check.
+    // Jest sandboxes `process.env`, so a host timezone cannot be simulated in
+    // process; this asserts the declaration plus the observable round trip.
+    const metadata = dataSource.getMetadata(RoomTime);
+    for (const property of ['availableFrom', 'availableTo']) {
+      expect(metadata.findColumnWithPropertyName(property)?.utc).toBe(true);
+    }
+
+    const [listed] = await roomTimes.list(room.id);
+    expect(listed).toMatchObject({
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+    });
+    const patched = await roomTimes.update(room.id, created.id, {
+      status: RoomTimeStatus.Inactive,
+    });
+    expect(patched).toMatchObject({
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+    });
+    const stored = await dataSource
+      .getRepository(RoomTime)
+      .createQueryBuilder('roomTime')
+      .select('CAST(roomTime.available_from AS CHAR)', 'availableFrom')
+      .where('roomTime.id = :id', { id: created.id })
+      .getRawOne<{ availableFrom: string }>();
+    expect(stored?.availableFrom).toBe('2026-10-01');
+  });
+
+  it('keeps window creation independent across physical rooms', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const roomA = await rooms.create(roomInput(type.id, [], 'A-701'));
+    const roomB = await rooms.create(roomInput(type.id, [], 'A-702'));
+    // Skewed statistics: many windows concentrated on one room make a
+    // status-leading index look cheaper than the room-scoped one. Under
+    // REPEATABLE READ the overlap read takes next-key locks on whichever index
+    // the optimizer picks, so a status-leading index would spread its gap locks
+    // across every room and make independent rooms block each other. A rejected
+    // `room_times (status, available_from, available_to, room_id)` candidate did
+    // exactly that; this test fails if such an index or query change returns.
+    const values: string[] = [];
+    for (let index = 0; index < 300; index += 1) {
+      const from = `2027-01-${String((index % 27) + 1).padStart(2, '0')}`;
+      values.push(`(${roomA.id}, '${from}', '2027-02-01', 'INACTIVE')`);
+    }
+    await dataSource.query(
+      `INSERT INTO room_times (room_id, available_from, available_to, status) VALUES ${values.join(',')}`,
+    );
+    await dataSource.query('ANALYZE TABLE room_times');
+
+    let overlapSql = '';
+    const captured = jest
+      .spyOn(dataSource.logger, 'logQuery')
+      .mockImplementation((sql) => {
+        if (/FROM `room_times`.*FOR UPDATE/i.test(sql)) overlapSql = sql;
+      });
+    await roomTimes.create(roomA.id, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+      status: RoomTimeStatus.Active,
+    });
+    captured.mockRestore();
+    expect(overlapSql).not.toBe('');
+
+    const holder = dataSource.createQueryRunner();
+    const other = dataSource.createQueryRunner();
+    await holder.connect();
+    await other.connect();
+    try {
+      // Fail fast instead of waiting out the server default.
+      await other.query('SET SESSION innodb_lock_wait_timeout = 2');
+      await holder.startTransaction();
+      await holder.query(overlapSql, [
+        roomA.id,
+        RoomTimeStatus.Active,
+        '2026-10-25',
+        '2026-10-21',
+      ]);
+      await other.startTransaction();
+      await expect(
+        other.query(overlapSql, [
+          roomB.id,
+          RoomTimeStatus.Active,
+          '2027-06-10',
+          '2027-06-01',
+        ]),
+      ).resolves.toEqual([]);
+    } finally {
+      if (other.isTransactionActive) await other.rollbackTransaction();
+      if (holder.isTransactionActive) await holder.rollbackTransaction();
+      await other.release();
+      await holder.release();
+    }
+  });
+
+  it('locks a room with mutable/version state but without unused audit columns', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-703'));
+    let lockSql = '';
+    const captured = jest
+      .spyOn(dataSource.logger, 'logQuery')
+      .mockImplementation((sql) => {
+        if (/FROM `rooms` .*FOR UPDATE/i.test(sql)) lockSql = sql;
+      });
+
+    try {
+      const locked = await dataSource.transaction((manager) =>
+        lockRoom(manager, room.id),
+      );
+      expect(locked).toMatchObject({
+        id: room.id,
+        roomTypeId: type.id,
+        roomNumber: 'A-703',
+        version: '1',
+      });
+      // Exactly the mutable/version state every caller needs carries a value: no
+      // audit column or relation is hydrated, and `LockedRoom` makes reading one a
+      // compile error. Class fields always exist, so assert the populated ones.
+      const hydrated = Object.entries(locked)
+        .filter(([, value]) => value !== undefined)
+        .map(([field]) => field)
+        .sort();
+      expect(hydrated).toEqual([
+        'basePriceAmount',
+        'bedCount',
+        'currency',
+        'id',
+        'roomNumber',
+        'roomTypeId',
+        'status',
+        'version',
+        'viewCode',
+      ]);
+    } finally {
+      captured.mockRestore();
+    }
+
+    expect(lockSql).not.toBe('');
+    const projection = lockSql.slice(0, lockSql.search(/\sFROM\s/i));
+    expect(projection).toContain('version');
+    expect(projection).not.toContain('created_at');
+    expect(projection).not.toContain('updated_at');
+  });
+
+  it('waits for the physical-room lock before checking window overlap', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-201'));
+    const blocker = dataSource.createQueryRunner();
+    await blocker.connect();
+    await blocker.startTransaction();
+    await blocker.manager.findOneOrFail(Room, {
+      where: { id: room.id },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    const queries = jest.spyOn(dataSource.logger, 'logQuery');
+    let settled = false;
+    let pending: ReturnType<RoomTimesService['create']> | undefined;
+    try {
+      pending = roomTimes.create(room.id, {
+        availableFrom: '2026-12-01',
+        availableTo: '2026-12-10',
+        status: RoomTimeStatus.Active,
+      });
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      await waitForQuery(queries, /FROM `rooms` .*FOR UPDATE/i);
+      expect(settled).toBe(false);
+      expect(
+        queries.mock.calls.some(([sql]) => /FROM `room_times` /i.test(sql)),
+      ).toBe(false);
+
+      await blocker.commitTransaction();
+      await expect(pending).resolves.toMatchObject({ roomId: room.id });
+      expect(
+        queries.mock.calls.some(([sql]) =>
+          /FROM `room_times` .*FOR UPDATE/i.test(sql),
+        ),
+      ).toBe(true);
+    } finally {
+      if (blocker.isTransactionActive) await blocker.rollbackTransaction();
+      await blocker.release();
+      queries.mockRestore();
+      if (pending) await pending.catch(() => undefined);
+    }
+  });
+
+  it('binds every window mutation to the parent room in the URL', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const firstRoom = await rooms.create(roomInput(type.id, [], 'A-201'));
+    const secondRoom = await rooms.create(roomInput(type.id, [], 'A-202'));
+    const window = await roomTimes.create(firstRoom.id, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+      status: RoomTimeStatus.Active,
+    });
+
+    await expect(
+      roomTimes.update(secondRoom.id, window.id, {
+        status: RoomTimeStatus.Inactive,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_NOT_FOUND' });
+    await expect(
+      roomTimes.delete(secondRoom.id, window.id),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_NOT_FOUND' });
+    await expect(roomTimes.list('999999999')).rejects.toMatchObject({
+      errorCode: 'ROOM_NOT_FOUND',
+    });
+    expect(await roomTimes.list(firstRoom.id)).toEqual([
+      expect.objectContaining({
+        id: window.id,
+        status: RoomTimeStatus.Active,
+      }),
+    ]);
+  });
+
   it('hard-deletes the room graph and persists attachment cleanup atomically', async () => {
     const deluxe = await catalog.createRoomType({ name: 'Deluxe' });
     const wifi = await catalog.createAmenity({ code: 'WIFI', name: 'Wi-Fi' });
@@ -389,6 +795,18 @@ describe('P3-T02 room administration persistence', () => {
       status: RoomStatus.Active,
       amenityIds,
     };
+  }
+
+  async function waitForQuery(
+    queries: jest.SpiedFunction<DataSource['logger']['logQuery']>,
+    pattern: RegExp,
+  ): Promise<void> {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      if (queries.mock.calls.some(([sql]) => pattern.test(sql))) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`Expected query matching ${pattern.source}`);
   }
 
   afterAll(async () => {

@@ -27,6 +27,12 @@ interface ErrorTranslations {
     roomNotFound: string;
     roomNumberConflict: string;
     roomReferenceNotFound: string;
+    roomTimeDatesImmutable: string;
+    roomTimeHasHistory: string;
+    roomTimeInUse: string;
+    roomTimeNotFound: string;
+    roomTimeOverlap: string;
+    roomTimeRangeInvalid: string;
     roomTypeInUse: string;
     roomTypeNameConflict: string;
     roomTypeNotFound: string;
@@ -36,6 +42,8 @@ interface ErrorTranslations {
     selfDeactivationForbidden: string;
     sessionInvalid: string;
     serviceUnavailable: string;
+    stayDateRangeIncomplete: string;
+    stayRangeInvalid: string;
     tooManyRequests: string;
     unauthorized: string;
     userInactive: string;

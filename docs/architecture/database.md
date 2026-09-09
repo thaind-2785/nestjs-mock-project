@@ -247,27 +247,40 @@ erDiagram
 
 ## Constraints and indexes
 
-| Table                     | Required constraint/index                                                        |
-| ------------------------- | -------------------------------------------------------------------------------- |
-| `users`                   | unique normalized `email`; indexes on `(status, role)`                           |
-| `auth_identities`         | unique `(provider, provider_subject)` and `(user_id, provider)`                  |
-| `auth_sessions`           | `(user_id, revoked_at)`, `refresh_expires_at`                                    |
-| `user_status_history`     | `(user_id, created_at)`; append-only; same transaction as status update          |
-| `user_role_history`       | `(user_id, created_at)`; append-only; same transaction as role update            |
-| `rooms`                   | unique `room_number`; indexes `(status, room_type_id)`, `bed_count`, `view_code` |
-| `room_amenities`          | composite PK plus reverse index `(amenity_id, room_id)`                          |
-| `room_times`              | `CHECK (available_from < available_to)`; `(room_id, status, available_from)`     |
-| `bookings`                | `CHECK (check_in < check_out)`; window/date/status and user/date indexes         |
-| `booking_status_history`  | `(booking_id, created_at)`; no updates/deletes in application                    |
-| `booking_change_history`  | `(booking_id, created_at)`; append-only; stores window/date before and after     |
-| `attachments`             | unique object key and `(object_type, object_id, association_type, position)`     |
-| `storage_cleanup_tasks`   | unique object key; claim index `(available_at, lock_expires_at)`                 |
-| `reviews`                 | unique `booking_id`; check `rating BETWEEN 1 AND 5`                              |
-| `payment_provider_events` | unique `(provider, provider_event_id)`; index `(payment_id, created_at)`         |
-| `outbox_events`           | unique `idempotency_key`; claim index `(status, available_at, lock_expires_at)`  |
-| `email_deliveries`        | unique `(outbox_event_id, recipient, template_key)`                              |
-| `idempotency_keys`        | unique `(actor_user_id, operation, idempotency_key)`; index `expires_at`         |
-| `schedule_runs`           | unique `(job_key, period_key)` for cron idempotency                              |
+| Table                     | Required constraint/index                                                                                                                                                                                                       |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`                   | unique normalized `email`; indexes on `(status, role)`                                                                                                                                                                          |
+| `auth_identities`         | unique `(provider, provider_subject)` and `(user_id, provider)`                                                                                                                                                                 |
+| `auth_sessions`           | `(user_id, revoked_at)`, `refresh_expires_at`                                                                                                                                                                                   |
+| `user_status_history`     | `(user_id, created_at)`; append-only; same transaction as status update                                                                                                                                                         |
+| `user_role_history`       | `(user_id, created_at)`; append-only; same transaction as role update                                                                                                                                                           |
+| `rooms`                   | unique `room_number`; indexes `(status, room_type_id)`, `bed_count`, `view_code`                                                                                                                                                |
+| `room_amenities`          | composite PK plus reverse index `(amenity_id, room_id)`                                                                                                                                                                         |
+| `room_times`              | `CHECK (available_from < available_to)`; `(room_id, status, available_from)`. A status-leading index is deliberately absent: the overlap read locks through this index, so a global one would spread its gap locks across rooms |
+| `bookings`                | `CHECK (check_in < check_out)`; window/date/status and user/date indexes                                                                                                                                                        |
+| `booking_status_history`  | `(booking_id, created_at)`; no updates/deletes in application                                                                                                                                                                   |
+| `booking_change_history`  | `(booking_id, created_at)`; append-only; stores window/date before and after                                                                                                                                                    |
+| `attachments`             | unique object key and `(object_type, object_id, association_type, position)`                                                                                                                                                    |
+| `storage_cleanup_tasks`   | unique object key; claim index `(available_at, lock_expires_at)`                                                                                                                                                                |
+| `reviews`                 | unique `booking_id`; check `rating BETWEEN 1 AND 5`                                                                                                                                                                             |
+| `payment_provider_events` | unique `(provider, provider_event_id)`; index `(payment_id, created_at)`                                                                                                                                                        |
+| `outbox_events`           | unique `idempotency_key`; claim index `(status, available_at, lock_expires_at)`                                                                                                                                                 |
+| `email_deliveries`        | unique `(outbox_event_id, recipient, template_key)`                                                                                                                                                                             |
+| `idempotency_keys`        | unique `(actor_user_id, operation, idempotency_key)`; index `expires_at`                                                                                                                                                        |
+| `schedule_runs`           | unique `(job_key, period_key)` for cron idempotency                                                                                                                                                                             |
+
+## Temporal storage contract
+
+MySQL's default and every application session use UTC. Local Compose pins
+`--default-time-zone=+00:00`; managed environments must configure the equivalent
+server/session setting and verify it before serving traffic. The mysql2 connection
+uses `timezone: 'Z'` so UTC `DATETIME(6)` audit values hydrate as instants.
+
+Hotel stay/window values remain timezone-free MySQL `DATE` columns represented as
+`YYYY-MM-DD` strings. Those columns also declare TypeORM `utc: true`: the server UTC
+setting controls database temporal operations, while the column option prevents an
+application host west of UTC from formatting a driver-hydrated date one day early.
+Both safeguards are required.
 
 MySQL cannot express either interval rule as a simple unique constraint. Creating or
 changing a `room_times` row locks its physical room and rejects overlap with another

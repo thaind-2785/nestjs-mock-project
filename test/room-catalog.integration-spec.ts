@@ -220,15 +220,20 @@ describe('Phase 3 room catalog persistence', () => {
 
   it('reverts only the Phase 3 schema and reapplies it cleanly', async () => {
     await dataSource.undoLastMigration();
+    expect(await phaseThreeTables()).toEqual(['users']);
+
+    await dataSource.runMigrations();
+    expect(await phaseThreeTables()).toEqual(['attachments', 'rooms', 'users']);
+  });
+
+  async function phaseThreeTables(): Promise<string[]> {
     const tables = await dataSource.query<Array<{ TABLE_NAME: string }>>(
       `SELECT TABLE_NAME FROM information_schema.tables
        WHERE table_schema = DATABASE() AND TABLE_NAME IN ('users','rooms','attachments')
        ORDER BY TABLE_NAME`,
     );
-    expect(tables.map((row) => row.TABLE_NAME)).toEqual(['users']);
-
-    await dataSource.runMigrations();
-  });
+    return tables.map((row) => row.TABLE_NAME);
+  }
 
   async function createCatalogGraph(): Promise<{
     roomType: RoomType;

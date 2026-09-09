@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Owner: Codex primary agent
-- Last updated: 2026-09-04
+- Last updated: 2026-09-08
 - Scope: Required
 - Related endpoints / ADRs: `ROOM-01`, `ROOM-02`, `ADMIN-ROOM-01` through
   `ADMIN-ROOM-05`, `ADMIN-TIME-01` through `ADMIN-TIME-04`, `ADMIN-FILE-01`
@@ -100,10 +100,10 @@ Status defaults to `ACTIVE`. Referenced room type and amenities must exist.
 
 Admin list/detail responses expose the physical room number, room type, amenities,
 base price, currency, status, timestamps, and numeric `version`. Admin list accepts
-optional `query`, `status`, `roomTypeId`, `beds`, `view`, `page` (default 1), and
-`pageSize` (default 20, maximum 100), ordered by room ID ascending. `query` matches
-the room number or room-type name. The `view` filter is trimmed and uppercased
-at the DTO boundary.
+optional `query`, `status`, `roomTypeId`, `beds`, `view`, `page` (default 1,
+maximum 10000), and `pageSize` (default 20, maximum 100), ordered by room ID
+ascending. `query` matches the room number or room-type name. The `view` filter is
+trimmed and uppercased at the DTO boundary.
 
 `PATCH /admin/rooms/:roomId` is a partial update but requires the current version in
 `If-Match: "<version>"`. Missing/empty headers return `428 ROOM_VERSION_REQUIRED`; malformed or unsupported
@@ -146,7 +146,11 @@ room cannot overlap; adjacent windows are valid. A conflict returns
 
 `GET /admin/rooms/:roomId/times` returns active and inactive windows ordered by
 `availableFrom`, then ID, with booking-use counts shaped for Phase 4. Counts are zero
-until booking persistence exists.
+until booking persistence exists. Each item exposes
+`usage: { bookingCount, activeBookingCount, changeHistoryCount }`.
+`activeBookingCount` means `PENDING` plus `CONFIRMED`; the other two counts cover all
+bookings currently referencing the window and all before/after change-history
+references respectively.
 
 `PATCH /admin/rooms/:roomId/times/:roomTimeId` may change dates only if no booking or
 booking-change history references the window. It may deactivate only when no
@@ -155,9 +159,15 @@ history reference. Every mutation locks the physical room first and then selects
 nested window by both IDs. A mismatched room/window tuple returns the same generic
 `404 ROOM_TIME_NOT_FOUND` as an absent window.
 
+Unlike physical rooms, availability windows carry no version and window `PATCH`
+requires no `If-Match` precondition: concurrent admin window edits are last-write-wins
+under the physical-room lock. Hotel dates are stored as `DATE` and hydrated with UTC
+getters, so a window's dates are identical on every deployment timezone.
+
 Stable window errors include `ROOM_TIME_NOT_FOUND`, `ROOM_TIME_RANGE_INVALID`,
 `ROOM_TIME_OVERLAP`, `ROOM_TIME_DATES_IMMUTABLE`, `ROOM_TIME_IN_USE`, and
-`ROOM_TIME_HAS_HISTORY`.
+`ROOM_TIME_HAS_HISTORY`. Stable public catalog errors are `ROOM_NOT_FOUND`,
+`DATE_RANGE_INCOMPLETE`, and `STAY_RANGE_INVALID`.
 
 ### Public catalog contract
 
@@ -172,12 +182,28 @@ With dates, `checkIn < checkOut` is required and each returned room has one `ACT
 window is sufficient; Phase 4 additionally excludes room-wide overlapping
 `CONFIRMED` bookings. Supplying only one date returns `400 DATE_RANGE_INCOMPLETE`.
 
+A `currency` without price bounds narrows the catalog to that currency. Repeated
+`amenity` values are deduplicated and then capped at 20, `page` is capped at 10000
+by the shared paginated-query contract because deep pagination costs a large offset
+scan, and a `maxPrice` below `minPrice`
+returns `400 VALIDATION_FAILED`. A `checkOut` that does not advance past
+`checkIn` returns `400 STAY_RANGE_INVALID`.
+
 The response is `{ items, page, pageSize, total }`, ordered by room ID ascending.
 Each item exposes room ID, room-type display data, beds, view, base price/currency,
 amenities, thumbnail, and `available` only when a date pair was supplied. It does not
 expose the physical room number. `GET /rooms/:roomId` returns the same public fields
 plus ordered active album images; an optional date pair follows the same rules.
 Inactive/maintenance rooms return generic `404 ROOM_NOT_FOUND` publicly.
+
+The public list and detail persistence reads project only the room and room-type
+columns needed by those response shapes. Filtering columns may remain in SQL
+predicates without being hydrated into application entities; internal room numbers,
+status/version state, and audit timestamps are not fetched by the public room query.
+
+The catalog and availability fields ship with the public search slice; the thumbnail
+and album fields are added by the room image slice that owns attachment storage and
+presigned reads, and no field shipped earlier changes shape when they arrive.
 
 ### Room image contract
 
@@ -240,6 +266,11 @@ window range check/index; attachment target/association/position uniqueness and
 target lookup. Dates use MySQL `DATE`, timestamps use UTC `DATETIME(6)`, money uses
 unsigned integer minor units, and TypeORM `synchronize` remains disabled.
 
+Every supported environment keeps MySQL's global/default and connection-session
+timezone at UTC. The mysql2/TypeORM connection also parses temporal values as UTC,
+while every calendar-only `DATE` column declares TypeORM's `utc: true`; database UTC
+and date hydration are complementary contracts and neither replaces the other.
+
 MySQL cannot enforce window interval uniqueness or the polymorphic attachment
 foreign key. Services therefore lock the physical room before interval changes and
 resolve/lock allowlisted targets before attachment mutations. The migration `down`
@@ -280,7 +311,8 @@ version as part of the accepted logical model.
 - Private bucket credentials are least privilege for the configured bucket/prefix.
   Presigned URLs are short lived and reveal no write capability.
 - Search bounds page size and filter cardinality; queries use parameters and indexed
-  predicates. No public response exposes exact room numbers or inactive inventory.
+  predicates and hydrate only the public room projection. No public response exposes
+  exact room numbers or inactive inventory.
 - Concurrent room deletion/upload and delete/reorder operations serialize on the
   target room. Cross-room IDs never authorize or mutate another room's attachment.
 
@@ -301,11 +333,11 @@ version as part of the accepted logical model.
 
 - [x] An admin can create, list, inspect, version-update, deactivate, and safely
       hard-delete eligible rooms; a user/guest cannot call admin routes.
-- [ ] Active-window create/update operations serialize per physical room, reject
+- [x] Active-window create/update operations serialize per physical room, reject
       overlapping windows under concurrency, and accept adjacent windows.
-- [ ] Nested window routes reject room/window mismatch; immutable/in-use/history
+- [x] Nested window routes reject room/window mismatch; immutable/in-use/history
       policies are ready for Phase 4 references.
-- [ ] Public list/detail expose only active rooms and return deterministic filtered
+- [x] Public list/detail expose only active rooms and return deterministic filtered
       pagination; a supplied stay is returned only when fully contained in one
       active window.
 - [ ] Phase 4 can add confirmed-booking exclusion without changing the public

@@ -634,3 +634,33 @@ its own focused evidence.
   subtests plus 10 eval fixtures, Compose contract 8, unit 199/199, integration 68/68,
   E2E 22/22, and a green build. Phase 3 exits with every `REVIEW-022` finding
   dispositioned and the remaining residual risks accepted by the owner.
+
+## PR #8 review follow-up (2026-09-09)
+
+- Owner authorized the open mentor threads. Room-image list/detail reads now collect
+  all selected attachment metadata and request presigned URLs in one batch rather
+  than serially by room. A focused service regression proves one `createReads` call
+  for a multi-room detail page and for a public thumbnail page.
+- Reordering still uses the safe offset phase for MySQL's immediate unique-key check,
+  then assigns every final position in one parameterized `CASE` update rather than
+  one update per attachment. Metadata reads and cleanup claims select only columns
+  their next operation needs; attachment insertion returns its created entity instead
+  of performing a second read.
+- Attachment request/result interfaces now live in `attachments.types.ts`. Detached
+  object deletion runs independently with `Promise.allSettled`; a deferred cleanup is
+  recorded as one structured event without storage keys or provider payloads. The
+  storage adapter and cleanup runner retain their existing boundary-failure events.
+- The required multipart-file check now lives in `RequiredAttachmentFilePipe` at the
+  HTTP boundary. The controller binds only a validated file and the service remains
+  independent of Multer and HTTP validation.
+- Pipe-specific evidence: typecheck and lint passed; pipe/interceptor/guard unit
+  tests 10/10 and the existing room-admin E2E 2/2 prove the missing-file response is
+  unchanged (`400 VALIDATION_FAILED`, field `file`). The preceding full gate covers
+  the earlier review fixes; this isolated transport refactor will enter the next PR
+  handoff gate rather than claiming that prior result for new code.
+- Focused evidence before final handoff: typecheck and lint passed; relevant unit
+  tests 51/51; room-image plus attachment-storage integration 20/20; upload-limit
+  E2E 2/2. The integration runner emitted its pre-existing post-completion open-handle
+  warning but exited 0. Full `MYSQL_PORT=13306 npm run verify` then passed: Harness
+  validation/evaluations, Compose contract, formatting, lint, typecheck, unit 201/201,
+  integration 68/68, E2E 22/22, and build all exited 0.

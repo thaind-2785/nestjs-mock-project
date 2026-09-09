@@ -2,11 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import { AttachmentPolicyRegistry } from '../files/attachment-policy';
-import {
-  AttachmentRead,
-  AttachmentsService,
-} from '../files/attachments.service';
+import { AttachmentsService } from '../files/attachments.service';
 import { findAttachmentsByTargets } from '../files/attachment-metadata';
+import { AttachmentRead } from '../files/attachments.types';
 import { Attachment } from '../files/entities/attachment.entity';
 import {
   AttachmentAssociationType,
@@ -140,13 +138,21 @@ export class RoomImagesService {
       ),
     ]);
 
+    const responsesByAttachmentId = await this.createResponseMap([
+      ...[...thumbnails.values()].flatMap((attachments) => attachments),
+      ...[...albums.values()].flatMap((attachments) => attachments),
+    ]);
     for (const roomId of roomIds) {
-      const [thumbnail] = await this.toRoomImageResponses(
+      const [thumbnail] = this.responsesFor(
         thumbnails.get(roomId) ?? [],
+        responsesByAttachmentId,
       );
       sets.set(roomId, {
         thumbnail: thumbnail ?? null,
-        album: await this.toRoomImageResponses(albums.get(roomId) ?? []),
+        album: this.responsesFor(
+          albums.get(roomId) ?? [],
+          responsesByAttachmentId,
+        ),
       });
     }
     return sets;
@@ -169,9 +175,13 @@ export class RoomImagesService {
       roomIds,
       AttachmentAssociationType.Thumbnail,
     );
+    const responsesByAttachmentId = await this.createResponseMap(
+      [...thumbnails.values()].flatMap((attachments) => attachments),
+    );
     for (const roomId of roomIds) {
-      const [thumbnail] = await this.toRoomImageResponses(
+      const [thumbnail] = this.responsesFor(
         thumbnails.get(roomId) ?? [],
+        responsesByAttachmentId,
       );
       sets.set(roomId, { thumbnail: thumbnail ?? null, album: [] });
     }
@@ -183,6 +193,24 @@ export class RoomImagesService {
   ): Promise<RoomImageResponseDto[]> {
     const reads = await this.attachments.createReads(attachments);
     return reads.map(toRoomImageResponse);
+  }
+
+  private async createResponseMap(
+    attachments: readonly Attachment[],
+  ): Promise<Map<string, RoomImageResponseDto>> {
+    if (!attachments.length) return new Map();
+    const responses = await this.toRoomImageResponses(attachments);
+    return new Map(responses.map((response) => [response.id, response]));
+  }
+
+  private responsesFor(
+    attachments: readonly Attachment[],
+    responsesByAttachmentId: ReadonlyMap<string, RoomImageResponseDto>,
+  ): RoomImageResponseDto[] {
+    return attachments.flatMap((attachment) => {
+      const response = responsesByAttachmentId.get(attachment.id);
+      return response ? [response] : [];
+    });
   }
 }
 

@@ -2,7 +2,7 @@ import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { HealthIndicatorService } from '@nestjs/terminus';
-import { ListBucketsCommand } from '@aws-sdk/client-s3';
+import { HeadBucketCommand } from '@aws-sdk/client-s3';
 import { DataSource } from 'typeorm';
 import { readinessConfig } from '../config/readiness.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
@@ -12,12 +12,21 @@ import {
 } from './readiness.tokens';
 
 export const readinessDependencies = ['mysql', 'redis', 'storage'] as const;
+
+/** Long enough to be visible while debugging, short enough to leave no residue. */
+const readinessKeyTtlSeconds = 30;
 export type ReadinessDependency = (typeof readinessDependencies)[number];
 
 export interface RedisReadinessClient {
   connect(): Promise<void>;
   disconnect(): void;
   ping(): Promise<string>;
+  set(
+    key: string,
+    value: string,
+    mode: 'EX',
+    seconds: number,
+  ): Promise<unknown>;
 }
 
 export type RedisReadinessClientFactory = () => RedisReadinessClient;
@@ -25,7 +34,7 @@ export type RedisReadinessClientFactory = () => RedisReadinessClient;
 export interface StorageReadinessClient {
   destroy(): void;
   send(
-    command: ListBucketsCommand,
+    command: HeadBucketCommand,
     options?: { abortSignal?: AbortSignal },
   ): Promise<unknown>;
 }
@@ -79,12 +88,26 @@ export class ReadinessService implements OnApplicationShutdown {
     }
   }
 
+  /**
+   * Reachability is not the capability the application needs. Rate limiting fails
+   * closed on a write failure, so a Redis that answers `PING` while refusing writes
+   * (`maxmemory` with `noeviction`, a read-only replica endpoint, a restricted ACL)
+   * would take every login and every upload down while readiness reported healthy.
+   * The probe therefore writes an expiring key in the limiter's own namespace.
+   */
   private async checkRedis(): Promise<ReadinessProbeResult> {
     const client = this.createRedisClient();
     try {
       const response = await this.withTimeout(async () => {
         await client.connect();
-        return client.ping();
+        const pong = await client.ping();
+        await client.set(
+          `${this.configuration.rateLimitKeyPrefix}:readiness`,
+          '1',
+          'EX',
+          readinessKeyTtlSeconds,
+        );
+        return pong;
       });
       if (response !== 'PONG')
         throw new Error('Unexpected Redis readiness response');
@@ -101,7 +124,10 @@ export class ReadinessService implements OnApplicationShutdown {
   private async checkStorage(): Promise<ReadinessProbeResult> {
     try {
       await this.withTimeout((abortSignal) =>
-        this.storageClient.send(new ListBucketsCommand({}), { abortSignal }),
+        this.storageClient.send(
+          new HeadBucketCommand({ Bucket: this.configuration.storage.bucket }),
+          { abortSignal },
+        ),
       );
       this.healthIndicator.check('storage').up();
       return { dependency: 'storage', healthy: true };

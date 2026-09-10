@@ -5,13 +5,23 @@ export const errorMessageKeys = {
   amenityCodeConflict: 'errors.amenityCodeConflict',
   amenityInUse: 'errors.amenityInUse',
   amenityNotFound: 'errors.amenityNotFound',
+  attachmentContentInvalid: 'errors.attachmentContentInvalid',
+  attachmentLimitExceeded: 'errors.attachmentLimitExceeded',
+  attachmentMimeUnsupported: 'errors.attachmentMimeUnsupported',
+  attachmentNotFound: 'errors.attachmentNotFound',
+  attachmentOrderInvalid: 'errors.attachmentOrderInvalid',
+  attachmentPairInvalid: 'errors.attachmentPairInvalid',
+  attachmentSizeExceeded: 'errors.attachmentSizeExceeded',
+  attachmentUploadRateLimited: 'errors.attachmentUploadRateLimited',
+  attachmentUploadUnavailable: 'errors.attachmentUploadUnavailable',
   authenticationFailed: 'errors.authenticationFailed',
   authorizationUnavailable: 'errors.authorizationUnavailable',
   badRequest: 'errors.badRequest',
   conflict: 'errors.conflict',
+  databaseOverloaded: 'errors.databaseOverloaded',
   forbidden: 'errors.forbidden',
-  internalServerError: 'errors.internalServerError',
   identityConflict: 'errors.identityConflict',
+  internalServerError: 'errors.internalServerError',
   lastAdminDeactivationForbidden: 'errors.lastAdminDeactivationForbidden',
   methodNotAllowed: 'errors.methodNotAllowed',
   notFound: 'errors.notFound',
@@ -30,18 +40,19 @@ export const errorMessageKeys = {
   roomTypeNameConflict: 'errors.roomTypeNameConflict',
   roomTypeNotFound: 'errors.roomTypeNotFound',
   roomVersionConflict: 'errors.roomVersionConflict',
-  roomVersionRequired: 'errors.roomVersionRequired',
   roomVersionMalformed: 'errors.roomVersionMalformed',
+  roomVersionRequired: 'errors.roomVersionRequired',
   selfDeactivationForbidden: 'errors.selfDeactivationForbidden',
-  sessionInvalid: 'errors.sessionInvalid',
   serviceUnavailable: 'errors.serviceUnavailable',
+  sessionInvalid: 'errors.sessionInvalid',
   stayDateRangeIncomplete: 'errors.stayDateRangeIncomplete',
   stayRangeInvalid: 'errors.stayRangeInvalid',
+  storageUnavailable: 'errors.storageUnavailable',
   tooManyRequests: 'errors.tooManyRequests',
   unauthorized: 'errors.unauthorized',
+  unprocessableEntity: 'errors.unprocessableEntity',
   userInactive: 'errors.userInactive',
   userNotFound: 'errors.userNotFound',
-  unprocessableEntity: 'errors.unprocessableEntity',
   validationFailed: 'errors.validationFailed',
 } as const;
 
@@ -104,6 +115,36 @@ const httpErrorDescriptors: Readonly<
   },
 };
 
+/**
+ * mysql2 reports a full acquisition queue as a bare `Error('Queue limit reached.')`
+ * with no error code, and TypeORM may hand it back wrapped, so both the message and
+ * the wrapper chain are inspected. The message is pinned by a unit test: if a mysql2
+ * upgrade changes the wording, that test fails rather than the mapping silently
+ * degrading to a 500.
+ */
+function isDatabaseOverloadedError(exception: unknown, depth = 0): boolean {
+  if (depth > 3 || typeof exception !== 'object' || exception === null) {
+    return false;
+  }
+
+  const candidate = exception as {
+    message?: unknown;
+    cause?: unknown;
+    driverError?: unknown;
+  };
+  if (
+    typeof candidate.message === 'string' &&
+    candidate.message.includes('Queue limit reached')
+  ) {
+    return true;
+  }
+
+  return (
+    isDatabaseOverloadedError(candidate.driverError, depth + 1) ||
+    isDatabaseOverloadedError(candidate.cause, depth + 1)
+  );
+}
+
 function isPayloadTooLargeError(exception: unknown): boolean {
   if (typeof exception !== 'object' || exception === null) {
     return false;
@@ -131,6 +172,16 @@ export function describeException(exception: unknown): ErrorDescriptor {
       ...(exception.details === undefined
         ? {}
         : { details: exception.details }),
+    };
+  }
+
+  // Shedding load is an availability answer, not an internal error: the request was
+  // valid and the client may retry once the pool drains.
+  if (isDatabaseOverloadedError(exception)) {
+    return {
+      statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+      code: 'DATABASE_OVERLOADED',
+      messageKey: errorMessageKeys.databaseOverloaded,
     };
   }
 

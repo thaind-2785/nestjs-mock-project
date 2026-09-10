@@ -4,7 +4,11 @@ import { DataSource } from 'typeorm';
 import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
-import { createTypeOrmOptions } from '../src/database/database.options';
+import { describeException } from '../src/common/errors/error-descriptor';
+import {
+  createTypeOrmOptions,
+  queueDepthPerConnection,
+} from '../src/database/database.options';
 import { P1T04MigrationProbe1700000000000 } from './fixtures/migrations/1700000000000-P1T04MigrationProbe';
 
 jest.setTimeout(30_000);
@@ -100,6 +104,43 @@ describe('TypeORM MySQL migration integration', () => {
     } finally {
       await connection.query('DROP TABLE IF EXISTS p1_t04_migration_probe');
       await connection.query('DROP TABLE IF EXISTS p1_t04_migrations');
+    }
+  });
+
+  it('sheds load with a retryable answer instead of queueing without bound', async () => {
+    const environment = validateEnvironment(process.env);
+    // The smallest pool the validator accepts, so the derived queue depth
+    // (poolSize * 4) is reached with a bounded number of concurrent statements
+    // rather than a load test.
+    const saturated = new DataSource(
+      createTypeOrmOptions(
+        createDatabaseConfiguration({
+          ...environment,
+          MYSQL_DATABASE: disposableDatabase as string,
+          MYSQL_POOL_SIZE: 4,
+        }),
+      ),
+    );
+    await saturated.initialize();
+    try {
+      const poolSize = 4;
+      const capacity = poolSize + poolSize * queueDepthPerConnection;
+      // One statement per running connection and per queue slot, plus one that must
+      // find no room left. Every statement is issued before any can finish.
+      const attempts = Array.from({ length: capacity + 1 }, () =>
+        saturated
+          .query('SELECT SLEEP(1)')
+          .then(() => 'accepted')
+          .catch((error: unknown) => describeException(error).code),
+      );
+
+      const outcomes = await Promise.all(attempts);
+      expect(outcomes).toContain('DATABASE_OVERLOADED');
+      expect(outcomes.filter((outcome) => outcome === 'accepted')).toHaveLength(
+        capacity,
+      );
+    } finally {
+      await saturated.destroy();
     }
   });
 

@@ -27,6 +27,18 @@ export class PublicAmenityResponseDto {
   name!: string;
 }
 
+/**
+ * Public reads expose only the short-lived URL and its expiry: an anonymous caller
+ * needs no attachment ID, object key, or upload metadata.
+ */
+export class PublicRoomImageResponseDto {
+  @ApiProperty({ description: 'Short-lived presigned GET URL.' })
+  url!: string;
+
+  @ApiProperty({ format: 'date-time' })
+  expiresAt!: string;
+}
+
 export class PublicRoomResponseDto {
   @ApiProperty({ example: '1' })
   id!: string;
@@ -48,6 +60,16 @@ export class PublicRoomResponseDto {
 
   @ApiProperty({ type: [PublicAmenityResponseDto] })
   amenities!: PublicAmenityResponseDto[];
+
+  @ApiPropertyOptional({ type: PublicRoomImageResponseDto, nullable: true })
+  thumbnail!: PublicRoomImageResponseDto | null;
+
+  @ApiPropertyOptional({
+    type: [PublicRoomImageResponseDto],
+    description:
+      'Ordered album images. Present on room detail only; the list carries the thumbnail.',
+  })
+  images?: PublicRoomImageResponseDto[];
 
   @ApiPropertyOptional({
     description:

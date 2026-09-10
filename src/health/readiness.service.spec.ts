@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method */
 import { HealthIndicatorService } from '@nestjs/terminus';
+import { HeadBucketCommand } from '@aws-sdk/client-s3';
 import { DataSource } from 'typeorm';
 import { ReadinessConfiguration } from '../config/readiness.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
@@ -12,6 +13,7 @@ import {
 const configuration: ReadinessConfiguration = {
   timeoutMs: 25,
   redis: { host: '127.0.0.1', port: 6379 },
+  rateLimitKeyPrefix: 'hotel:test-rate',
   storage: {
     endpoint: 'http://127.0.0.1:9000',
     region: 'us-east-1',
@@ -31,6 +33,7 @@ function createService({
   redis = {
     connect: jest.fn().mockResolvedValue(undefined),
     ping: jest.fn().mockResolvedValue('PONG'),
+    set: jest.fn().mockResolvedValue('OK'),
     disconnect: jest.fn(),
   },
   storage = {
@@ -70,6 +73,9 @@ describe('ReadinessService', () => {
     expect(jest.mocked(redisClient.ping)).toHaveBeenCalledTimes(1);
     expect(jest.mocked(redisClient.disconnect)).toHaveBeenCalledTimes(1);
     expect(jest.mocked(storageClient.send)).toHaveBeenCalledTimes(1);
+    const [command] = jest.mocked(storageClient.send).mock.calls[0];
+    expect(command).toBeInstanceOf(HeadBucketCommand);
+    expect(command.input.Bucket).toBe('hotel-assets');
   });
 
   it('returns only sanitized dependency classes for failures', async () => {
@@ -83,6 +89,7 @@ describe('ReadinessService', () => {
       redis: {
         connect: jest.fn().mockResolvedValue(undefined),
         ping: jest.fn().mockResolvedValue('NOPE'),
+        set: jest.fn().mockResolvedValue('OK'),
         disconnect: jest.fn(),
       },
       storage: {
@@ -98,6 +105,31 @@ describe('ReadinessService', () => {
     ]);
   });
 
+  it('reports Redis unready when it answers PING but refuses the write', async () => {
+    const redis: RedisReadinessClient = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      ping: jest.fn().mockResolvedValue('PONG'),
+      set: jest
+        .fn()
+        .mockRejectedValue(
+          new Error("OOM command not allowed when used memory > 'maxmemory'"),
+        ),
+      disconnect: jest.fn(),
+    };
+    const { service } = createService({ redis });
+
+    await expect(service.getUnavailableDependencies()).resolves.toEqual([
+      'redis',
+    ]);
+    expect(jest.mocked(redis.set)).toHaveBeenCalledWith(
+      'hotel:test-rate:readiness',
+      '1',
+      'EX',
+      30,
+    );
+    expect(jest.mocked(redis.disconnect)).toHaveBeenCalledTimes(1);
+  });
+
   it('bounds a slow dependency and releases transient Redis clients', async () => {
     const redis: RedisReadinessClient = {
       connect: jest.fn().mockResolvedValue(undefined),
@@ -107,6 +139,7 @@ describe('ReadinessService', () => {
             setTimeout(() => resolve('PONG'), 50),
           ),
       ),
+      set: jest.fn().mockResolvedValue('OK'),
       disconnect: jest.fn(),
     };
     const { service } = createService({ redis, timeoutMs: 10 });

@@ -79,8 +79,22 @@ flowchart LR
   privilege bucket credentials. Polymorphic attachment targets are resolved through
   an allowlisted object/association registry before insert; orphan reconciliation is
   observable and idempotent. Prefer presigned download URLs for private exports.
+- One object-storage adapter serves every attachable target. Keys are
+  `attachments/<target>/<target-id>/<association>/<uuid>.<extension>` from trusted
+  server data, every provider call is bounded by a configured timeout, and object
+  deletion is idempotent so cleanup retries are safe.
 - Rate-limit auth, booking creation, uploads, and export creation. Redact tokens,
-  cookies, OAuth codes, and provider payloads from logs.
+  cookies, OAuth codes, and provider payloads from logs. One shared fail-closed
+  Redis fixed-window limiter serves every budget, each caller supplying its own
+  scope, discriminator, and limits and mapping refusal to its own stable error code.
+  Discriminators are hashed before they reach Redis and never logged, counters live
+  in their own key namespace rather than an owning module's, and an unreachable
+  limiter refuses the request instead of admitting it. See `ADR-0005`.
+- Concurrency is bounded at the connection pool. Every locking write and every
+  public availability read holds one MySQL connection for the duration of its
+  transaction, so `MYSQL_POOL_SIZE` is the effective cap on concurrent request work
+  and must stay below the server's `max_connections` across all API instances and
+  CLI runners.
 - Readiness verifies required dependencies; liveness verifies only the process.
 - Run migrations as a separate deployment step, then deploy API/worker and perform
   a health check. Rollback must be compatible with forward-only schema changes.

@@ -18,6 +18,41 @@ describe('error descriptors', () => {
     }
   });
 
+  // One canonical order for the key list and both catalogs. Without this, a new key
+  // lands in three different places and reviewers diff reordered files instead of
+  // the actual change.
+  it('keeps the key list and both catalogs in one canonical order', () => {
+    const keys = Object.keys(errorMessageKeys);
+    expect(keys).toEqual([...keys].sort());
+    expect(Object.keys(englishErrors)).toEqual(keys);
+    expect(Object.keys(vietnameseErrors)).toEqual(keys);
+  });
+
+  it('maps a saturated connection pool to a retryable overload answer', () => {
+    // mysql2 reports a full acquisition queue as a bare Error with no code, and
+    // TypeORM can hand it back wrapped. Both shapes must answer the same contract.
+    const bare = new Error('Queue limit reached.');
+    const wrapped = Object.assign(new Error('Failed to acquire a connection'), {
+      driverError: bare,
+    });
+
+    for (const exception of [bare, wrapped]) {
+      expect(describeException(exception)).toEqual({
+        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+        code: 'DATABASE_OVERLOADED',
+        messageKey: errorMessageKeys.databaseOverloaded,
+      });
+    }
+  });
+
+  it('leaves an unrelated failure as an internal error', () => {
+    expect(describeException(new Error('connection lost'))).toEqual({
+      statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
+      code: 'INTERNAL_SERVER_ERROR',
+      messageKey: errorMessageKeys.internalServerError,
+    });
+  });
+
   it('maps framework exceptions without exposing their raw messages', () => {
     const descriptor = describeException(
       new NotFoundException('private-resource-value'),

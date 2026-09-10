@@ -8,6 +8,7 @@ import {
 import {
   PaginatedPublicRoomsResponseDto,
   PublicAmenityResponseDto,
+  PublicRoomImageResponseDto,
   PublicRoomResponseDto,
   PublicRoomTypeResponseDto,
 } from './dto/public-room-response.dto';
@@ -18,6 +19,7 @@ import { RoomType } from './entities/room-type.entity';
 import { Room } from './entities/room.entity';
 import { RoomStatus, RoomTimeStatus } from './entities/room.enums';
 import { applyRoomAttributeFilters } from './room-filters';
+import { RoomImageSet, RoomImagesService } from './room-images.service';
 import {
   assertPriceRange,
   resolveAmenityFilter,
@@ -32,6 +34,7 @@ export class RoomSearchService {
   public constructor(
     private readonly dataSource: DataSource,
     private readonly databaseConnection: DatabaseConnectionService,
+    private readonly images: RoomImagesService,
   ) {}
 
   public async search(
@@ -56,10 +59,11 @@ export class RoomSearchService {
         .skip((query.page - 1) * query.pageSize)
         .take(query.pageSize)
         .getManyAndCount();
-      const amenitiesByRoom = await loadAmenitiesByRoom(
-        manager,
-        rooms.map((room) => room.id),
-      );
+      const roomIds = rooms.map((room) => room.id);
+      const [amenitiesByRoom, imagesByRoom] = await Promise.all([
+        loadAmenitiesByRoom(manager, roomIds),
+        this.images.loadThumbnails(manager, roomIds),
+      ]);
       return {
         // Every returned room already satisfies the containment filter, so the
         // claim is only made when the caller supplied a stay.
@@ -68,6 +72,7 @@ export class RoomSearchService {
             room,
             room.roomType,
             amenitiesByRoom.get(room.id) ?? [],
+            imagesByRoom.get(room.id),
             stay ? true : undefined,
           ),
         ),
@@ -99,14 +104,16 @@ export class RoomSearchService {
       });
       // Inactive and maintenance rooms are indistinguishable from absent ones.
       if (!room) throw roomsErrors.roomNotFound();
-      const [amenitiesByRoom, available] = await Promise.all([
+      const [amenitiesByRoom, imagesByRoom, available] = await Promise.all([
         loadAmenitiesByRoom(manager, [room.id]),
+        this.images.loadImageSets(manager, [room.id]),
         stay ? this.hasContainingWindow(manager, room.id, stay) : undefined,
       ]);
-      return this.toPublicRoomResponse(
+      return this.toPublicRoomDetailResponse(
         room,
         room.roomType,
         amenitiesByRoom.get(room.id) ?? [],
+        imagesByRoom.get(room.id),
         available,
       );
     });
@@ -237,10 +244,12 @@ export class RoomSearchService {
     };
   }
 
+  /** List items carry the thumbnail; `SPEC-005` puts the album on detail only. */
   private toPublicRoomResponse(
     room: Room,
     roomType: RoomType,
     amenities: Amenity[],
+    images: RoomImageSet | undefined,
     available: boolean | undefined,
   ): PublicRoomResponseDto {
     return {
@@ -253,8 +262,43 @@ export class RoomSearchService {
       amenities: amenities.map((amenity) =>
         this.toPublicAmenityResponse(amenity),
       ),
+      thumbnail: images?.thumbnail
+        ? this.toPublicRoomImageResponse(images.thumbnail)
+        : null,
       ...(available === undefined ? {} : { available }),
     };
+  }
+
+  private toPublicRoomDetailResponse(
+    room: Room,
+    roomType: RoomType,
+    amenities: Amenity[],
+    images: RoomImageSet | undefined,
+    available: boolean | undefined,
+  ): PublicRoomResponseDto {
+    return {
+      ...this.toPublicRoomResponse(
+        room,
+        roomType,
+        amenities,
+        images,
+        available,
+      ),
+      images: (images?.album ?? []).map((image) =>
+        this.toPublicRoomImageResponse(image),
+      ),
+    };
+  }
+
+  /**
+   * Explicit narrowing: the public payload carries the short-lived read and its
+   * expiry, never the attachment ID, object key, or upload metadata.
+   */
+  private toPublicRoomImageResponse(image: {
+    url: string;
+    expiresAt: string;
+  }): PublicRoomImageResponseDto {
+    return { url: image.url, expiresAt: image.expiresAt };
   }
 
   private toPublicRoomTypeResponse(

@@ -33,6 +33,7 @@ import { AdminBootstrapService } from '../src/users/admin-bootstrap.service';
 import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
+import { ensureAttachmentBucket } from './fixtures/room-images';
 
 jest.setTimeout(30_000);
 
@@ -69,6 +70,9 @@ describe('Phase 3 admin room API (e2e)', () => {
     'GOOGLE_CLIENT_SECRET',
     'GOOGLE_REDIRECT_URI',
     'AUTH_REDIS_KEY_PREFIX',
+    'RATE_LIMIT_REDIS_KEY_PREFIX',
+    'ATTACHMENT_UPLOAD_RATE_LIMIT_MAX',
+    'ROOM_IMAGE_MAX_BYTES',
   ];
 
   beforeAll(async () => {
@@ -85,6 +89,14 @@ describe('Phase 3 admin room API (e2e)', () => {
     process.env.GOOGLE_REDIRECT_URI =
       'http://localhost:3000/api/v1/auth/google/callback';
     process.env.AUTH_REDIS_KEY_PREFIX = `hotel:p3-t02:${process.pid}:${randomUUID().replaceAll('-', '')}`;
+    // The shared limiter is real here. This journey needs its own counter namespace
+    // and a budget above the number of uploads it performs; the refusal itself is
+    // proven deterministically in the room image integration suite.
+    process.env.RATE_LIMIT_REDIS_KEY_PREFIX = `hotel:p3-t02-rate:${process.pid}:${randomUUID().replaceAll('-', '')}`;
+    process.env.ATTACHMENT_UPLOAD_RATE_LIMIT_MAX = '60';
+    // A small content limit keeps the size-limit case cheap while still crossing the
+    // real multipart boundary rather than a mocked one.
+    process.env.ROOM_IMAGE_MAX_BYTES = '2048';
 
     try {
       adminConnection = await mysql.createConnection({
@@ -149,6 +161,7 @@ describe('Phase 3 admin room API (e2e)', () => {
       requestLogger: { log: jest.fn() },
     });
     await app.init();
+    await ensureAttachmentBucket(validateEnvironment(process.env));
   });
 
   it('enforces RBAC and completes the admin catalog and room lifecycle', async () => {
@@ -568,6 +581,246 @@ describe('Phase 3 admin room API (e2e)', () => {
           code: 'ROOM_NOT_FOUND',
           message: 'Không tìm thấy phòng.',
         });
+      });
+  });
+
+  it('uploads, replaces, reorders, and detaches room images over HTTP', async () => {
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(64, 0x31),
+    ]);
+    const jpeg = Buffer.concat([
+      Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+      Buffer.alloc(64, 0x32),
+    ]);
+
+    google.claims = {
+      subject: 'room-image-admin',
+      email: 'room-image-admin@example.com',
+      displayName: 'Image Admin',
+    };
+    const adminBrowser = request.agent(app.getHttpServer());
+    const adminAccess = await login(adminBrowser);
+    const profile = await adminBrowser
+      .get('/api/v1/me')
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(200);
+    await app.get(AdminBootstrapService).promote({
+      userId: (profile.body as unknown as { id: string }).id,
+      email: 'room-image-admin@example.com',
+      reason: 'P3-T05 E2E bootstrap',
+    });
+
+    const roomType = await adminBrowser
+      .post('/api/v1/admin/room-types')
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({ name: 'Image Suite' })
+      .expect(201);
+    const room = await adminBrowser
+      .post('/api/v1/admin/rooms')
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({
+        roomNumber: 'IMG-101',
+        roomTypeId: (roomType.body as unknown as { id: string }).id,
+        bedCount: 2,
+        basePriceAmount: 1_500_000,
+        currency: 'VND',
+        amenityIds: [],
+      })
+      .expect(201);
+    const roomId = (room.body as unknown as { id: string }).id;
+    const imagesPath = `/api/v1/admin/rooms/${roomId}/images`;
+
+    // Deny-by-default still applies to the multipart route.
+    await request(app.getHttpServer())
+      .post(imagesPath)
+      .field('associationType', 'THUMBNAIL')
+      .attach('file', png, { filename: 'photo.png', contentType: 'image/png' })
+      .expect(401);
+    const userBrowser = request.agent(app.getHttpServer());
+    google.claims = {
+      subject: 'room-image-guest',
+      email: 'room-image-guest@example.com',
+      displayName: 'Image Guest',
+    };
+    const userAccess = await login(userBrowser);
+    await userBrowser
+      .post(imagesPath)
+      .set('Authorization', `Bearer ${userAccess}`)
+      .field('associationType', 'THUMBNAIL')
+      .attach('file', png, { filename: 'photo.png', contentType: 'image/png' })
+      .expect(403);
+
+    const uploaded = await adminBrowser
+      .post(imagesPath)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .field('associationType', 'THUMBNAIL')
+      .attach('file', png, {
+        filename: '../../etc/passwd',
+        contentType: 'image/png',
+      })
+      .expect(201);
+    const thumbnail = uploaded.body as unknown as {
+      id: string;
+      url: string;
+      position: number;
+    };
+    expect(thumbnail.position).toBe(0);
+    // The client filename never reaches the storage path.
+    expect(thumbnail.url).not.toContain('passwd');
+    expect((await fetch(thumbnail.url)).status).toBe(200);
+
+    // A declared type outside the allowlist is refused before the bytes matter.
+    await adminBrowser
+      .post(imagesPath)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .field('associationType', 'ALBUM')
+      .attach('file', Buffer.from('%PDF-1.7'), {
+        filename: 'doc.pdf',
+        contentType: 'application/pdf',
+      })
+      .expect(415)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          code: 'ATTACHMENT_MIME_UNSUPPORTED',
+        });
+      });
+    // An accepted header over other bytes is refused by the signature check.
+    await adminBrowser
+      .post(imagesPath)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .field('associationType', 'ALBUM')
+      .attach('file', Buffer.from('%PDF-1.7 pretending to be a photo'), {
+        filename: 'fake.png',
+        contentType: 'image/png',
+      })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          code: 'ATTACHMENT_CONTENT_INVALID',
+        });
+      });
+    // The multipart boundary and the content policy report the same code.
+    await adminBrowser
+      .post(imagesPath)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .field('associationType', 'ALBUM')
+      .attach('file', Buffer.concat([png, Buffer.alloc(4_096, 0x33)]), {
+        filename: 'big.png',
+        contentType: 'image/png',
+      })
+      .expect(413)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          code: 'ATTACHMENT_SIZE_EXCEEDED',
+        });
+      });
+    await adminBrowser
+      .post(imagesPath)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .field('associationType', 'ALBUM')
+      .expect(400)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          code: 'VALIDATION_FAILED',
+          details: { errors: [{ field: 'file', codes: ['isDefined'] }] },
+        });
+      });
+
+    const albumFirst = await adminBrowser
+      .post(imagesPath)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .field('associationType', 'ALBUM')
+      .attach('file', png, { filename: 'a.png', contentType: 'image/png' })
+      .expect(201);
+    const albumSecond = await adminBrowser
+      .post(imagesPath)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .field('associationType', 'ALBUM')
+      .attach('file', jpeg, { filename: 'b.jpg', contentType: 'image/jpeg' })
+      .expect(201);
+    const firstId = (albumFirst.body as unknown as { id: string }).id;
+    const secondId = (albumSecond.body as unknown as { id: string }).id;
+
+    await adminBrowser
+      .patch(`${imagesPath}/order`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({ attachmentIds: [firstId] })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          code: 'ATTACHMENT_ORDER_INVALID',
+        });
+      });
+    await adminBrowser
+      .patch(`${imagesPath}/order`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .send({ attachmentIds: [secondId, firstId] })
+      .expect(200)
+      .expect((response) => {
+        expect(
+          (response.body as unknown as { id: string; position: number }[]).map(
+            ({ id, position }) => ({ id, position }),
+          ),
+        ).toEqual([
+          { id: secondId, position: 0 },
+          { id: firstId, position: 1 },
+        ]);
+      });
+
+    // Admin detail publishes the thumbnail and the album in stored order.
+    await adminBrowser
+      .get(`/api/v1/admin/rooms/${roomId}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(200)
+      .expect((response) => {
+        const body = response.body as unknown as {
+          thumbnail: { id: string } | null;
+          images: { id: string }[];
+        };
+        expect(body.thumbnail?.id).toBe(thumbnail.id);
+        expect(body.images.map(({ id }) => id)).toEqual([secondId, firstId]);
+      });
+
+    // The public payload carries only the short-lived read.
+    await request(app.getHttpServer())
+      .get(`/api/v1/rooms/${roomId}`)
+      .expect(200)
+      .expect((response) => {
+        const body = response.body as unknown as {
+          thumbnail: Record<string, unknown> | null;
+          images: Record<string, unknown>[];
+        };
+        expect(Object.keys(body.thumbnail ?? {}).sort()).toEqual([
+          'expiresAt',
+          'url',
+        ]);
+        expect(body.images).toHaveLength(2);
+      });
+
+    // A foreign attachment ID is indistinguishable from an absent one.
+    await adminBrowser
+      .delete(`/api/v1/admin/rooms/${roomId}/images/${randomUUID()}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(404)
+      .expect((response) => {
+        expect(response.body).toMatchObject({ code: 'ATTACHMENT_NOT_FOUND' });
+      });
+    await adminBrowser
+      .delete(`${imagesPath}/${firstId}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(204);
+    await adminBrowser
+      .get(`/api/v1/admin/rooms/${roomId}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(200)
+      .expect((response) => {
+        const body = response.body as unknown as {
+          images: { id: string; position: number }[];
+        };
+        expect(body.images).toEqual([
+          expect.objectContaining({ id: secondId, position: 0 }),
+        ]);
       });
   });
 

@@ -269,6 +269,27 @@ erDiagram
 | `idempotency_keys`        | unique `(actor_user_id, operation, idempotency_key)`; index `expires_at`                                                                                                                                                        |
 | `schedule_runs`           | unique `(job_key, period_key)` for cron idempotency                                                                                                                                                                             |
 
+## Connection and concurrency bounds
+
+`MYSQL_POOL_SIZE` (default `10`) sets the mysql2 pool's `connectionLimit`. Every
+locking write holds a connection from the first `SELECT ... FOR UPDATE` to commit,
+and public catalog/availability reads hold one for the duration of their consistent
+snapshot, so the pool is the effective limit on concurrent request work rather than
+a tuning detail: exhausting it queues requests instead of failing them. Size it so
+all API instances plus the CLI runners (`auth:bootstrap-admin`,
+`files:storage-cleanup`) stay below the server's `max_connections`, and keep it
+larger than the number of connections one request can need at once.
+
+Acquisition is bounded, not unbounded. mysql2 queues connection requests without
+limit and has no acquire timeout, so a saturated pool would otherwise hold every
+caller — including the readiness probe — until a connection frees. The pool therefore
+allows four waiters per connection (`queueLimit = MYSQL_POOL_SIZE * 4`) and refuses
+beyond that with `503 DATABASE_OVERLOADED`, a stable localized code that says the
+request was valid and may be retried. Sustained saturation also turns readiness red,
+which is the intended shed-load signal rather than a defect: the instance is telling
+the orchestrator it cannot serve, instead of silently queueing traffic behind a full
+pool. The depth is derived from the pool so there is one knob, not two.
+
 ## Temporal storage contract
 
 MySQL's default and every application session use UTC. Local Compose pins

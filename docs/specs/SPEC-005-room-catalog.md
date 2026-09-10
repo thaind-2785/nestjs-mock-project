@@ -8,7 +8,7 @@
   `ADMIN-ROOM-05`, `ADMIN-TIME-01` through `ADMIN-TIME-04`, `ADMIN-FILE-01`
   through `ADMIN-FILE-03`, `ADMIN-ROOM-TYPE-01` through
   `ADMIN-ROOM-TYPE-05`, `ADMIN-AMENITY-01` through `ADMIN-AMENITY-05`,
-  `ADR-0002`, `ADR-0003`
+  `ADR-0002`, `ADR-0003`, `ADR-0004`, `ADR-0005`
 
 ## Problem and outcome
 
@@ -232,8 +232,72 @@ clients refresh it by reading the room resource again.
 
 Stable file errors include `ATTACHMENT_NOT_FOUND`, `ATTACHMENT_PAIR_INVALID`,
 `ATTACHMENT_MIME_UNSUPPORTED`, `ATTACHMENT_CONTENT_INVALID`,
-`ATTACHMENT_SIZE_EXCEEDED`, `ATTACHMENT_LIMIT_EXCEEDED`, and
-`ATTACHMENT_ORDER_INVALID`.
+`ATTACHMENT_SIZE_EXCEEDED`, `ATTACHMENT_LIMIT_EXCEEDED`,
+`ATTACHMENT_ORDER_INVALID`, `ATTACHMENT_UPLOAD_RATE_LIMITED`, and
+`ATTACHMENT_UPLOAD_UNAVAILABLE`. An unsupported target/association pair returns
+`400 ATTACHMENT_PAIR_INVALID`; a format outside the accepted list returns
+`415 ATTACHMENT_MIME_UNSUPPORTED`. An uploader above its budget returns
+`429 ATTACHMENT_UPLOAD_RATE_LIMITED`, and an unreachable limiter returns
+`503 ATTACHMENT_UPLOAD_UNAVAILABLE` because uploads fail closed.
+
+### Attachment storage and configuration contract
+
+Attachments are not a room-only feature: `ADR-0003` allows `ROOM+THUMBNAIL`,
+`ROOM+ALBUM`, and `USER+AVATAR` against one polymorphic table. Configuration is
+therefore split by lifetime rather than by surface.
+
+- Infrastructure limits are shared, because one storage adapter and one cleanup
+  runner serve every target: presign TTL, bounded storage-call timeout, cleanup
+  grace, and the upload rate limit. Cleanup grace must exceed the storage timeout so
+  the runner cannot delete an object whose upload is still in flight.
+- The upload rate limit is charged per authenticated uploader through the shared
+  fail-closed limiter of `ADR-0005`, in a route guard that runs before the multipart
+  body is read. A refused attempt therefore costs one Redis counter and no buffered
+  body, no target read, no signature check, no safeguard row, no metadata, and no
+  object. Uploader identity comes from the verified access token, never the request
+  body, so the budget cannot be reset by changing a payload field.
+- Content limits stay per target/association, because the maximum size of a room
+  photo is a decision about that surface. A later avatar surface adds its own limits
+  without touching the shared ones.
+- Renamed configuration fails closed: a deployment still carrying a room-scoped name
+  for a shared limit is rejected with its replacement rather than silently defaulted.
+
+One registry owns the allowed pairs and their limits, and it is deny-by-default: an
+unregistered pair is rejected, never defaulted. A pair is registered only when it has
+both an owning endpoint and accepted content limits, so the API never claims support
+it does not have; the declared avatar pair stays unregistered until its surface ships.
+
+Object keys are generated entirely server-side as
+`attachments/<target>/<target-id>/<association>/<uuid>.<extension>`, where the
+extension comes from the verified format. The key-building function takes no filename
+argument at all, so a client-supplied name cannot become a storage path. Grouping by
+target before association keeps every object of one room under a single prefix, which
+is what target deletion and cleanup reconciliation scan.
+
+Content acceptance runs in a fixed order so a client cannot pass an accepted header
+over other bytes: the declared type is rejected first with
+`415 ATTACHMENT_MIME_UNSUPPORTED`, then the content itself decides with
+`400 ATTACHMENT_CONTENT_INVALID` for bytes that are not an accepted format (including
+a container that merely resembles one) and `413 ATTACHMENT_SIZE_EXCEEDED` above the
+per-surface limit. Detection reads only the leading signature bytes of the accepted
+formats, so classification never depends on buffering more than that. This is
+signature verification, not content scanning: bytes beginning with an accepted header
+are stored even when unrelated data trails them, which is why objects are served only
+as presigned reads carrying their verified content type, and why size and count limits
+bound what a caller can store.
+
+The bucket stays private: reads are short-lived presigned GETs, never public URLs. A
+presigned URL necessarily addresses its object, so the bucket and key appear in the
+URL path; what it never carries is a credential, and the grant expires. Keys embed a
+random UUID for that reason: one URL reveals no other object's address, and no key can
+be guessed from a room number or upload name.
+Every provider call is bounded by the configured timeout and surfaces one sanitized
+`503 STORAGE_UNAVAILABLE`; the provider cause is retained for diagnosis and never
+placed in a response body. Object deletion is idempotent by contract — a provider
+reporting the object absent already satisfies the caller — because cleanup retries
+and crash recovery replay the same delete. The private bucket itself is provisioned
+outside the application with least-privilege credentials that need no bucket-creation
+right; only the local integration suite creates it on demand.
 
 ## Business rules and state transitions
 
@@ -290,6 +354,11 @@ version as part of the accepted logical model.
   locks/revalidates the target. The attachment insert and retirement of that
   safeguard commit atomically. A crash/provider/metadata failure therefore leaves
   cleanup work for a missing or orphan object, and no active attachment is returned.
+- The metadata completion transaction locks the upload safeguard row before inserting
+  the live attachment. A cleanup worker that already claimed or removed that row
+  wins; completion aborts and never publishes metadata for an object that may be
+  deleted concurrently. Cleanup claims one row immediately before each provider
+  call, so a batch cannot let later rows outlive their leases.
 - Replace/delete commits detachment plus durable cleanup work atomically, then makes
   a bounded best-effort object deletion. A provider timeout/error does not restore
   detached metadata. Pending cleanup remains observable and retryable; Phase 7 later
@@ -305,9 +374,14 @@ version as part of the accepted logical model.
   list/detail routes are explicitly public.
 - DTO allowlists and global validation reject unknown or malformed fields. Nested
   attachment/window operations always bind the child to the room in the URL.
-- Upload controls include rate limiting, bounded body size, content-signature
-  verification, allowlisted MIME/extension mapping, random server keys, album count
-  limits, and sanitized errors. SVG and user-supplied paths are not accepted.
+- Upload controls include a per-uploader fail-closed rate limit enforced before the
+  body is read, bounded body size, content-signature verification, allowlisted
+  MIME/extension mapping, random server keys, album count limits, and sanitized
+  errors. SVG and user-supplied paths are not accepted. Rate-limit keys carry a
+  hashed discriminator rather than the raw value, which is a key-shape and
+  key-listing measure and not a defence against an actor who can read Redis; that
+  store holds client identifiers and must stay network-isolated. A limiter outage or
+  stall refuses uploads instead of admitting an unbounded number of them.
 - Private bucket credentials are least privilege for the configured bucket/prefix.
   Presigned URLs are short lived and reveal no write capability.
 - Search bounds page size and filter cardinality; queries use parameters and indexed
@@ -325,7 +399,17 @@ version as part of the accepted logical model.
   conflicts, upload bytes/rejections, storage latency/failures, presign failures,
   and pending/oldest cleanup work.
 - Startup validates storage endpoint/region/bucket/credentials, upload policy,
-  presigned URL TTL, and rate limits before listening.
+  presigned URL TTL, rate limits, the rate-limit key namespace (required in
+  production), the Redis request-path timeout, and the MySQL pool bound before
+  listening. `MYSQL_POOL_SIZE` caps concurrent locking writes and public snapshot
+  reads, so it is an operational limit rather than a tuning detail; its floor is 4
+  because one admin room read already acquires three pool connections at once and
+  readiness shares the same pool. Acquisition is bounded at four waiters per
+  connection, and a saturated pool answers `503 DATABASE_OVERLOADED` rather than
+  queueing without limit.
+- Readiness proves Redis write capability, not just reachability, because rate
+  limiting fails closed: a store that answers `PING` while refusing writes would
+  otherwise take every login and upload down while readiness reported healthy.
 - Operators can retry a bounded batch of persisted file cleanup work through a
   repository command; Phase 7 may schedule the same application service.
 
@@ -342,17 +426,19 @@ version as part of the accepted logical model.
       active window.
 - [ ] Phase 4 can add confirmed-booking exclusion without changing the public
       room/date request contract or client-selected window IDs.
-- [ ] Valid thumbnail/album uploads use generated keys and private storage; spoofed,
+- [x] Valid thumbnail/album uploads use generated keys and private storage; spoofed,
       unsupported, oversized, over-count, and unauthorized uploads are rejected.
-- [ ] Thumbnail replacement leaves exactly one active position `0`; album complete-
+- [x] Thumbnail replacement leaves exactly one active position `0`; album complete-
       list reorder is atomic; every delete/reorder is target-bound.
-- [ ] Upload versus hard-delete and delete versus reorder races cannot create an
+- [x] Upload versus hard-delete and delete versus reorder races cannot create an
       active orphan/cross-room association; cleanup provider failures remain
       durable, observable, and successfully retryable.
-- [ ] Migration up/down is proven in a disposable MySQL database with
+- [x] Migration up/down is proven in a disposable MySQL database with
       `synchronize: false`; MinIO integration tests leave only their own scoped data.
-- [ ] OpenAPI, EN/VI messages, runtime examples, database/ADR documentation, full
+- [x] OpenAPI, EN/VI messages, runtime examples, database/ADR documentation, full
       verification, and independent review complete with no unresolved Blocker/High.
+      `REVIEW-022` closed both High and all four Medium findings; the owner accepted
+      the recorded residual risks on 2026-09-08.
 
 ## Test strategy
 
@@ -413,3 +499,11 @@ only after exporting required catalog metadata and deleting only the Phase 3-own
 object prefix through the approved cleanup path. Never recursively delete a bucket
 or local named volume. After bookings reference rooms/windows, use a compatible
 forward fix rather than dropping Phase 3 tables.
+
+Two Phase 3 exit changes are configuration-only. `MYSQL_POOL_SIZE` and
+`RATE_LIMIT_REDIS_KEY_PREFIX` both have safe defaults, so an existing deployment
+needs no new value; set them together with the deploy when the shared MySQL server
+or Redis instance serves more than this environment. Moving authentication counters
+into the shared namespace resets in-flight rate-limit windows exactly once, which
+widens at most one window and is why the change ships with the API rather than
+behind a flag.

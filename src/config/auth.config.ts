@@ -3,6 +3,10 @@ import {
   EnvironmentVariables,
   validateEnvironment,
 } from './environment.validation';
+import {
+  createRedisConnectionConfiguration,
+  RedisConnectionConfiguration,
+} from './redis.config';
 
 export interface AuthConfiguration {
   google: {
@@ -26,6 +30,7 @@ export interface AuthConfiguration {
     windowSeconds: number;
   };
   redisKeyPrefix: string;
+  redisConnection: RedisConnectionConfiguration;
 }
 
 export function createAuthConfiguration(
@@ -53,6 +58,7 @@ export function createAuthConfiguration(
       windowSeconds: environment.AUTH_RATE_LIMIT_WINDOW_SECONDS,
     },
     redisKeyPrefix: environment.AUTH_REDIS_KEY_PREFIX,
+    redisConnection: createRedisConnectionConfiguration(environment),
   };
 }
 

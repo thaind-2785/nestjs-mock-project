@@ -5,6 +5,8 @@ import mysql from 'mysql2/promise';
 import { DataSource } from 'typeorm';
 import { AccessTokenService } from '../src/auth/access-token.service';
 import { AuthRedisService } from '../src/auth/auth-redis.service';
+import { RateLimitService } from '../src/common/rate-limit/rate-limit.service';
+import { createRedisConnectionConfiguration } from '../src/config/redis.config';
 import { AuthService } from '../src/auth/auth.service';
 import { GoogleCallbackQueryDto } from '../src/auth/dto/google-callback-query.dto';
 import { AuthIdentity } from '../src/auth/entities/auth-identity.entity';
@@ -104,7 +106,18 @@ describe('Auth and RBAC persistence', () => {
       maxRetriesPerRequest: 0,
       retryStrategy: () => null,
     });
-    authRedis = new AuthRedisService(redisClient, authConfiguration);
+    // The shared limiter gets its own namespace so repeated local runs never inherit
+    // a spent authentication budget.
+    authRedis = new AuthRedisService(
+      redisClient,
+      // The shared limiter gets its own namespace so repeated local runs never
+      // inherit a spent authentication budget.
+      new RateLimitService(redisClient, {
+        redisKeyPrefix: `hotel:test-rate:${process.pid}:${randomUUID().replaceAll('-', '')}`,
+        connection: createRedisConnectionConfiguration(environment),
+      }),
+      authConfiguration,
+    );
     const databaseConnection = new DatabaseConnectionService(dataSource);
     const accessTokens = new AccessTokenService(
       new JwtService(),
@@ -157,7 +170,8 @@ describe('Auth and RBAC persistence', () => {
 
   it('creates the constrained production auth schema with synchronize disabled', async () => {
     expect(dataSource.options.synchronize).toBe(false);
-    expect(dataSource.options.timezone).toBe('Z');
+    // `timezone` lives on the MySQL driver options, not on the union type.
+    expect((dataSource.options as { timezone?: string }).timezone).toBe('Z');
     const tables = await dataSource.query<Array<{ TABLE_NAME: string }>>(
       `SELECT TABLE_NAME FROM information_schema.tables
        WHERE table_schema = DATABASE() AND TABLE_NAME IN
@@ -302,6 +316,29 @@ describe('Auth and RBAC persistence', () => {
     });
     await expect(
       authRedis.consumeOAuthTransaction(state),
+    ).resolves.toBeUndefined();
+  });
+
+  it('spends the authentication budget per scope through the shared limiter', async () => {
+    const discriminator = `client-${randomUUID()}`;
+    for (
+      let attempt = 0;
+      attempt < authConfiguration.rateLimit.max;
+      attempt += 1
+    ) {
+      await expect(
+        authRedis.assertRateLimit('google-start', discriminator),
+      ).resolves.toBeUndefined();
+    }
+
+    await expect(
+      authRedis.assertRateLimit('google-start', discriminator),
+    ).rejects.toMatchObject({ errorCode: 'AUTH_RATE_LIMITED' });
+    // The limiter is shared, the budgets are not: another scope for the same client
+    // still has its own window, which is what keeps an upload flood off the login
+    // path and a login flood off the upload path.
+    await expect(
+      authRedis.assertRateLimit('google-callback', discriminator),
     ).resolves.toBeUndefined();
   });
 

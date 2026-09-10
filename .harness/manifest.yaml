@@ -113,6 +113,14 @@ entry_commands:
     side_effect: none
     environments: [local, ci]
     forward_env: [CI, LANG, LC_ALL, TZ]
+  typecheck:
+    command: npm run typecheck
+    npm_script: typecheck
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: ignored_artifacts
+    environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, TZ]
   unit_test:
     command: npm run test:unit
     npm_script: test:unit

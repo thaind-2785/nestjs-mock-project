@@ -1,11 +1,13 @@
 # PLAN-006: Room catalog, availability windows, and images
 
 - Spec: `docs/specs/SPEC-005-room-catalog.md`
-- Status: In progress
+- Status: Complete (Phase 3 exit signed off 2026-09-08)
 - Owner: Codex primary agent
 - Reviewer (must be independent): Claude Code, `REVIEW-016` (P3-T02 PR #6 follow-up),
   `REVIEW-018` (P3-T03 follow-up), and `REVIEW-019` (P3-T04 public catalog); Codex
-  independent review agent, `REVIEW-017` (P3-T03 room-time administration)
+  independent review agent, `REVIEW-017` (P3-T03 room-time administration),
+  `REVIEW-020` (PR #7 mentor follow-up), and `REVIEW-021` (P3-T05 room images);
+  four clean-context Claude Code review agents, `REVIEW-022` (Phase 3 exit)
 
 The project owner accepted `SPEC-005` and its production-storage, upload-policy,
 reference-catalog, and currency decisions on 2026-09-04. Implement and explain one
@@ -43,11 +45,11 @@ vertical slice at a time; do not batch later slices into the current handoff.
 
 The accepted and locked P3-T01 dependency delta is:
 
-| Package                                  | Purpose                                                |
-| ---------------------------------------- | ------------------------------------------------------ |
-| `@aws-sdk/s3-request-presigner@3.1120.0` | Short-lived reads from a private S3-compatible bucket  |
-| `file-type@21.3.4`                       | Signature-based image format verification              |
-| `@types/multer@2.2.0` (development)      | Typed bounded multipart handling with the Nest adapter |
+| Package                                  | Purpose                                                            |
+| ---------------------------------------- | ------------------------------------------------------------------ |
+| `@aws-sdk/s3-request-presigner@3.1120.0` | Short-lived reads from a private S3-compatible bucket              |
+| ~~`file-type@21.3.4`~~                   | Removed in P3-T05: three accepted signatures are verified directly |
+| `@types/multer@2.2.0` (development)      | Typed bounded multipart handling with the Nest adapter             |
 
 Reuse the locked `@aws-sdk/client-s3` and Nest Express adapter. Use Node `crypto`
 for UUID/random object keys. Do not add an image transformer unless the accepted
@@ -61,8 +63,8 @@ spec adds pixel/dimension processing.
 | `P3-T02` | An admin can create/list/read/version-update/deactivate/hard-delete eligible rooms with atomic amenity assignment                          | `src/rooms` admin controller/services/repositories/DTOs; optional reference-catalog APIs             | Uses Phase 3 schema; seed/reference migration only if owner selects fixed catalog                       | Room policy/service unit; CRUD/version/unique/reference/delete integration and admin/user/guest E2E    | Complete |
 | `P3-T03` | Admin nested window APIs enforce target binding, history/use policy seams, and non-overlap under concurrent changes                        | `src/rooms` window controller/service/repository/DTOs                                                | None                                                                                                    | Overlap/containment unit; real MySQL locking/concurrency/adjacency/nested-mismatch integration and E2E | Complete |
 | `P3-T04` | Guests can browse public active rooms and query deterministic window-contained availability with all documented filters                    | `src/rooms` public controller/search service/query DTOs/response DTOs                                | None: query-plan evidence rejected every candidate index                                                | Query policy unit; SQL/filter/pagination integration; public list/detail/date/error/localization E2E   | Complete |
-| `P3-T05` | Admin thumbnail/album upload, replacement, target-bound delete, atomic reorder, private presign, and durable cleanup retry work end to end | `src/files`, room image controller/DTO mapping, storage adapter, cleanup repository/CLI              | Uses attachment/cleanup schema from P3-T01                                                              | MIME/key/policy unit; MySQL+MinIO transaction/race/failure/retry integration; multipart/RBAC E2E       | Pending  |
-| `P3-T06` | Public/operator documentation agrees and Phase 3 meets its exit gate with independent review findings dispositioned                        | Swagger, locales, `.env.example`, `README.md`, API/database/ADR docs, spec/plan/review               | Prove production migration state; no ad hoc schema changes                                              | Focused regressions, full `npm run verify`, independent security/data/concurrency/storage review       | Pending  |
+| `P3-T05` | Admin thumbnail/album upload, replacement, target-bound delete, atomic reorder, private presign, and durable cleanup retry work end to end | `src/files`, room image controller/DTO mapping, storage adapter, cleanup repository/CLI              | Uses attachment/cleanup schema from P3-T01                                                              | MIME/key/policy unit; MySQL+MinIO transaction/race/failure/retry integration; multipart/RBAC E2E       | Complete |
+| `P3-T06` | Public/operator documentation agrees and Phase 3 meets its exit gate with independent review findings dispositioned                        | Swagger, locales, `.env.example`, `README.md`, API/database/ADR docs, spec/plan/review               | Prove production migration state; no ad hoc schema changes                                              | Focused regressions, full `npm run verify`, independent security/data/concurrency/storage review       | Complete |
 
 ### Slice notes
 
@@ -169,7 +171,8 @@ its own focused evidence.
 ## P3-T01 implementation evidence
 
 - Locked `@aws-sdk/s3-request-presigner@3.1120.0` to the existing S3 client version,
-  reused the locked `file-type@21.3.4`, and added `@types/multer@2.2.0` for the later
+  reused the locked `file-type@21.3.4` (removed again in P3-T05, see the revision
+  below), and added `@types/multer@2.2.0` for the later
   multipart boundary.
 - Added fail-fast room-image policy validation for size/count/presign/rate/storage-
   timeout/cleanup-grace values; cleanup grace must exceed the storage timeout.
@@ -335,6 +338,125 @@ its own focused evidence.
   the public E2E journey 1/1 covering guest access, filters, availability, validation
   details, localization, and generic not-found.
 
+## P3-T05 slice 1 evidence: attachment storage and configuration (2026-09-08)
+
+- Attachments are polymorphic by `ADR-0003`, so the foundation is built for every
+  attachable target rather than for room images alone. Configuration is split by
+  lifetime: `ATTACHMENT_*` infrastructure limits are shared by one storage adapter
+  and one cleanup runner, while content limits stay per surface (`ROOM_IMAGE_*`).
+  The five renamed variables fail closed with their replacement, so a stale
+  deployment cannot fall back to a default.
+- `src/config/object-storage.config.ts` is now the single connection contract; the
+  readiness probe composes it instead of re-reading the same variables, and one
+  `createObjectStorageClientOptions` builder serves both consumers.
+- `AttachmentPolicyRegistry` is deny-by-default and registers a pair only when it has
+  both an owning endpoint and accepted limits. The declared `USER+AVATAR` pair is
+  therefore absent until its surface ships, and the unit suite asserts that rather
+  than assuming the cross product of both enums is valid.
+- `buildAttachmentObjectKey` takes no filename argument at all, which makes
+  "never use a client filename as a storage path" a property of the signature rather
+  than a rule reviewers must remember. Keys group by target before association so
+  target deletion and cleanup reconciliation scan one prefix.
+- `AttachmentStorageService` is the only path to the provider: every call is bounded
+  by the configured timeout, failures map to one sanitized `503 STORAGE_UNAVAILABLE`
+  with the cause kept for diagnosis only, and delete is idempotent because cleanup
+  retries replay it. Error codes follow `SPEC-005` (`ATTACHMENT_PAIR_INVALID`,
+  `ATTACHMENT_MIME_UNSUPPORTED`, `STORAGE_UNAVAILABLE`), and the message-key list,
+  translation interface, and both locale catalogs now share one canonical order with
+  a test that fails when they drift.
+- Focused evidence: config 43/43, files/common unit 44/44, and the new MinIO
+  integration suite 3/3, which proves an anonymous read of the object is refused
+  (403), the presigned read returns the exact bytes and content type, delete then
+  makes the read 404 and a repeated delete still succeeds, and an unreachable
+  provider fails within the bounded timeout instead of hanging.
+- The private bucket is provisioned outside the application; only the integration
+  suite creates it on demand. Compose has no bucket bootstrap service, so the first
+  real upload against a fresh local stack needs the bucket to exist. Decide with the
+  upload slice whether to add a one-shot Compose init service (it also needs the
+  `compose:smoke`/`compose:ci` service lists) or to document a manual step.
+- Dependency-delta revision, owner-approved: `file-type@21.3.4` is ESM-only and this
+  repository compiles and tests through CommonJS. Under Jest a static import does not
+  resolve at all (`Cannot find module 'file-type'`, with or without the flag), and a
+  dynamic import needs `--experimental-vm-modules` on every Jest script; both were
+  measured. The accepted allowlist is exactly three raster formats, so
+  `src/files/attachment-signature.ts` verifies their signatures directly and the
+  direct dependency is removed. It stays in the tree transitively through
+  `@nestjs/common@11.2.3`, which also ships `load-esm` for exactly this problem, so
+  keeping it as a direct dependency bought nothing. Third ESM/CommonJS incident here;
+  recorded in `docs/logs/error-log.md`.
+- Signature verification is deliberately not content scanning: bytes beginning with an
+  accepted header are stored even when unrelated data trails them, and the unit suite
+  pins that as a documented boundary. Size and count limits bound what a caller can
+  store, and objects are served only as presigned reads with their verified content
+  type. The declared header is rejected first (`415 ATTACHMENT_MIME_UNSUPPORTED`), then
+  the bytes decide (`400 ATTACHMENT_CONTENT_INVALID`, `413 ATTACHMENT_SIZE_EXCEEDED`),
+  so an accepted header over other content cannot pass.
+
+## P3-T05 slice 2 evidence: room image lifecycle (2026-09-08)
+
+- Ordering is the whole design. `stageUpload` verifies the bytes, generates the key,
+  commits the cleanup safeguard, and writes the object with no database transaction
+  open; only then does the room-locked transaction enforce the association rules,
+  insert metadata, and retire the safeguard. A crash or a rejected upload therefore
+  leaves a claimable safeguard rather than an object nobody intends to delete, and no
+  request holds a row lock across a provider call.
+- The target lock stays in the module that owns the target: `rooms` locks the physical
+  room and calls the `files` primitives inside that transaction. That keeps the
+  polymorphic registry in `files` without a circular dependency, and it is why two
+  concurrent album uploads to one room get positions 0 and 1 instead of colliding on
+  the unique `(object_type, object_id, association_type, position)` key.
+- Reorder and delete rewrite positions through a fixed offset first, because MySQL
+  checks that unique key per row rather than at statement end. The offset exceeds any
+  configured album and stays inside the column's range.
+- Every mutation matches ID plus the full target tuple, so a foreign attachment ID and
+  an absent one both answer `404 ATTACHMENT_NOT_FOUND`.
+- The multipart boundary and the content policy report one code: Multer's byte limit
+  comes from the same configuration value the policy re-checks, and the framework's
+  generic payload error is mapped to `413 ATTACHMENT_SIZE_EXCEEDED`.
+- The cleanup runner claims only due, unleased work under `FOR UPDATE SKIP LOCKED`,
+  takes a lease that outlives the bounded storage call, and relies on delete being
+  idempotent. A provider failure releases the lease with a delay and keeps the task,
+  so cleanup is retryable and observable rather than lost.
+- Presigned URLs necessarily address their object, so the bucket and key appear in the
+  URL path. Keys embed a random UUID for that reason, the grant expires, and the
+  payload carries no credential. `SPEC-005` now states this instead of implying the
+  key is hidden.
+- Focused evidence: unit 181/181; the new room-image integration suite 12/12 against
+  real MySQL and MinIO, covering the presigned round trip, thumbnail replacement,
+  album limit, safeguard-before-grace and after-grace behaviour, provider-failure
+  retry with lease release, contiguous positions after delete, cross-room refusal,
+  reorder validation, both concurrency cases, room hard delete, and the admin/public
+  payload shapes; the admin E2E adds the HTTP journey including 401/403, a client
+  filename that never reaches the storage path, `415`/`400`/`413`/`400` rejections,
+  reorder, and detach.
+- Not in this slice, and **superseded by `P3-T06`**, which extracted the shared
+  limiter and wired both values: at the close of P3-T05,
+  `ATTACHMENT_UPLOAD_RATE_LIMIT_MAX` and
+  `ATTACHMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS` were still unconsumed. The upload
+  route is ADMIN-only, and the limiter of the time was bound to the auth module's own
+  limits and Redis key prefix, so wiring it meant extracting a shared limiter.
+
+## P3-T05 independent review follow-up (2026-09-08)
+
+- The review found a cleanup/upload hand-off race: a safeguard could expire while an
+  upload waited for the room lock, allowing cleanup to delete the object before
+  metadata committed. Completion now pessimistically locks the safeguard row and
+  aborts when it is missing or already leased; the real-MySQL integration suite
+  deterministically proves that no attachment metadata is created in that race.
+- Readiness now uses `HeadBucket` against the configured bucket instead of the
+  account-wide `ListBuckets` operation. The readiness unit test asserts the command
+  and bucket, preserving least-privilege production credentials and detecting a
+  missing configured bucket.
+- Public list reads now load/presign thumbnails only; detail/admin reads retain the
+  complete album. Cleanup claims one task immediately before each provider call, so
+  every lease covers one bounded operation rather than an entire sequential batch.
+- The review added upload-vs-hard-delete and delete-vs-reorder MySQL concurrency
+  regressions, plus structured storage/cleanup failure events that never log object
+  keys or provider bodies. Focused unit/integration/E2E checks, build, lint, format,
+  and `git diff --check` passed after the fixes. The final
+  `MYSQL_PORT=13306 npm run verify` gate is green: Harness 68, Compose 8, unit
+  181/181, integration 60/60, E2E 20/20, and build.
+
 ## PR #7 mentor-review follow-up (2026-09-08)
 
 - The owner authorized all eight mentor threads. Reuse P3-T03/P3-T04 and preserve
@@ -376,3 +498,169 @@ its own focused evidence.
   restores broader projections, that unbounded offset, and environment-dependent
   MySQL timezone defaults; prefer a forward fix because UTC consistency protects all
   current/future audit timestamps.
+
+## P3-T06 implementation evidence
+
+- Scope: close the two deferred Phase 3 exit items, make the documentation agree with
+  the running code, prove the production migration state, and run the full gate. No
+  schema change, no new dependency, and no response-shape change.
+- Slice 1 wires the upload rate limit by extracting the limiter instead of leaving
+  `ATTACHMENT_UPLOAD_RATE_LIMIT_MAX`/`_WINDOW_SECONDS` unconsumed, which
+  `REVIEW-021` refused to carry past this gate. `RateLimitService` owns a Redis
+  fixed-window counter and nothing else; authentication and uploads each supply
+  their own scope, discriminator, and limits and keep their own stable error codes.
+  `ADR-0005` records the decision, its fail-closed rule, and the namespace move.
+- The upload budget is charged per authenticated uploader before the room read, the
+  signature check, the generated key, and the storage call, so a refused attempt
+  costs one Redis counter and leaves no attachment row, no safeguard, and no object.
+  A limiter outage answers `503 ATTACHMENT_UPLOAD_UNAVAILABLE` rather than admitting
+  unbounded uploads; exceeding the budget answers
+  `429 ATTACHMENT_UPLOAD_RATE_LIMITED`. Both codes appear in the error descriptor,
+  the translations interface, both locale catalogs, the route's Swagger responses,
+  `SPEC-005`, and the endpoint catalog's `ADMIN-FILE-01` row.
+- Auth scopes are prefixed (`auth-google-start`, `auth-google-callback`,
+  `auth-refresh`), so one shared limiter still gives each surface its own window. The
+  counters move from `AUTH_REDIS_KEY_PREFIX` to `RATE_LIMIT_REDIS_KEY_PREFIX`;
+  `AUTH_REDIS_KEY_PREFIX` keeps only OAuth transactions and session revocations. The
+  limiter is imported by the two modules that use it rather than registered globally.
+- Slice 2 closes the `REVIEW-019` pool question. `MYSQL_POOL_SIZE` (1-100, default 10) sets the mysql2 `connectionLimit`, because every locking write and every public
+  snapshot read holds one connection for its whole transaction. The bound and its
+  sizing rule are documented in `.env.example`, `README.md`, `SPEC-005`, and the
+  database/system-design documents rather than left as a driver default.
+- Migration state proof against a disposable database: `migration:run` applied both
+  migrations and produced the 12 Phase 2/3 tables plus `migrations`; one revert left
+  exactly the five Phase 2 tables plus `migrations`; the second left only
+  `migrations`; a re-run restored all 13. `typeorm schema:log` is deliberately not used as a drift gate
+  here: it rewrites explicitly named constraints/indexes to generated hashes and
+  normalizes the `@VersionColumn` to `int`, so its diff reports naming and driver
+  normalization rather than schema drift. The migration integration suite remains
+  the constraint/index assertion.
+- Focused evidence: unit 187/187 (44 in the affected config/limiter paths); room
+  image integration 17/17 including the new above-budget refusal that leaves no
+  metadata or safeguard and the unreachable-limiter fail-closed case; room
+  admin/search integration 21/21; auth integration 14/14 including new per-scope
+  budget coverage; auth and room-admin E2E 6/6. Build, lint, and `format:check`
+  passed.
+- Fixed four pre-existing type errors that no gate reported: two spec/test files
+  passed a partial environment literal where `EnvironmentVariables` is required, used
+  a plain object where the migration option requires a class, and read `timezone` off
+  the `DataSourceOptions` union. `tsconfig.json` sets `isolatedModules`, so ts-jest
+  transpiles specs without type checking, and `tsconfig.build.json` excludes `test`
+  and `**/*spec.ts`; nothing in `verify` therefore typechecks a test file. The errors
+  were confirmed present at `d524203` before this slice.
+- The owner then approved closing that gap in this slice. `npm run typecheck`
+  (`tsc --noEmit -p tsconfig.json`) is now a `verify` step placed after lint and
+  before the test layers, so a type error never waits for MySQL. It is a real Harness
+  entry command: registered in the manifest with `ignored_artifacts`, implemented
+  with fixed argv in the runtime catalog, and therefore covered by the existing
+  manifest/catalog parity regression. The step was mutation-proven by injecting
+  `const mutationProbe: number = 'not a number'` into a spec, which failed the gate
+  with exit 2 and `TS2322`, and passing again after the revert.
+- Handoff gate (2026-09-08): `MYSQL_PORT=13306 npm run verify` exit 0 with Harness 68
+  subtests plus 10 eval fixtures, Compose contract 8, unit 187/187, integration
+  63/63, E2E 20/20, and a green build. Rerun after the type-error fixes and once more
+  with the new step in the gate: the trace records `command_ref: typecheck` at exit 0,
+  so the gate now has twelve managed steps and the whole project, tests included,
+  typechecks clean.
+- E2E suites that boot the application now set their own
+  `RATE_LIMIT_REDIS_KEY_PREFIX`, because a shared namespace would otherwise let a
+  repeated local run start with a spent budget. The room-admin journey also raises its
+  own upload budget; the refusal itself is proven deterministically in integration,
+  not by a cumulative count that later tests could shift.
+- Compatibility/rollback: both new variables have safe defaults, so an existing
+  deployment needs no new value. Moving authentication counters resets in-flight
+  rate-limit windows exactly once, which widens at most one window. Reverting this
+  slice restores an unlimited upload path and an unbounded connection pool, so prefer
+  a forward fix.
+
+## P3-T06 independent review follow-up (2026-09-08)
+
+- `REVIEW-022` was produced by four clean-context review agents, one per required
+  dimension, none of which authored the slice or saw the author's conclusions. All
+  four returned Approve after fixes: two High, four Medium, and fourteen Low/doc
+  findings, every one dispositioned in the review.
+- `HIGH-01`: no test proved the fixed window ever expired. The unit suite stubs
+  `eval`, so it covered the decision but not the Lua script, and no suite read a TTL
+  or waited a window out. Deleting `EXPIRE` therefore kept the whole gate green while
+  production would have locked out every uploader and login address permanently.
+  `test/rate-limit.integration-spec.ts` now proves expiry, non-extension under
+  repeated attempts, per-scope isolation, and fail-closed behavior against real
+  Redis; the missing-`EXPIRE` mutation fails it.
+- `HIGH-02`: only the TCP handshake was bounded, so a reachable but stalled Redis
+  left fail-closed callers awaiting a promise that never settles, each hung upload
+  still holding its buffered body. `REDIS_TIMEOUT_MS` now bounds connect, each
+  command, and the loading wait for every application Redis client, and the limiter
+  races the whole attempt against that bound.
+- `MED-01`: the budget was charged in the handler, after Multer had buffered the
+  request body, so it bounded storage and metadata work while leaving bandwidth and
+  memory — the actual abuse cost — unbounded. `AttachmentUploadRateLimitGuard` now
+  charges it, because Nest runs guards before interceptors, and exactly one place
+  charges so the configured maximum is not halved.
+  `test/room-image-upload-limit.e2e-spec.ts` pins the ordering over real HTTP: once
+  the budget is spent, an oversized body answers `429`, and reverting the fix makes
+  the same request answer `413`.
+- `MED-02` to `MED-04` and the Low findings closed the remaining gaps: readiness now
+  proves Redis write capability instead of reachability, the shared namespace is
+  required in production, the pool floor matches the three connections one admin room
+  read acquires at once, every Redis client reports errors through the JSON logger
+  instead of ioredis's raw stderr stack, shutdown no longer reopens a socket, the
+  limiter has its own timeout rather than borrowing the health-probe bound, and
+  scopes are validated and typed.
+- Documentation findings corrected claims this slice had overstated: the ADR
+  published an error code the API never emits (`AUTH_UNAVAILABLE`), the evidence
+  claimed endpoint-catalog coverage that did not exist, the SHA-256 digest was
+  described as a privacy control it is not, the gate step list was incomplete and
+  out of order, and the P3-T05 note still asserted the limits were unconsumed.
+- Verification after fixes: the new limiter integration suite 4/4, room image
+  integration 17/17, auth integration 14/14, and the new upload-budget E2E 2/2, plus
+  the two mutation proofs above. `MYSQL_PORT=13306 npm run verify` exit 0 with
+  Harness 68 subtests plus 10 eval fixtures, Compose contract 8, unit 197/197,
+  integration 67/67, E2E 22/22, and a green build. The gate was rerun after the
+  `MED-04` contract landed; the final counts are in the sign-off note below.
+- Owner decisions of 2026-09-08: the reviewer-independence residual is accepted (the
+  reviewers share the author's model family, so a different-vendor pass stays
+  available but is not required); the rate-limit digest stays an unkeyed SHA-256 with
+  the corrected documentation; and `MED-04` was to be closed here rather than
+  deferred, so the pool-exhaustion contract is now defined.
+- Pool contract: acquisition allows four waiters per connection
+  (`queueLimit = MYSQL_POOL_SIZE * 4`, derived so there is one knob) and exhaustion
+  answers `503 DATABASE_OVERLOADED` in both locales, mapped centrally from mysql2's
+  uncoded `Queue limit reached.` error and any TypeORM wrapper around it.
+  `acquireTimeout` was rejected because mysql2 v3 does not implement it, so TypeORM's
+  passthrough would be fiction. Sustained saturation now turns readiness red
+  deliberately, replacing a probe that merely timed out. A real-MySQL case saturates
+  the smallest accepted pool and proves the shed; removing `queueLimit` fails it.
+- Sign-off gate (2026-09-08): `MYSQL_PORT=13306 npm run verify` exit 0 with Harness 68
+  subtests plus 10 eval fixtures, Compose contract 8, unit 199/199, integration 68/68,
+  E2E 22/22, and a green build. Phase 3 exits with every `REVIEW-022` finding
+  dispositioned and the remaining residual risks accepted by the owner.
+
+## PR #8 review follow-up (2026-09-09)
+
+- Owner authorized the open mentor threads. Room-image list/detail reads now collect
+  all selected attachment metadata and request presigned URLs in one batch rather
+  than serially by room. A focused service regression proves one `createReads` call
+  for a multi-room detail page and for a public thumbnail page.
+- Reordering still uses the safe offset phase for MySQL's immediate unique-key check,
+  then assigns every final position in one parameterized `CASE` update rather than
+  one update per attachment. Metadata reads and cleanup claims select only columns
+  their next operation needs; attachment insertion returns its created entity instead
+  of performing a second read.
+- Attachment request/result interfaces now live in `attachments.types.ts`. Detached
+  object deletion runs independently with `Promise.allSettled`; a deferred cleanup is
+  recorded as one structured event without storage keys or provider payloads. The
+  storage adapter and cleanup runner retain their existing boundary-failure events.
+- The required multipart-file check now lives in `RequiredAttachmentFilePipe` at the
+  HTTP boundary. The controller binds only a validated file and the service remains
+  independent of Multer and HTTP validation.
+- Pipe-specific evidence: typecheck and lint passed; pipe/interceptor/guard unit
+  tests 10/10 and the existing room-admin E2E 2/2 prove the missing-file response is
+  unchanged (`400 VALIDATION_FAILED`, field `file`). The preceding full gate covers
+  the earlier review fixes; this isolated transport refactor will enter the next PR
+  handoff gate rather than claiming that prior result for new code.
+- Focused evidence before final handoff: typecheck and lint passed; relevant unit
+  tests 51/51; room-image plus attachment-storage integration 20/20; upload-limit
+  E2E 2/2. The integration runner emitted its pre-existing post-completion open-handle
+  warning but exited 0. Full `MYSQL_PORT=13306 npm run verify` then passed: Harness
+  validation/evaluations, Compose contract, formatting, lint, typecheck, unit 201/201,
+  integration 68/68, E2E 22/22, and build all exited 0.

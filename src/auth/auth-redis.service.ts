@@ -2,25 +2,23 @@ import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import Redis from 'ioredis';
+import { RateLimitService } from '../common/rate-limit/rate-limit.service';
 import { authConfig } from '../config/auth.config';
 import { authErrors } from './auth.errors';
 import { AUTH_REDIS_CLIENT } from './auth.tokens';
 import { OAuthTransaction } from './auth.types';
 
-const rateLimitScript = `
-local current = redis.call('INCR', KEYS[1])
-if current == 1 then
-  redis.call('EXPIRE', KEYS[1], ARGV[1])
-end
-return current
-`;
+/** The complete set of authentication budgets, so no caller can invent a scope. */
+export type AuthRateLimitScope = 'google-start' | 'google-callback' | 'refresh';
 
 @Injectable()
 export class AuthRedisService implements OnApplicationShutdown {
   private connection: Promise<void> | undefined;
+  private closed = false;
 
   constructor(
     @Inject(AUTH_REDIS_CLIENT) private readonly client: Redis,
+    private readonly rateLimit: RateLimitService,
     @Inject(authConfig.KEY)
     private readonly configuration: ConfigType<typeof authConfig>,
   ) {}
@@ -92,38 +90,38 @@ export class AuthRedisService implements OnApplicationShutdown {
     }
   }
 
-  async assertRateLimit(scope: string, discriminator: string): Promise<void> {
-    const digest = createHash('sha256').update(discriminator).digest('hex');
+  /**
+   * Authentication keeps its own budget and error contract while the counter itself
+   * lives in the shared limiter. Scopes are namespaced so an auth budget can never
+   * be spent by another surface that happens to pick the same scope name.
+   */
+  async assertRateLimit(
+    scope: AuthRateLimitScope,
+    discriminator: string,
+  ): Promise<void> {
+    let allowed: boolean;
     try {
-      await this.ensureConnected();
-      const current = Number(
-        await this.client.eval(
-          rateLimitScript,
-          1,
-          `${this.configuration.redisKeyPrefix}:rate:${scope}:${digest}`,
-          String(this.configuration.rateLimit.windowSeconds),
-        ),
-      );
-      if (current > this.configuration.rateLimit.max) {
-        throw authErrors.rateLimited();
-      }
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        'errorCode' in error &&
-        error.errorCode === 'AUTH_RATE_LIMITED'
-      ) {
-        throw error;
-      }
+      allowed = await this.rateLimit.consume({
+        scope: `auth-${scope}`,
+        discriminator,
+        max: this.configuration.rateLimit.max,
+        windowSeconds: this.configuration.rateLimit.windowSeconds,
+      });
+    } catch {
       throw authErrors.authorizationUnavailable();
     }
+    if (!allowed) throw authErrors.rateLimited();
   }
 
   onApplicationShutdown(): void {
+    // A request that reaches this service after shutdown began must not reopen a
+    // socket that keeps the process alive past its grace period.
+    this.closed = true;
     this.client.disconnect();
   }
 
   private async ensureConnected(): Promise<void> {
+    if (this.closed) throw new Error('Auth Redis client is closed');
     if (this.client.status === 'ready') return;
     if (!this.connection) {
       this.connection = this.client.connect().finally(() => {

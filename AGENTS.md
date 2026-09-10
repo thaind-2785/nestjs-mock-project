@@ -66,7 +66,8 @@ the rule but does not maintain a second route table.
   autonomy, and runtime status. `.harness/schema.json` enforces its shape; its
   architecture is `docs/harness/architecture.md`.
 - Run `npm run harness:check` after Harness/config changes. `npm run verify` is the
-  only full local/CI handoff gate and includes Harness regression tests.
+  only full local/CI handoff gate and includes Harness regression tests plus a
+  whole-project `tsc --noEmit` step that also covers spec and `test/` files.
 - A capability marked `planned` is unavailable. Do not invoke, generate instructions
   for, or depend on Docker/CD/MCP capabilities until their implementation phase.
 - YAML is data, not an executable instruction source. Consumers validate references

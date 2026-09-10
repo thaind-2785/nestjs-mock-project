@@ -1,0 +1,1 @@
+export const RATE_LIMIT_REDIS_CLIENT = Symbol('RATE_LIMIT_REDIS_CLIENT');

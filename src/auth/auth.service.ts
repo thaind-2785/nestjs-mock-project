@@ -7,7 +7,7 @@ import { authConfig } from '../config/auth.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import { User } from '../users/entities/user.entity';
 import { UserRole, UserStatus } from '../users/entities/user.enums';
-import { AuthRedisService } from './auth-redis.service';
+import { AuthRateLimitScope, AuthRedisService } from './auth-redis.service';
 import { authErrors } from './auth.errors';
 import {
   GoogleCallbackQueryDto,
@@ -104,7 +104,7 @@ export class AuthService {
     return this.configuration.google.successRedirectUri;
   }
 
-  async assertRateLimit(scope: string, key: string): Promise<void> {
+  async assertRateLimit(scope: AuthRateLimitScope, key: string): Promise<void> {
     await this.redis.assertRateLimit(scope, key);
   }
 

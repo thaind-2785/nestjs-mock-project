@@ -1,7 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, Matches } from 'class-validator';
-
-const decimalIdPattern = /^[1-9][0-9]{0,19}$/;
+import { IsString, IsUUID, Matches } from 'class-validator';
+import { decimalIdPattern } from '../../common/constants/identifier.constants';
 
 export class RoomIdParamDto {
   @ApiProperty({ example: '1', pattern: decimalIdPattern.source })
@@ -31,4 +30,8 @@ export class AmenityIdParamDto {
   amenityId!: string;
 }
 
-export { decimalIdPattern };
+export class RoomImageIdParamDto extends RoomIdParamDto {
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID('4')
+  attachmentId!: string;
+}

@@ -1,7 +1,7 @@
-import type { ReadinessConfiguration } from '../config/readiness.config';
-import { createStorageClientOptions } from './storage-client.options';
+import type { ObjectStorageConfiguration } from '../../config/object-storage.config';
+import { createObjectStorageClientOptions } from './object-storage-client';
 
-const localStorage: ReadinessConfiguration['storage'] = {
+const localStorage: ObjectStorageConfiguration = {
   endpoint: 'http://127.0.0.1:9000',
   region: 'us-east-1',
   forcePathStyle: true,
@@ -10,9 +10,9 @@ const localStorage: ReadinessConfiguration['storage'] = {
   secretKey: 'local_minio_change_me',
 };
 
-describe('createStorageClientOptions', () => {
+describe('createObjectStorageClientOptions', () => {
   it('uses explicit local MinIO endpoint and path-style addressing', () => {
-    expect(createStorageClientOptions(localStorage)).toEqual({
+    expect(createObjectStorageClientOptions(localStorage)).toEqual({
       endpoint: 'http://127.0.0.1:9000',
       region: 'us-east-1',
       forcePathStyle: true,
@@ -25,7 +25,7 @@ describe('createStorageClientOptions', () => {
 
   it('uses cloud S3 defaults without a local endpoint', () => {
     expect(
-      createStorageClientOptions({
+      createObjectStorageClientOptions({
         ...localStorage,
         endpoint: undefined,
         region: 'ap-southeast-1',
@@ -43,7 +43,7 @@ describe('createStorageClientOptions', () => {
 
   it('retains an explicit endpoint for another S3-compatible provider', () => {
     expect(
-      createStorageClientOptions({
+      createObjectStorageClientOptions({
         ...localStorage,
         endpoint: 'https://object.example.test',
         region: 'auto',

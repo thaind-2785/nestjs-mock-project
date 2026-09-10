@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { RoomStatus } from '../entities/room.enums';
+import { RoomImageResponseDto } from './room-image-response.dto';
 
 export class RoomTypeResponseDto {
   @ApiProperty({ example: '1' })
@@ -62,6 +63,15 @@ export class AdminRoomResponseDto {
 
   @ApiProperty({ type: [AmenityResponseDto] })
   amenities!: AmenityResponseDto[];
+
+  @ApiPropertyOptional({ type: RoomImageResponseDto, nullable: true })
+  thumbnail!: RoomImageResponseDto | null;
+
+  @ApiProperty({
+    type: [RoomImageResponseDto],
+    description: 'Album images ordered by position ascending.',
+  })
+  images!: RoomImageResponseDto[];
 
   @ApiProperty({ minimum: 1, example: 1 })
   version!: number;

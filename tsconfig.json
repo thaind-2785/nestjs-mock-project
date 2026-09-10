@@ -10,7 +10,7 @@
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "allowSyntheticDefaultImports": true,
-    "types": ["node", "jest"],
+    "types": ["node", "jest", "multer"],
     "target": "ES2023",
     "sourceMap": true,
     "outDir": "./dist",

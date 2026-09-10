@@ -70,7 +70,7 @@
   the room, verifies `ACTIVE`, resolves and locks the window, snapshots price, writes
   booking/history, and stores the replay response. No network call occurs inside the
   transaction. Review and lock the ULID dependency before use.
-- **Status:** Complete (2026-09-10; `REVIEW-023` findings closed).
+- **Status:** Complete (2026-09-10; mentor follow-up fixes independently reviewed).
 
 ### P4-T03 — User history, detail, and cancellation
 
@@ -239,13 +239,17 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   history write. The ULID helper is an equivalent reviewed local implementation:
   it uses 48-bit millisecond time plus 80-bit cryptographic randomness and increments
   the random component for calls in the same millisecond, avoiding a new dependency.
-  Focused evidence: 3 unit suites / 12 tests, 7 real-MySQL integration tests (including the
-  controlled create-versus-room-time-deactivation race), and 1 full API E2E journey
+  Focused evidence: 3 unit suites / 12 tests, 9 real-MySQL integration tests (including the
+  controlled create-versus-room-time-deactivation race, distinct-key concurrent creates,
+  and response projection), and 1 full API E2E journey
   for guest/user/admin RBAC, create, replay, key-reuse conflict, and rate limiting;
   typecheck, lint, formatting, and whitespace checks passed. `REVIEW-023` findings
-  are closed: the lock test has an SQL barrier plus a lock-removal mutation proof,
-  fixtures derive future dates, and structured non-PII booking events are tested.
-  The full `MYSQL_PORT=13306 npm run verify` gate passed before PR handoff.
+  are closed before mentor follow-up: the lock test has an SQL barrier plus a lock-removal
+  mutation proof, fixtures derive future dates, and structured non-PII booking events are
+  tested. The mentor-follow-up refactors the ordered create transaction, narrows the
+  room-type response projection, and uses a direct idempotency completion update. The
+  full gate passed (unit 221/221, integration 77/77, E2E 23/23, build) and independent
+  re-review approved the follow-up.
 - Later implementation-only choices remain subject to evidence and review. Record
   every durable decision here and in the appropriate ADR before changing its
   contract.

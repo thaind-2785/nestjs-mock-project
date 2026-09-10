@@ -347,6 +347,80 @@ describe('Phase 4 booking foundation persistence', () => {
     );
   });
 
+  it('projects only the room-type fields returned by booking creation', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const queries: string[] = [];
+    const captured = jest
+      .spyOn(dataSource.logger, 'logQuery')
+      .mockImplementation((sql) => queries.push(sql));
+
+    try {
+      await bookings.create(user.id, 'booking-create-room-type-select', {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOut,
+      });
+    } finally {
+      captured.mockRestore();
+    }
+
+    const roomTypeRead = queries.find((sql) =>
+      /FROM `room_types` `RoomType`/.test(sql),
+    );
+    expect(roomTypeRead).toBeDefined();
+    const projection = roomTypeRead?.slice(0, roomTypeRead.search(/\sFROM\s/i));
+    expect(projection).toContain('`RoomType`.`id`');
+    expect(projection).toContain('`RoomType`.`name`');
+    for (const nonResponseColumn of [
+      'description',
+      'created_at',
+      'updated_at',
+    ]) {
+      expect(projection).not.toContain(nonResponseColumn);
+    }
+  });
+
+  it('serializes distinct idempotency claims at the shared room lock', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const mutation = dataSource.createQueryRunner();
+    await mutation.connect();
+    await mutation.startTransaction();
+
+    try {
+      await lockRoom(mutation.manager, roomTime.roomId);
+      const queries = jest.spyOn(dataSource.logger, 'logQuery');
+      const input = {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOut,
+      };
+      const first = bookings.create(
+        user.id,
+        'booking-create-concurrent-one',
+        input,
+      );
+      const second = bookings.create(
+        user.id,
+        'booking-create-concurrent-two',
+        input,
+      );
+
+      await waitForQueryCount(queries, /INSERT INTO idempotency_keys/i, 2);
+      expect(
+        queries.mock.calls.filter(([sql]) => /FROM `room_times` /i.test(sql)),
+      ).toHaveLength(0);
+      await mutation.commitTransaction();
+
+      await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+      expect(await dataSource.getRepository(Booking).count()).toBe(2);
+      expect(await dataSource.getRepository(IdempotencyKey).count()).toBe(2);
+    } finally {
+      if (mutation.isTransactionActive) await mutation.rollbackTransaction();
+      await mutation.release();
+      jest.restoreAllMocks();
+    }
+  });
+
   it('rolls back the idempotency claim when no active window contains the stay', async () => {
     const { user, roomTime } = await createBookingGraph();
 
@@ -518,6 +592,22 @@ async function waitForQuery(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Expected query matching ${pattern.source}`);
+}
+
+async function waitForQueryCount(
+  queries: jest.SpiedFunction<DataSource['logger']['logQuery']>,
+  pattern: RegExp,
+  expectedCount: number,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const matches = queries.mock.calls.filter(([sql]) => pattern.test(sql));
+    if (matches.length >= expectedCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(
+    `Expected ${expectedCount} queries matching ${pattern.source}`,
+  );
 }
 
 function bookingFixtureDates(): {

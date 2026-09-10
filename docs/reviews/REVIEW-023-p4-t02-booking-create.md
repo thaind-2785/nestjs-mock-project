@@ -1,0 +1,59 @@
+# REVIEW-023: P4-T02 booking creation
+
+- Spec / plan: `SPEC-006`, `PLAN-007` (P4-T02), `ADR-0002`, `ADR-0005`
+- Author: Codex primary agent
+- Independent reviewer: Codex review agent (read-only; did not author the change)
+- Commit/revision reviewed: uncommitted working tree over `1ad8717`
+- Date: 2026-09-10
+- Verdict: Approve after fixes (all findings closed)
+
+## Verification performed
+
+- Compared the implementation with the Phase 3 mentor follow-ups in `REVIEW-020`,
+  `REVIEW-021`, and `REVIEW-022`, particularly transport boundaries, limiter order,
+  physical-room locking, deterministic race evidence, error contracts, and
+  observability.
+- Read the P4-T02 route, DTO, limiter guard, service, helpers, locale/error registry,
+  OpenAPI decorators, MySQL integration test, and HTTP E2E test.
+- Re-ran focused unit tests (21/21), TypeScript typecheck, ESLint, and whitespace
+  check. Author-provided focused MySQL integration (7/7) and HTTP E2E (1/1) were
+  reviewed as evidence; this review did not rerun them.
+- The initial review found a High idempotency-ordering defect: a retry whose check-in
+  had since passed could fail date validation before replay. The author moved date
+  policy after completed-key replay and added `bookings.service.spec.ts`; the focused
+  unit rerun covers the corrected order.
+- Post-review fixes passed the full `MYSQL_PORT=13306 npm run verify` gate. A second
+  read-only re-review was requested, but the workspace reported insufficient review
+  credits before that agent could inspect the tree. The initial independent review,
+  explicit finding dispositions below, mutation evidence, and full gate are the
+  available review evidence for this PR.
+
+## Findings
+
+| ID      | Severity | Evidence (file:line/test)                                                        | Impact                                                                                                                                            | Required fix                                                                                                                                                         | Owner | Disposition | Verification                                                                                                                                                                                  |
+| ------- | -------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HIGH-01 | High     | `src/bookings/bookings.service.ts` before fix                                    | Completed retries were date-validated before the idempotency row was read, so a retry after check-in could lose its original `201` replay.        | Replay/conflict-check the completed key before new-request date policy; add regression coverage.                                                                     | Codex | Fixed       | `src/bookings/bookings.service.spec.ts` replays a completed request with past dates; unit suite 20/20 passes.                                                                                 |
+| MED-01  | Medium   | `test/booking-foundation.integration-spec.ts` race test                          | Fixed `delay(50)` did not prove creation reached `lockRoom`; the test could pass from scheduling delay or the room-time lock alone.               | Replace the delay with an explicit database-query barrier and prove the create waits specifically at the room lock; add a mutation check removing/moving `lockRoom`. | Codex | Fixed       | The test waits for `rooms ... FOR UPDATE`, asserts no `room_times` query precedes it, and verifies the later window read. Removing the lock makes the test fail on the missing room-lock SQL. |
+| MED-02  | Medium   | `test/booking-foundation.integration-spec.ts`; `test/booking-create.e2e-spec.ts` | Hard-coded `2026-10-*` future dates would become past dates and cause unrelated failures as time advances.                                        | Freeze/inject the booking clock or generate valid future hotel dates in fixtures.                                                                                    | Codex | Fixed       | Both suites derive bounded future hotel dates from the test clock.                                                                                                                            |
+| MED-03  | Medium   | `src/bookings/bookings.service.ts`; `SPEC-006` observability section             | Create/replay/key-conflict paths emitted no structured, non-PII operational event. This repeated the observability lesson closed in `REVIEW-021`. | Add sanitized `booking_created`, idempotency-replay, and idempotency-conflict logs with focused tests.                                                               | Codex | Fixed       | Service emits the three event types after transaction outcome; focused unit/integration assertions cover replay, conflict, and creation without logging bodies, keys, or identities.          |
+| MED-04  | Medium   | `PLAN-007`; absent P4-T02 report before this file                                | The plan claimed completion without the required durable independent-review record or dispositions.                                               | Store this report and keep P4-T02 in progress until MED-01 through MED-03 are closed.                                                                                | Codex | Fixed       | `REVIEW-023` created; plan status corrected.                                                                                                                                                  |
+
+## Review checklist
+
+- [x] Acceptance criteria and scope
+- [x] API compatibility and validation
+- [x] Authentication, authorization, secrets, and privacy
+- [x] Transactions, constraints, concurrency, and idempotency
+- [x] External failure/retry behavior
+- [x] Tests would fail before the fix
+- [x] Logging, metrics, health, deploy, and rollback
+- [x] Docs, OpenAPI, migrations, and locale files
+
+## Residual risk and follow-up
+
+- No recurrence was found of the earlier mentor findings that moved business logic
+  into controllers, accepted client-selected window/owner data, charged a limiter
+  after body handling, bypassed the physical-room lock, or omitted localized error
+  and Swagger contracts.
+- P4-T02 has no open review finding. A full `npm run verify` is run for this PR;
+  P4-T07 remains responsible for the final phase-wide review after later slices.

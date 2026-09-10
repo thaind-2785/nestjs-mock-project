@@ -70,7 +70,7 @@
   the room, verifies `ACTIVE`, resolves and locks the window, snapshots price, writes
   booking/history, and stores the replay response. No network call occurs inside the
   transaction. Review and lock the ULID dependency before use.
-- **Status:** Pending.
+- **Status:** Complete (2026-09-10; `REVIEW-023` findings closed).
 
 ### P4-T03 — User history, detail, and cancellation
 
@@ -233,6 +233,19 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   4/4 (schema, UTC mapping, round trip, constraints/FKs, and revert/reapply), plus
   the application-module integration 1/1. Docker Compose smoke passed for MySQL,
   Redis, MinIO, and Mailpit before the integration run.
+- 2026-09-10: `P4-T02` added authenticated user booking creation with the shared
+  fail-closed Redis limiter, strict hotel-date validation, a monotonic ULID helper,
+  canonical request fingerprints, and an atomic idempotency/room-lock/window/price/
+  history write. The ULID helper is an equivalent reviewed local implementation:
+  it uses 48-bit millisecond time plus 80-bit cryptographic randomness and increments
+  the random component for calls in the same millisecond, avoiding a new dependency.
+  Focused evidence: 21 unit tests, 7 real-MySQL integration tests (including the
+  controlled create-versus-room-time-deactivation race), and 1 full API E2E journey
+  for guest/user/admin RBAC, create, replay, key-reuse conflict, and rate limiting;
+  typecheck, lint, formatting, and whitespace checks passed. `REVIEW-023` findings
+  are closed: the lock test has an SQL barrier plus a lock-removal mutation proof,
+  fixtures derive future dates, and structured non-PII booking events are tested.
+  The full `MYSQL_PORT=13306 npm run verify` gate passed before PR handoff.
 - Later implementation-only choices remain subject to evidence and review. Record
   every durable decision here and in the appropriate ADR before changing its
   contract.

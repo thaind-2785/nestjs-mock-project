@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import mysql from 'mysql2/promise';
 import { DataSource, getMetadataArgsStorage } from 'typeorm';
 import { AuthIdentity } from '../src/auth/entities/auth-identity.entity';
@@ -14,6 +15,9 @@ import {
 import { Booking } from '../src/bookings/entities/booking.entity';
 import { IdempotencyKey } from '../src/bookings/entities/idempotency-key.entity';
 import { OutboxEvent } from '../src/bookings/entities/outbox-event.entity';
+import { BookingsService } from '../src/bookings/bookings.service';
+import { BookingCreateResponse } from '../src/bookings/booking-create.types';
+import { createBookingsConfiguration } from '../src/config/bookings.config';
 import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
@@ -27,6 +31,7 @@ import { RoomTime } from '../src/rooms/entities/room-time.entity';
 import { RoomType } from '../src/rooms/entities/room-type.entity';
 import { Room } from '../src/rooms/entities/room.entity';
 import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
+import { lockRoom } from '../src/rooms/room-lock';
 import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
@@ -34,10 +39,13 @@ import { UserRole, UserStatus } from '../src/users/entities/user.enums';
 
 jest.setTimeout(30_000);
 
+const fixtureDates = bookingFixtureDates();
+
 describe('Phase 4 booking foundation persistence', () => {
   let dataSource: DataSource;
   let adminConnection: mysql.Connection;
   let disposableDatabase: string;
+  let bookings: BookingsService;
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
@@ -98,6 +106,10 @@ describe('Phase 4 booking foundation persistence', () => {
     );
     await dataSource.initialize();
     await dataSource.runMigrations();
+    bookings = new BookingsService(
+      dataSource,
+      createBookingsConfiguration(environment),
+    );
   });
 
   beforeEach(async () => {
@@ -139,8 +151,8 @@ describe('Phase 4 booking foundation persistence', () => {
       publicId: '01K4N8G4X8R0K1F2Q7V6S9T3AB',
       userId: user.id,
       roomTimeId: roomTime.id,
-      checkIn: '2026-10-01',
-      checkOut: '2026-10-04',
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
       status: BookingStatus.Pending,
       priceAmount: '4500000',
       currency: 'VND',
@@ -159,18 +171,18 @@ describe('Phase 4 booking foundation persistence', () => {
     const idempotency = await dataSource.getRepository(IdempotencyKey).save({
       actorUserId: user.id,
       operation: 'BOOKING_CREATE',
-      idempotencyKey: 'booking-create-2026-10-01',
+      idempotencyKey: 'booking-foundation-pending',
       requestFingerprint: 'a'.repeat(64),
       status: IdempotencyKeyStatus.Pending,
       responseStatus: null,
       responseBody: null,
-      expiresAt: new Date('2026-09-10T00:00:00.000Z'),
+      expiresAt: fixtureDates.expiresAt,
     });
     const outbox = await dataSource.getRepository(OutboxEvent).save({
       id: randomUUID(),
       eventType: 'booking.confirmed',
       payload: { schemaVersion: 1, bookingId: booking.publicId },
-      availableAt: new Date('2026-09-09T00:00:00.000Z'),
+      availableAt: fixtureDates.expiresAt,
       status: OutboxEventStatus.Pending,
       idempotencyKey: `booking.confirmed:${booking.publicId}:2`,
       lockedAt: null,
@@ -180,8 +192,8 @@ describe('Phase 4 booking foundation persistence', () => {
       attempts: 0,
     });
 
-    expect(booking.checkIn).toBe('2026-10-01');
-    expect(booking.checkOut).toBe('2026-10-04');
+    expect(booking.checkIn).toBe(fixtureDates.checkIn);
+    expect(booking.checkOut).toBe(fixtureDates.checkOut);
     expect(booking.version).toBe('1');
     expect(booking.createdAt).toBeInstanceOf(Date);
     expect(statusHistory.createdAt).toBeInstanceOf(Date);
@@ -196,8 +208,8 @@ describe('Phase 4 booking foundation persistence', () => {
       publicId: '01K4N8G4X8R0K1F2Q7V6S9T3AB',
       userId: user.id,
       roomTimeId: roomTime.id,
-      checkIn: '2026-10-01',
-      checkOut: '2026-10-04',
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
       status: BookingStatus.Pending,
       priceAmount: '4500000',
       currency: 'VND',
@@ -209,8 +221,8 @@ describe('Phase 4 booking foundation persistence', () => {
         publicId: '01K4N8G4X8R0K1F2Q7V6S9T3AC',
         userId: user.id,
         roomTimeId: roomTime.id,
-        checkIn: '2026-10-04',
-        checkOut: '2026-10-04',
+        checkIn: fixtureDates.checkOut,
+        checkOut: fixtureDates.checkOut,
         status: BookingStatus.Pending,
         priceAmount: '4500000',
         currency: 'VND',
@@ -227,7 +239,7 @@ describe('Phase 4 booking foundation persistence', () => {
         status: IdempotencyKeyStatus.Completed,
         responseStatus: null,
         responseBody: null,
-        expiresAt: new Date('2026-09-10T00:00:00.000Z'),
+        expiresAt: fixtureDates.expiresAt,
       }),
     ).rejects.toBeDefined();
 
@@ -256,6 +268,163 @@ describe('Phase 4 booking foundation persistence', () => {
       reason: null,
     });
     await expect(bookingRepository.delete(booking.id)).rejects.toBeDefined();
+  });
+
+  it('creates one pending booking atomically and replays an identical request', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const input = {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    };
+
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    let created: BookingCreateResponse;
+    let replayed: BookingCreateResponse;
+    try {
+      created = await bookings.create(
+        user.id,
+        'booking-create-retry-key',
+        input,
+        'request-create',
+      );
+      replayed = await bookings.create(
+        user.id,
+        'booking-create-retry-key',
+        input,
+        'request-replay',
+      );
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'booking_created',
+          requestId: 'request-create',
+          operation: 'BOOKING_CREATE',
+          actorType: 'USER',
+          publicBookingId: created.id,
+          result: 'created',
+        }),
+      );
+    } finally {
+      log.mockRestore();
+    }
+
+    expect(created).toMatchObject({
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+      nights: 3,
+      status: 'PENDING',
+      price: { amount: 4_500_000, currency: 'VND' },
+    });
+    expect(created.id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(replayed).toEqual(created);
+    expect(await dataSource.getRepository(Booking).count()).toBe(1);
+    expect(await dataSource.getRepository(BookingStatusHistory).count()).toBe(
+      1,
+    );
+
+    const idempotency = await dataSource
+      .getRepository(IdempotencyKey)
+      .findOneByOrFail({
+        actorUserId: user.id,
+        operation: 'BOOKING_CREATE',
+        idempotencyKey: 'booking-create-retry-key',
+      });
+    expect(idempotency.status).toBe(IdempotencyKeyStatus.Completed);
+    expect(idempotency.responseStatus).toBe(201);
+    expect(idempotency.responseBody).toEqual(created);
+
+    await expect(
+      bookings.create(user.id, 'booking-create-retry-key', {
+        ...input,
+        checkOut: fixtureDates.checkOutDifferent,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'IDEMPOTENCY_KEY_REUSED',
+    });
+    expect(await dataSource.getRepository(Booking).count()).toBe(1);
+    expect(await dataSource.getRepository(BookingStatusHistory).count()).toBe(
+      1,
+    );
+  });
+
+  it('rolls back the idempotency claim when no active window contains the stay', async () => {
+    const { user, roomTime } = await createBookingGraph();
+
+    await expect(
+      bookings.create(user.id, 'booking-create-no-window', {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.outsideCheckIn,
+        checkOut: fixtureDates.outsideCheckOut,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'BOOKING_WINDOW_UNAVAILABLE',
+    });
+
+    expect(await dataSource.getRepository(Booking).count()).toBe(0);
+    expect(await dataSource.getRepository(BookingStatusHistory).count()).toBe(
+      0,
+    );
+    expect(await dataSource.getRepository(IdempotencyKey).count()).toBe(0);
+  });
+
+  it('waits for a competing room-time deactivation, then observes its committed state', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const roomTimeRepository = dataSource.getRepository(RoomTime);
+    const mutation = dataSource.createQueryRunner();
+    await mutation.connect();
+    await mutation.startTransaction();
+
+    try {
+      // Room-time mutations use the same physical-room-first order. Holding that
+      // lock makes the create wait before it can resolve the active window.
+      await lockRoom(mutation.manager, roomTime.roomId);
+      const lockedWindow = await mutation.manager.findOneOrFail(RoomTime, {
+        where: { id: roomTime.id, roomId: roomTime.roomId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      lockedWindow.status = RoomTimeStatus.Inactive;
+      await mutation.manager.save(lockedWindow);
+
+      const queries = jest.spyOn(dataSource.logger, 'logQuery');
+      let createSettled = false;
+      const create = bookings
+        .create(user.id, 'booking-create-window-race', {
+          roomId: roomTime.roomId,
+          checkIn: fixtureDates.checkIn,
+          checkOut: fixtureDates.checkOut,
+        })
+        .finally(() => {
+          createSettled = true;
+        });
+
+      await waitForQuery(queries, /FROM `rooms` .*FOR UPDATE/i);
+      expect(createSettled).toBe(false);
+      expect(
+        queries.mock.calls.some(([sql]) => /FROM `room_times` /i.test(sql)),
+      ).toBe(false);
+      await mutation.commitTransaction();
+
+      await expect(create).rejects.toMatchObject({
+        errorCode: 'BOOKING_WINDOW_UNAVAILABLE',
+      });
+      expect(
+        queries.mock.calls.some(([sql]) =>
+          /FROM `room_times` .*FOR UPDATE/i.test(sql),
+        ),
+      ).toBe(true);
+      expect(
+        await roomTimeRepository.findOneByOrFail({ id: roomTime.id }),
+      ).toMatchObject({ status: RoomTimeStatus.Inactive });
+      expect(await dataSource.getRepository(Booking).count()).toBe(0);
+      expect(await dataSource.getRepository(BookingStatusHistory).count()).toBe(
+        0,
+      );
+      expect(await dataSource.getRepository(IdempotencyKey).count()).toBe(0);
+    } finally {
+      if (mutation.isTransactionActive) await mutation.rollbackTransaction();
+      await mutation.release();
+      jest.restoreAllMocks();
+    }
   });
 
   it('reverts only the Phase 4 schema and reapplies it cleanly', async () => {
@@ -318,8 +487,8 @@ describe('Phase 4 booking foundation persistence', () => {
     });
     const roomTime = await dataSource.getRepository(RoomTime).save({
       roomId: room.id,
-      availableFrom: '2026-10-01',
-      availableTo: '2026-12-01',
+      availableFrom: fixtureDates.availableFrom,
+      availableTo: fixtureDates.availableTo,
       status: RoomTimeStatus.Active,
     });
     return { user, roomTime };
@@ -338,3 +507,42 @@ describe('Phase 4 booking foundation persistence', () => {
     }
   });
 });
+
+async function waitForQuery(
+  queries: jest.SpiedFunction<DataSource['logger']['logQuery']>,
+  pattern: RegExp,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (queries.mock.calls.some(([sql]) => pattern.test(sql))) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Expected query matching ${pattern.source}`);
+}
+
+function bookingFixtureDates(): {
+  availableFrom: string;
+  checkIn: string;
+  checkOut: string;
+  checkOutDifferent: string;
+  availableTo: string;
+  outsideCheckIn: string;
+  outsideCheckOut: string;
+  expiresAt: Date;
+} {
+  const dateAt = (offsetDays: number) => {
+    const date = new Date();
+    date.setUTCDate(date.getUTCDate() + offsetDays);
+    return date.toISOString().slice(0, 10);
+  };
+  return {
+    availableFrom: dateAt(14),
+    checkIn: dateAt(21),
+    checkOut: dateAt(24),
+    checkOutDifferent: dateAt(25),
+    availableTo: dateAt(60),
+    outsideCheckIn: dateAt(61),
+    outsideCheckOut: dateAt(63),
+    expiresAt: new Date(Date.now() + 86_400_000),
+  };
+}

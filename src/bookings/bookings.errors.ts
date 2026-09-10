@@ -27,6 +27,18 @@ export const bookingsErrors = {
       'BOOKING_CREATE_UNAVAILABLE',
       errorMessageKeys.bookingCreateUnavailable,
     ),
+  notFound: () =>
+    new ApplicationException(
+      HttpStatus.NOT_FOUND,
+      'BOOKING_NOT_FOUND',
+      errorMessageKeys.bookingNotFound,
+    ),
+  statusConflict: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'BOOKING_STATUS_CONFLICT',
+      errorMessageKeys.bookingStatusConflict,
+    ),
   roomNotFound: () =>
     new ApplicationException(
       HttpStatus.NOT_FOUND,

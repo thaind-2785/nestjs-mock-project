@@ -84,7 +84,7 @@
   cancel E2E coverage.
 - **Notes:** Ownership belongs in every repository predicate rather than a post-query
   check. Only `CANCELLED_BY_USER` is an idempotent repeat of user cancellation.
-- **Status:** Pending.
+- **Status:** Complete (2026-09-10; `REVIEW-024` approved after fixes).
 
 ### P4-T04 — Admin approval and rejection
 
@@ -250,6 +250,17 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   room-type response projection, and uses a direct idempotency completion update. The
   full gate passed (unit 221/221, integration 77/77, E2E 23/23, build) and independent
   re-review approved the follow-up.
+- 2026-09-10: `P4-T03` added owner-scoped booking list/detail and `PENDING` user
+  cancellation. Reads use paired half-open date-overlap filters and stable
+  `createdAt DESC, id DESC` ordering; detail returns chronologically ordered immutable
+  history with an optional safe actor projection. Cancellation locks the owned booking,
+  appends exactly one history row in the same transaction, replays only an already
+  user-cancelled request, and records non-PII applied/replay/conflict outcomes. Focused
+  evidence covers default/filter/date-boundary/pagination reads, ownership, history
+  mapping, rollback, transition conflict, query shape, logs, and HTTP user/cross-owner/
+  admin journeys. Final verification passed: unit 221/221, integration 82/82, E2E
+  23/23, format, lint, typecheck, Harness, and build. `REVIEW-024` approved after
+  all findings were fixed.
 - Later implementation-only choices remain subject to evidence and review. Record
   every durable decision here and in the appropriate ADR before changing its
   contract.

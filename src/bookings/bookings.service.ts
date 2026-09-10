@@ -5,6 +5,7 @@ import {
   EntityManager,
   LessThanOrEqual,
   MoreThanOrEqual,
+  SelectQueryBuilder,
 } from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { RoomTimeStatus, RoomStatus } from '../rooms/entities/room.enums';
@@ -30,9 +31,16 @@ import {
   BookingCreateInput,
   BookingCreateResponse,
 } from './booking-create.types';
+import { UserBookingQueryDto } from './dto/user-booking-query.dto';
 import { bookingsErrors } from './bookings.errors';
+import {
+  PaginatedUserBookingsResponse,
+  UserBookingDetailResponse,
+  UserBookingResponse,
+} from './user-booking.types';
 
 const bookingCreateOperation = 'BOOKING_CREATE';
+const bookingCancelOperation = 'BOOKING_CANCEL';
 const idempotencyKeyPattern = /^[A-Za-z0-9._:-]{8,128}$/;
 
 interface BookingCreateTransactionResult {
@@ -96,6 +104,171 @@ export class BookingsService {
       }
       throw error;
     }
+  }
+
+  async listOwn(
+    actorUserId: string,
+    query: UserBookingQueryDto,
+  ): Promise<PaginatedUserBookingsResponse> {
+    assertBookingFilterRange(query);
+    const builder = this.ownBookingSummaryQuery(
+      this.dataSource.manager,
+      actorUserId,
+    );
+    if (query.status) builder.andWhere('booking.status = :status', query);
+    if (query.from && query.to) {
+      builder.andWhere(
+        'booking.check_in < :to AND booking.check_out > :from',
+        query,
+      );
+    }
+    const [bookings, total] = await builder
+      .orderBy('booking.createdAt', 'DESC')
+      .addOrderBy('booking.id', 'DESC')
+      .skip((query.page - 1) * query.pageSize)
+      .take(query.pageSize)
+      .getManyAndCount();
+    return {
+      items: bookings.map(toUserBookingResponse),
+      page: query.page,
+      pageSize: query.pageSize,
+      total,
+    };
+  }
+
+  async getOwn(
+    actorUserId: string,
+    bookingPublicId: string,
+  ): Promise<UserBookingDetailResponse> {
+    return this.getOwnDetail(
+      this.dataSource.manager,
+      actorUserId,
+      bookingPublicId,
+    );
+  }
+
+  async cancelOwn(
+    actorUserId: string,
+    bookingPublicId: string,
+    requestId?: string,
+  ): Promise<UserBookingDetailResponse> {
+    try {
+      const result = await this.dataSource.transaction(async (manager) => {
+        const booking = await manager.findOne(Booking, {
+          where: { publicId: bookingPublicId, userId: actorUserId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!booking) throw bookingsErrors.notFound();
+        if (booking.status === BookingStatus.CancelledByUser) return true;
+        if (booking.status !== BookingStatus.Pending) {
+          throw bookingsErrors.statusConflict();
+        }
+        booking.status = BookingStatus.CancelledByUser;
+        await manager.save(booking);
+        await manager.insert(BookingStatusHistory, {
+          bookingId: booking.id,
+          fromStatus: BookingStatus.Pending,
+          toStatus: BookingStatus.CancelledByUser,
+          actorType: BookingActorType.User,
+          actorUserId,
+          reason: null,
+        });
+        return false;
+      });
+      const response = await this.getOwn(actorUserId, bookingPublicId);
+      this.logger.log({
+        event: result ? 'booking_cancel_replayed' : 'booking_cancelled_by_user',
+        requestId,
+        operation: bookingCancelOperation,
+        actorType: BookingActorType.User,
+        publicBookingId: response.id,
+        result: result ? 'replayed' : 'cancelled',
+      });
+      return response;
+    } catch (error) {
+      if (
+        error instanceof ApplicationException &&
+        error.errorCode === 'BOOKING_STATUS_CONFLICT'
+      ) {
+        this.logger.warn({
+          event: 'booking_cancel_conflict',
+          requestId,
+          operation: bookingCancelOperation,
+          actorType: BookingActorType.User,
+          result: 'conflict',
+          errorCode: error.errorCode,
+        });
+      }
+      throw error;
+    }
+  }
+
+  private ownBookingSummaryQuery(
+    manager: EntityManager,
+    actorUserId: string,
+  ): SelectQueryBuilder<Booking> {
+    return manager
+      .getRepository(Booking)
+      .createQueryBuilder('booking')
+      .innerJoinAndSelect('booking.roomTime', 'roomTime')
+      .innerJoinAndSelect('roomTime.room', 'room')
+      .innerJoinAndSelect('room.roomType', 'roomType')
+      .where('booking.user_id = :actorUserId', { actorUserId })
+      .select([
+        'booking.id',
+        'booking.publicId',
+        'booking.userId',
+        'booking.roomTimeId',
+        'booking.checkIn',
+        'booking.checkOut',
+        'booking.status',
+        'booking.priceAmount',
+        'booking.currency',
+        'booking.rejectionReason',
+        'booking.version',
+        'booking.createdAt',
+        'booking.updatedAt',
+        'roomTime.id',
+        'roomTime.roomId',
+        'room.id',
+        'room.roomTypeId',
+        'room.roomNumber',
+        'roomType.id',
+        'roomType.name',
+      ]);
+  }
+
+  private async getOwnDetail(
+    manager: EntityManager,
+    actorUserId: string,
+    bookingPublicId: string,
+  ): Promise<UserBookingDetailResponse> {
+    const booking = await this.ownBookingSummaryQuery(manager, actorUserId)
+      .andWhere('booking.public_id = :bookingPublicId', { bookingPublicId })
+      .getOne();
+    if (!booking) throw bookingsErrors.notFound();
+    const history = await manager
+      .getRepository(BookingStatusHistory)
+      .createQueryBuilder('history')
+      .leftJoinAndSelect('history.actorUser', 'actor')
+      .where('history.booking_id = :bookingId', { bookingId: booking.id })
+      .select([
+        'history.id',
+        'history.fromStatus',
+        'history.toStatus',
+        'history.actorType',
+        'history.reason',
+        'history.createdAt',
+        'actor.id',
+        'actor.displayName',
+      ])
+      .orderBy('history.createdAt', 'ASC')
+      .addOrderBy('history.id', 'ASC')
+      .getMany();
+    return {
+      ...toUserBookingResponse(booking),
+      history: history.map(toHistoryResponse),
+    };
   }
 
   private async createInTransaction(
@@ -284,4 +457,56 @@ function toCreateResponse(
     createdAt: booking.createdAt.toISOString(),
     updatedAt: booking.updatedAt.toISOString(),
   };
+}
+
+function toUserBookingResponse(booking: Booking): UserBookingResponse {
+  const room = booking.roomTime.room;
+  return {
+    id: booking.publicId,
+    room: {
+      id: room.id,
+      roomNumber: room.roomNumber,
+      roomType: { id: room.roomType.id, name: room.roomType.name },
+    },
+    checkIn: booking.checkIn,
+    checkOut: booking.checkOut,
+    nights: Math.round(
+      (Date.parse(`${booking.checkOut}T00:00:00Z`) -
+        Date.parse(`${booking.checkIn}T00:00:00Z`)) /
+        86_400_000,
+    ),
+    status: booking.status,
+    price: { amount: Number(booking.priceAmount), currency: booking.currency },
+    rejectionReason: booking.rejectionReason,
+    version: Number(booking.version),
+    createdAt: booking.createdAt.toISOString(),
+    updatedAt: booking.updatedAt.toISOString(),
+  };
+}
+
+function toHistoryResponse(history: BookingStatusHistory) {
+  return {
+    fromStatus: history.fromStatus,
+    toStatus: history.toStatus,
+    actorType: history.actorType,
+    ...(history.actorUser
+      ? {
+          actor: {
+            id: history.actorUser.id,
+            displayName: history.actorUser.displayName,
+          },
+        }
+      : {}),
+    reason: history.reason,
+    createdAt: history.createdAt.toISOString(),
+  };
+}
+
+function assertBookingFilterRange(query: UserBookingQueryDto): void {
+  if ((query.from === undefined) !== (query.to === undefined)) {
+    throw bookingsErrors.stayInvalid();
+  }
+  if (query.from && query.to && query.from >= query.to) {
+    throw bookingsErrors.stayInvalid();
+  }
 }

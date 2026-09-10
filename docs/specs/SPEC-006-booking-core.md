@@ -314,17 +314,17 @@ application rollback or forward migration and does not drop Phase 4 data.
 
 ## Acceptance criteria
 
-- [ ] Given an active user, active room, and containing active window, when the user
+- [x] Given an active user, active room, and containing active window, when the user
       creates a valid request with a new idempotency key, then one `PENDING` booking,
       one `null -> PENDING` history row, one completed idempotency row, and the
       snapshotted total price commit atomically.
-- [ ] Given the same user, key, and canonical body, when creation is retried, then the
+- [x] Given the same user, key, and canonical body, when creation is retried, then the
       original `201` response is replayed and no duplicate side effect exists; a
       different body with that key returns `409 IDEMPOTENCY_KEY_REUSED`.
-- [ ] Given an inactive/maintenance room, invalid/past date range, or no containing
+- [x] Given an inactive/maintenance room, invalid/past date range, or no containing
       active window, creation fails with the documented code and writes no partial
       booking, history, or idempotency result.
-- [ ] Given a concurrent booking create and room-window edit/deactivation, then lock
+- [x] Given a concurrent booking create and room-window edit/deactivation, then lock
       ordering makes creation observe either the complete before-state or after-state
       and never bind a stale window.
 - [ ] Given overlapping pending requests, both may exist and public availability
@@ -335,9 +335,9 @@ application rollback or forward migration and does not drop Phase 4 data.
 - [ ] Given an overlapping confirmed booking under another/legacy window of the same
       room, approval and confirmed edit still reject the conflict.
 - [ ] Given adjacent confirmed stays, approval succeeds because checkout is exclusive.
-- [ ] Given a user list/detail request, only that user's bookings are returned; a
+- [x] Given a user list/detail request, only that user's bookings are returned; a
       cross-owner public ID is indistinguishable from an absent one.
-- [ ] Given a pending owned booking, user cancellation applies once and an identical
+- [x] Given a pending owned booking, user cancellation applies once and an identical
       retry is side-effect free; cancellation from any other status conflicts.
 - [ ] Given reject or admin-cancel without a non-empty bounded reason, validation
       fails; a successful transition writes status history and its outbox event in

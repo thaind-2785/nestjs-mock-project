@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import mysql from 'mysql2/promise';
-import { DataSource, getMetadataArgsStorage } from 'typeorm';
+import { DataSource, EntityManager, getMetadataArgsStorage } from 'typeorm';
 import { AuthIdentity } from '../src/auth/entities/auth-identity.entity';
 import { AuthSession } from '../src/auth/entities/auth-session.entity';
 import { BookingChangeHistory } from '../src/bookings/entities/booking-change-history.entity';
@@ -439,6 +439,243 @@ describe('Phase 4 booking foundation persistence', () => {
       0,
     );
     expect(await dataSource.getRepository(IdempotencyKey).count()).toBe(0);
+  });
+
+  it('lists, reads, and idempotently cancels only the booking owner records', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const created = await bookings.create(user.id, 'booking-user-cancel', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+
+    await expect(bookings.getOwn('999999', created.id)).rejects.toMatchObject({
+      errorCode: 'BOOKING_NOT_FOUND',
+    });
+    await expect(
+      bookings.listOwn(user.id, {
+        page: 1,
+        pageSize: 20,
+        status: BookingStatus.Pending,
+      }),
+    ).resolves.toMatchObject({ total: 1, items: [{ id: created.id }] });
+
+    const cancelled = await bookings.cancelOwn(user.id, created.id);
+    const replayed = await bookings.cancelOwn(user.id, created.id);
+    expect(cancelled.status).toBe(BookingStatus.CancelledByUser);
+    expect(replayed).toEqual(cancelled);
+    expect(cancelled.history).toHaveLength(2);
+    expect(cancelled.history.map((entry) => entry.toStatus)).toEqual([
+      BookingStatus.Pending,
+      BookingStatus.CancelledByUser,
+    ]);
+    expect(cancelled.history[0]).toMatchObject({
+      actorType: BookingActorType.User,
+      actor: { id: user.id, displayName: user.displayName },
+    });
+    await expect(
+      bookings.cancelOwn('999999', created.id),
+    ).rejects.toMatchObject({
+      errorCode: 'BOOKING_NOT_FOUND',
+    });
+  });
+
+  it('logs sanitized user-cancellation outcomes for apply, replay, and conflict', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const cancellable = await bookings.create(user.id, 'booking-cancel-log', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const conflicting = await bookings.create(
+      user.id,
+      'booking-cancel-log-conflict',
+      {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOut,
+      },
+    );
+    await dataSource
+      .getRepository(Booking)
+      .update(
+        { publicId: conflicting.id },
+        { status: BookingStatus.Confirmed },
+      );
+
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    try {
+      await bookings.cancelOwn(user.id, cancellable.id, 'request-cancel-apply');
+      await bookings.cancelOwn(
+        user.id,
+        cancellable.id,
+        'request-cancel-replay',
+      );
+      await expect(
+        bookings.cancelOwn(user.id, conflicting.id, 'request-cancel-conflict'),
+      ).rejects.toMatchObject({ errorCode: 'BOOKING_STATUS_CONFLICT' });
+
+      expect(log).toHaveBeenCalledTimes(2);
+      expect(log).toHaveBeenCalledWith({
+        event: 'booking_cancelled_by_user',
+        requestId: 'request-cancel-apply',
+        operation: 'BOOKING_CANCEL',
+        actorType: BookingActorType.User,
+        publicBookingId: cancellable.id,
+        result: 'cancelled',
+      });
+      expect(log).toHaveBeenCalledWith({
+        event: 'booking_cancel_replayed',
+        requestId: 'request-cancel-replay',
+        operation: 'BOOKING_CANCEL',
+        actorType: BookingActorType.User,
+        publicBookingId: cancellable.id,
+        result: 'replayed',
+      });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith({
+        event: 'booking_cancel_conflict',
+        requestId: 'request-cancel-conflict',
+        operation: 'BOOKING_CANCEL',
+        actorType: BookingActorType.User,
+        result: 'conflict',
+        errorCode: 'BOOKING_STATUS_CONFLICT',
+      });
+    } finally {
+      log.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it('applies half-open date overlap filters and stable pagination to the owner history', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const first = await bookings.create(user.id, 'booking-list-first', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const second = await bookings.create(user.id, 'booking-list-second', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    await dataSource.query(
+      'UPDATE bookings SET created_at = ? WHERE public_id IN (?, ?)',
+      ['2026-01-01 00:00:00.000000', first.id, second.id],
+    );
+
+    await expect(
+      bookings.listOwn(user.id, {
+        page: 1,
+        pageSize: 20,
+        from: fixtureDates.checkOut,
+        to: fixtureDates.checkOutDifferent,
+      }),
+    ).resolves.toMatchObject({ total: 0, items: [] });
+    await expect(
+      bookings.listOwn(user.id, {
+        page: 1,
+        pageSize: 1,
+        from: fixtureDates.checkIn,
+        to: fixtureDates.checkOut,
+      }),
+    ).resolves.toMatchObject({
+      total: 2,
+      items: [{ id: second.id }],
+    });
+    await expect(
+      bookings.listOwn(user.id, {
+        page: 2,
+        pageSize: 1,
+      }),
+    ).resolves.toMatchObject({ items: [{ id: first.id }] });
+  });
+
+  it('rejects non-pending cancellation and rolls back a failed history append', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const confirmed = await bookings.create(
+      user.id,
+      'booking-cancel-confirmed',
+      {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOut,
+      },
+    );
+    await dataSource
+      .getRepository(Booking)
+      .update({ publicId: confirmed.id }, { status: BookingStatus.Confirmed });
+    await expect(
+      bookings.cancelOwn(user.id, confirmed.id),
+    ).rejects.toMatchObject({
+      errorCode: 'BOOKING_STATUS_CONFLICT',
+    });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        bookingId: (
+          await dataSource.getRepository(Booking).findOneByOrFail({
+            publicId: confirmed.id,
+          })
+        ).id,
+      }),
+    ).toBe(1);
+
+    const pending = await bookings.create(user.id, 'booking-cancel-rollback', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const insert = jest
+      .spyOn(EntityManager.prototype, 'insert')
+      .mockRejectedValue(new Error('forced booking history append failure'));
+    try {
+      await expect(bookings.cancelOwn(user.id, pending.id)).rejects.toThrow(
+        'forced booking history append failure',
+      );
+    } finally {
+      insert.mockRestore();
+    }
+    expect(
+      await dataSource.getRepository(Booking).findOneByOrFail({
+        publicId: pending.id,
+      }),
+    ).toMatchObject({ status: BookingStatus.Pending });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        bookingId: (
+          await dataSource.getRepository(Booking).findOneByOrFail({
+            publicId: pending.id,
+          })
+        ).id,
+      }),
+    ).toBe(1);
+  });
+
+  it('projects only booking-history fields needed by the user response', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    await bookings.create(user.id, 'booking-projection-shape', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const queries = jest.spyOn(dataSource.logger, 'logQuery');
+    try {
+      await bookings.listOwn(user.id, { page: 1, pageSize: 20 });
+      const query = queries.mock.calls
+        .map(([sql]) => sql)
+        .find((sql) => /FROM `bookings` `booking`/i.test(sql));
+      expect(query).toBeDefined();
+      expect(query).toContain('`booking`.`public_id`');
+      expect(query).toContain('`room`.`room_number`');
+      expect(query).toContain('`roomType`.`name`');
+      expect(query).not.toContain('`room`.`base_price_amount`');
+      expect(query).not.toContain('`room`.`bed_count`');
+      expect(query).not.toContain('`roomTime`.`available_from`');
+      expect(query).not.toContain('`roomType`.`description`');
+    } finally {
+      queries.mockRestore();
+    }
   });
 
   it('waits for a competing room-time deactivation, then observes its committed state', async () => {

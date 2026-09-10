@@ -39,6 +39,18 @@ export const bookingsErrors = {
       'BOOKING_STATUS_CONFLICT',
       errorMessageKeys.bookingStatusConflict,
     ),
+  stateChanged: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'BOOKING_STATE_CHANGED',
+      errorMessageKeys.bookingStateChanged,
+    ),
+  roomAlreadyBooked: () =>
+    new ApplicationException(
+      HttpStatus.CONFLICT,
+      'ROOM_ALREADY_BOOKED',
+      errorMessageKeys.roomAlreadyBooked,
+    ),
   roomNotFound: () =>
     new ApplicationException(
       HttpStatus.NOT_FOUND,

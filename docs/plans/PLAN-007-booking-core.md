@@ -99,7 +99,7 @@
 - **Notes:** Use one shared room-wide confirmed-overlap query. The concurrency test
   uses two independent transactions and asserts database history/outbox state, not
   only HTTP statuses. Retries must not duplicate logical events.
-- **Status:** Pending.
+- **Status:** Complete (2026-09-10; `REVIEW-025` approved after fixes).
 
 ### P4-T05 — Admin edit and cancellation
 
@@ -261,6 +261,14 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   admin journeys. Final verification passed: unit 221/221, integration 82/82, E2E
   23/23, format, lint, typecheck, Harness, and build. `REVIEW-024` approved after
   all findings were fixed.
+- 2026-09-10: `P4-T04` added admin booking list/detail plus locked approval and
+  rejection. Approval serializes on the physical room, revalidates its window, and
+  checks confirmed overlap across every room window before writing status history and
+  a uniquely keyed outbox intent. Evidence includes same-booking and competing
+  approval concurrency, legacy-window overlap, adjacency, outbox rollback, filters,
+  RBAC, and HTTP transitions. Final verification passed: unit 221/221, integration
+  87/87, E2E 23/23, format, lint, typecheck, Harness, and build; `REVIEW-025`
+  approved after fixes.
 - Later implementation-only choices remain subject to evidence and review. Record
   every durable decision here and in the appropriate ADR before changing its
   contract.

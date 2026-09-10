@@ -678,6 +678,212 @@ describe('Phase 4 booking foundation persistence', () => {
     }
   });
 
+  it('serializes overlapping approvals and commits exactly one history and outbox event', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const first = await bookings.create(user.id, 'booking-approve-first', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const second = await bookings.create(user.id, 'booking-approve-second', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+
+    const results = await Promise.allSettled([
+      bookings.approve({ actorUserId: admin.id, bookingPublicId: first.id }),
+      bookings.approve({ actorUserId: admin.id, bookingPublicId: second.id }),
+    ]);
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === 'rejected'),
+    ).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({
+      reason: { errorCode: 'ROOM_ALREADY_BOOKED' },
+    });
+    expect(
+      await dataSource
+        .getRepository(Booking)
+        .countBy({ status: BookingStatus.Confirmed }),
+    ).toBe(1);
+    const outbox = await dataSource
+      .getRepository(OutboxEvent)
+      .findOneByOrFail({ eventType: 'booking.confirmed' });
+    expect(outbox.idempotencyKey).toMatch(
+      /^booking\.confirmed:[0-9A-HJKMNP-TV-Z]{26}:2$/,
+    );
+    expect(outbox.payload).toMatchObject({
+      schemaVersion: 1,
+      bookingVersion: 2,
+      booking: { room: { id: roomTime.roomId, roomNumber: 'A-201' } },
+    });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        toStatus: BookingStatus.Confirmed,
+      }),
+    ).toBe(1);
+  });
+
+  it('replays concurrent approval of the same booking without duplicate effects', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'booking-approve-replay', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const results = await Promise.all([
+      bookings.approve({ actorUserId: admin.id, bookingPublicId: created.id }),
+      bookings.approve({ actorUserId: admin.id, bookingPublicId: created.id }),
+    ]);
+    expect(results.map((result) => result.status)).toEqual([
+      BookingStatus.Confirmed,
+      BookingStatus.Confirmed,
+    ]);
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        toStatus: BookingStatus.Confirmed,
+      }),
+    ).toBe(1);
+    expect(
+      await dataSource
+        .getRepository(OutboxEvent)
+        .countBy({ eventType: 'booking.confirmed' }),
+    ).toBe(1);
+  });
+
+  it('replays an identical rejection without duplicating history or its outbox event', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'booking-reject-replay', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const input = {
+      actorUserId: admin.id,
+      bookingPublicId: created.id,
+      reason: 'Requested dates are unavailable.',
+    };
+    const rejected = await bookings.reject(input);
+    const replayed = await bookings.reject(input);
+    expect(replayed).toEqual(rejected);
+    expect(rejected).toMatchObject({
+      status: BookingStatus.Rejected,
+      rejectionReason: input.reason,
+    });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        toStatus: BookingStatus.Rejected,
+      }),
+    ).toBe(1);
+    expect(
+      await dataSource
+        .getRepository(OutboxEvent)
+        .countBy({ eventType: 'booking.rejected' }),
+    ).toBe(1);
+    await expect(
+      bookings.listAdmin({
+        page: 1,
+        pageSize: 20,
+        status: BookingStatus.Rejected,
+        userId: user.id,
+        roomId: roomTime.roomId,
+      }),
+    ).resolves.toMatchObject({ total: 1, items: [{ id: created.id }] });
+  });
+
+  it('checks confirmed overlap across a legacy window but permits an adjacent stay', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const legacyWindow = await dataSource.getRepository(RoomTime).save({
+      roomId: roomTime.roomId,
+      availableFrom: fixtureDates.availableFrom,
+      availableTo: fixtureDates.availableTo,
+      status: RoomTimeStatus.Inactive,
+    });
+    await dataSource.getRepository(Booking).save({
+      publicId: '01M25YZZZZZZZZZZZZZZZZZZZZ',
+      userId: user.id,
+      roomTimeId: legacyWindow.id,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+      status: BookingStatus.Confirmed,
+      priceAmount: '4500000',
+      currency: 'VND',
+      rejectionReason: null,
+    });
+    const overlapping = await bookings.create(
+      user.id,
+      'booking-legacy-overlap',
+      {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOut,
+      },
+    );
+    await expect(
+      bookings.approve({
+        actorUserId: admin.id,
+        bookingPublicId: overlapping.id,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_ALREADY_BOOKED' });
+
+    const adjacent = await bookings.create(user.id, 'booking-legacy-adjacent', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkOut,
+      checkOut: fixtureDates.checkOutDifferent,
+    });
+    await expect(
+      bookings.approve({ actorUserId: admin.id, bookingPublicId: adjacent.id }),
+    ).resolves.toMatchObject({ status: BookingStatus.Confirmed });
+  });
+
+  it('rolls an approval back when its transition write cannot complete', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'booking-approve-rollback', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const insert = jest.spyOn(EntityManager.prototype, 'insert');
+    const originalInsert = insert.getMockImplementation();
+    insert.mockImplementation(function (target, values) {
+      if (target === OutboxEvent) {
+        return Promise.reject(new Error('forced outbox write failure'));
+      }
+      if (!originalInsert) throw new Error('missing EntityManager.insert');
+      return originalInsert.call(this, target, values) as Promise<never>;
+    });
+    try {
+      await expect(
+        bookings.approve({
+          actorUserId: admin.id,
+          bookingPublicId: created.id,
+        }),
+      ).rejects.toThrow('forced outbox write failure');
+    } finally {
+      insert.mockRestore();
+    }
+    expect(
+      await dataSource
+        .getRepository(Booking)
+        .findOneByOrFail({ publicId: created.id }),
+    ).toMatchObject({ status: BookingStatus.Pending });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        toStatus: BookingStatus.Confirmed,
+      }),
+    ).toBe(0);
+    expect(await dataSource.getRepository(OutboxEvent).count()).toBe(0);
+  });
+
   it('waits for a competing room-time deactivation, then observes its committed state', async () => {
     const { user, roomTime } = await createBookingGraph();
     const roomTimeRepository = dataSource.getRepository(RoomTime);
@@ -803,6 +1009,16 @@ describe('Phase 4 booking foundation persistence', () => {
       status: RoomTimeStatus.Active,
     });
     return { user, roomTime };
+  }
+
+  async function createAdminUser(): Promise<User> {
+    return dataSource.getRepository(User).save({
+      email: `booking-admin-${randomUUID()}@example.com`,
+      displayName: 'Booking Admin',
+      role: UserRole.Admin,
+      status: UserStatus.Active,
+      emailVerifiedAt: new Date(),
+    });
   }
 
   afterAll(async () => {

@@ -242,6 +242,20 @@ describe('P4-T02 booking create API', () => {
       .expect(({ body }) =>
         expect(body as unknown).toMatchObject({ code: 'BOOKING_NOT_FOUND' }),
       );
+    const otherCreated = await otherBrowser
+      .post('/api/v1/bookings')
+      .set('Authorization', `Bearer ${otherAccessToken}`)
+      .set('Idempotency-Key', 'booking-e2e-other-approve')
+      .send(body)
+      .expect(201);
+    const otherBookingId = (otherCreated.body as { id: string }).id;
+    const otherRejected = await otherBrowser
+      .post('/api/v1/bookings')
+      .set('Authorization', `Bearer ${otherAccessToken}`)
+      .set('Idempotency-Key', 'booking-e2e-other-reject')
+      .send(body)
+      .expect(201);
+    const otherRejectedBookingId = (otherRejected.body as { id: string }).id;
 
     const rateLimited = await browser
       .post('/api/v1/bookings')
@@ -252,6 +266,11 @@ describe('P4-T02 booking create API', () => {
     expect(rateLimited.body).toMatchObject({
       code: 'BOOKING_CREATE_RATE_LIMITED',
     });
+
+    await browser
+      .get('/api/v1/admin/bookings')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(403);
 
     const dataSource = app.get(DataSource);
     await dataSource
@@ -267,6 +286,58 @@ describe('P4-T02 booking create API', () => {
       .get('/api/v1/bookings')
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(403);
+    await browser
+      .get('/api/v1/admin/bookings')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200)
+      .expect(({ body }) => {
+        const response = body as {
+          total: number;
+          items: Array<{ id: string; owner: { email: string } }>;
+        };
+        expect(response.total).toBe(3);
+        expect(
+          response.items.some(
+            (item) =>
+              item.id === bookingId &&
+              item.owner.email === 'booking-e2e@example.com',
+          ),
+        ).toBe(true);
+      });
+    await browser
+      .get(`/api/v1/admin/bookings/${bookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          id: bookingId,
+          owner: { email: 'booking-e2e@example.com' },
+          changes: [],
+        }),
+      );
+    await browser
+      .post(`/api/v1/admin/bookings/${otherBookingId}/approve`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({ status: 'CONFIRMED' }),
+      );
+    await browser
+      .post(`/api/v1/admin/bookings/${otherRejectedBookingId}/reject`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: 'Requested dates are unavailable.' })
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          status: 'REJECTED',
+          rejectionReason: 'Requested dates are unavailable.',
+        }),
+      );
+    await browser
+      .post(`/api/v1/admin/bookings/${bookingId}/reject`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: ' ' })
+      .expect(400);
   });
 
   async function createRoom(dates: BookingFixtureDates): Promise<string> {

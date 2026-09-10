@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import type { ConfigType } from '@nestjs/config';
 import {
   DataSource,
@@ -18,10 +19,13 @@ import {
   BookingActorType,
   BookingStatus,
   IdempotencyKeyStatus,
+  OutboxEventStatus,
 } from './entities/booking.enums';
 import { BookingStatusHistory } from './entities/booking-status-history.entity';
+import { BookingChangeHistory } from './entities/booking-change-history.entity';
 import { Booking } from './entities/booking.entity';
 import { IdempotencyKey } from './entities/idempotency-key.entity';
+import { OutboxEvent } from './entities/outbox-event.entity';
 import {
   bookingCreateFingerprint,
   createMonotonicBookingId,
@@ -32,15 +36,24 @@ import {
   BookingCreateResponse,
 } from './booking-create.types';
 import { UserBookingQueryDto } from './dto/user-booking-query.dto';
+import { AdminBookingQueryDto } from './dto/admin-booking-query.dto';
 import { bookingsErrors } from './bookings.errors';
 import {
   PaginatedUserBookingsResponse,
   UserBookingDetailResponse,
   UserBookingResponse,
 } from './user-booking.types';
+import {
+  AdminBookingDetailResponse,
+  AdminBookingResponse,
+  AdminTransitionInput,
+  PaginatedAdminBookingsResponse,
+} from './admin-booking.types';
 
 const bookingCreateOperation = 'BOOKING_CREATE';
 const bookingCancelOperation = 'BOOKING_CANCEL';
+const bookingApproveOperation = 'BOOKING_APPROVE';
+const bookingRejectOperation = 'BOOKING_REJECT';
 const idempotencyKeyPattern = /^[A-Za-z0-9._:-]{8,128}$/;
 
 interface BookingCreateTransactionResult {
@@ -203,6 +216,197 @@ export class BookingsService {
     }
   }
 
+  async listAdmin(
+    query: AdminBookingQueryDto,
+  ): Promise<PaginatedAdminBookingsResponse> {
+    assertBookingFilterRange(query);
+    const builder = this.adminBookingSummaryQuery(this.dataSource.manager);
+    if (query.status) builder.andWhere('booking.status = :status', query);
+    if (query.from && query.to) {
+      builder.andWhere(
+        'booking.check_in < :to AND booking.check_out > :from',
+        query,
+      );
+    }
+    if (query.roomId) builder.andWhere('room.id = :roomId', query);
+    if (query.roomTypeId) builder.andWhere('roomType.id = :roomTypeId', query);
+    if (query.userId) builder.andWhere('owner.id = :userId', query);
+    const [bookings, total] = await builder
+      .orderBy('booking.createdAt', 'DESC')
+      .addOrderBy('booking.id', 'DESC')
+      .skip((query.page - 1) * query.pageSize)
+      .take(query.pageSize)
+      .getManyAndCount();
+    return {
+      items: bookings.map(toAdminBookingResponse),
+      page: query.page,
+      pageSize: query.pageSize,
+      total,
+    };
+  }
+
+  async getAdmin(bookingPublicId: string): Promise<AdminBookingDetailResponse> {
+    const booking = await this.adminBookingSummaryQuery(this.dataSource.manager)
+      .andWhere('booking.public_id = :bookingPublicId', { bookingPublicId })
+      .getOne();
+    if (!booking) throw bookingsErrors.notFound();
+    const [history, changes] = await Promise.all([
+      this.statusHistory(this.dataSource.manager, booking.id),
+      this.changeHistory(this.dataSource.manager, booking.id),
+    ]);
+    return {
+      ...toAdminBookingResponse(booking),
+      history: history.map(toHistoryResponse),
+      changes,
+    };
+  }
+
+  async approve(
+    input: AdminTransitionInput,
+  ): Promise<AdminBookingDetailResponse> {
+    const snapshot = await this.dataSource.manager.findOne(Booking, {
+      where: { publicId: input.bookingPublicId },
+      relations: { roomTime: true },
+      select: {
+        id: true,
+        roomTimeId: true,
+        version: true,
+        roomTime: { id: true, roomId: true },
+      },
+    });
+    if (!snapshot) throw bookingsErrors.notFound();
+
+    const replayed = await this.dataSource
+      .transaction(async (manager) => {
+        const room = await lockRoom(manager, snapshot.roomTime.roomId);
+        const booking = await manager.findOne(Booking, {
+          where: { publicId: input.bookingPublicId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!booking) throw bookingsErrors.notFound();
+        // An already confirmed row is the only idempotent approval replay. Check it
+        // after taking the row lock but before comparing the pre-read snapshot: a
+        // competing approval legitimately increments version before this request wakes.
+        if (booking.status === BookingStatus.Confirmed) return true;
+        if (
+          booking.roomTimeId !== snapshot.roomTimeId ||
+          booking.version !== snapshot.version
+        ) {
+          throw bookingsErrors.stateChanged();
+        }
+        if (booking.status !== BookingStatus.Pending)
+          throw bookingsErrors.statusConflict();
+        const roomTime = await manager.findOne(RoomTime, {
+          where: { id: booking.roomTimeId, roomId: room.id },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (
+          !roomTime ||
+          roomTime.status !== RoomTimeStatus.Active ||
+          roomTime.availableFrom > booking.checkIn ||
+          roomTime.availableTo < booking.checkOut
+        ) {
+          throw bookingsErrors.windowUnavailable();
+        }
+        const conflict = await manager
+          .getRepository(Booking)
+          .createQueryBuilder('confirmed')
+          .innerJoin('confirmed.roomTime', 'confirmedRoomTime')
+          .where('confirmedRoomTime.room_id = :roomId', { roomId: room.id })
+          .andWhere('confirmed.status = :confirmedStatus', {
+            confirmedStatus: BookingStatus.Confirmed,
+          })
+          .andWhere('confirmed.id != :bookingId', { bookingId: booking.id })
+          .andWhere(
+            'confirmed.check_in < :checkOut AND confirmed.check_out > :checkIn',
+            booking,
+          )
+          .setLock('pessimistic_write')
+          .getOne();
+        if (conflict) throw bookingsErrors.roomAlreadyBooked();
+        booking.status = BookingStatus.Confirmed;
+        const saved = await manager.save(booking);
+        await this.appendTransitionAndOutbox(
+          manager,
+          saved,
+          input.actorUserId,
+          null,
+          'booking.confirmed',
+          room,
+        );
+        return false;
+      })
+      .catch((error: unknown) => {
+        this.logAdminFailure(input, bookingApproveOperation, error);
+        throw error;
+      });
+    const response = await this.getAdmin(input.bookingPublicId);
+    this.logAdminTransition(
+      replayed ? 'booking_approve_replayed' : 'booking_approved',
+      input,
+      response.id,
+      bookingApproveOperation,
+      replayed ? 'replayed' : 'approved',
+    );
+    return response;
+  }
+
+  async reject(
+    input: Required<
+      Pick<AdminTransitionInput, 'actorUserId' | 'bookingPublicId' | 'reason'>
+    > &
+      Pick<AdminTransitionInput, 'requestId'>,
+  ): Promise<AdminBookingDetailResponse> {
+    const replayed = await this.dataSource
+      .transaction(async (manager) => {
+        const booking = await manager.findOne(Booking, {
+          where: { publicId: input.bookingPublicId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!booking) throw bookingsErrors.notFound();
+        if (booking.status === BookingStatus.Rejected) {
+          if (booking.rejectionReason === input.reason) return true;
+          throw bookingsErrors.statusConflict();
+        }
+        if (booking.status !== BookingStatus.Pending)
+          throw bookingsErrors.statusConflict();
+        booking.status = BookingStatus.Rejected;
+        booking.rejectionReason = input.reason;
+        const saved = await manager.save(booking);
+        const roomTime = await manager.findOneOrFail(RoomTime, {
+          where: { id: booking.roomTimeId },
+          relations: { room: true },
+          select: {
+            id: true,
+            roomId: true,
+            room: { id: true, roomNumber: true },
+          },
+        });
+        await this.appendTransitionAndOutbox(
+          manager,
+          saved,
+          input.actorUserId,
+          input.reason,
+          'booking.rejected',
+          roomTime.room,
+        );
+        return false;
+      })
+      .catch((error: unknown) => {
+        this.logAdminFailure(input, bookingRejectOperation, error);
+        throw error;
+      });
+    const response = await this.getAdmin(input.bookingPublicId);
+    this.logAdminTransition(
+      replayed ? 'booking_reject_replayed' : 'booking_rejected',
+      input,
+      response.id,
+      bookingRejectOperation,
+      replayed ? 'replayed' : 'rejected',
+    );
+    return response;
+  }
+
   private ownBookingSummaryQuery(
     manager: EntityManager,
     actorUserId: string,
@@ -269,6 +473,208 @@ export class BookingsService {
       ...toUserBookingResponse(booking),
       history: history.map(toHistoryResponse),
     };
+  }
+
+  private adminBookingSummaryQuery(
+    manager: EntityManager,
+  ): SelectQueryBuilder<Booking> {
+    return manager
+      .getRepository(Booking)
+      .createQueryBuilder('booking')
+      .innerJoinAndSelect('booking.roomTime', 'roomTime')
+      .innerJoinAndSelect('roomTime.room', 'room')
+      .innerJoinAndSelect('room.roomType', 'roomType')
+      .innerJoinAndSelect('booking.user', 'owner')
+      .select([
+        'booking.id',
+        'booking.publicId',
+        'booking.roomTimeId',
+        'booking.checkIn',
+        'booking.checkOut',
+        'booking.status',
+        'booking.priceAmount',
+        'booking.currency',
+        'booking.rejectionReason',
+        'booking.version',
+        'booking.createdAt',
+        'booking.updatedAt',
+        'roomTime.id',
+        'roomTime.roomId',
+        'room.id',
+        'room.roomTypeId',
+        'room.roomNumber',
+        'roomType.id',
+        'roomType.name',
+        'owner.id',
+        'owner.email',
+        'owner.displayName',
+        'owner.status',
+      ]);
+  }
+
+  private statusHistory(
+    manager: EntityManager,
+    bookingId: string,
+  ): Promise<BookingStatusHistory[]> {
+    return manager
+      .getRepository(BookingStatusHistory)
+      .createQueryBuilder('history')
+      .leftJoinAndSelect('history.actorUser', 'actor')
+      .where('history.booking_id = :bookingId', { bookingId })
+      .select([
+        'history.id',
+        'history.fromStatus',
+        'history.toStatus',
+        'history.actorType',
+        'history.reason',
+        'history.createdAt',
+        'actor.id',
+        'actor.displayName',
+      ])
+      .orderBy('history.createdAt', 'ASC')
+      .addOrderBy('history.id', 'ASC')
+      .getMany();
+  }
+
+  private async changeHistory(
+    manager: EntityManager,
+    bookingId: string,
+  ): Promise<AdminBookingDetailResponse['changes']> {
+    const changes = await manager
+      .getRepository(BookingChangeHistory)
+      .createQueryBuilder('change')
+      .innerJoinAndSelect('change.actorUser', 'actor')
+      .innerJoinAndSelect('change.fromRoomTime', 'fromRoomTime')
+      .innerJoinAndSelect('fromRoomTime.room', 'fromRoom')
+      .innerJoinAndSelect('change.toRoomTime', 'toRoomTime')
+      .innerJoinAndSelect('toRoomTime.room', 'toRoom')
+      .where('change.booking_id = :bookingId', { bookingId })
+      .select([
+        'change.id',
+        'change.fromCheckIn',
+        'change.fromCheckOut',
+        'change.toCheckIn',
+        'change.toCheckOut',
+        'change.reason',
+        'change.createdAt',
+        'actor.id',
+        'actor.displayName',
+        'fromRoomTime.id',
+        'fromRoomTime.roomId',
+        'fromRoom.id',
+        'toRoomTime.id',
+        'toRoomTime.roomId',
+        'toRoom.id',
+      ])
+      .orderBy('change.createdAt', 'ASC')
+      .addOrderBy('change.id', 'ASC')
+      .getMany();
+    return changes.map((change) => ({
+      actor: {
+        id: change.actorUser.id,
+        displayName: change.actorUser.displayName,
+      },
+      from: {
+        roomId: change.fromRoomTime.room.id,
+        checkIn: change.fromCheckIn,
+        checkOut: change.fromCheckOut,
+      },
+      to: {
+        roomId: change.toRoomTime.room.id,
+        checkIn: change.toCheckIn,
+        checkOut: change.toCheckOut,
+      },
+      reason: change.reason,
+      createdAt: change.createdAt.toISOString(),
+    }));
+  }
+
+  private async appendTransitionAndOutbox(
+    manager: EntityManager,
+    booking: Booking,
+    actorUserId: string,
+    reason: string | null,
+    eventType: 'booking.confirmed' | 'booking.rejected',
+    room: Pick<LockedRoom, 'id' | 'roomNumber'>,
+  ): Promise<void> {
+    const fromStatus =
+      eventType === 'booking.confirmed'
+        ? BookingStatus.Pending
+        : BookingStatus.Pending;
+    await manager.insert(BookingStatusHistory, {
+      bookingId: booking.id,
+      fromStatus,
+      toStatus: booking.status,
+      actorType: BookingActorType.Admin,
+      actorUserId,
+      reason,
+    });
+    await manager.insert(OutboxEvent, {
+      id: randomUUID(),
+      eventType,
+      payload: {
+        schemaVersion: 1,
+        bookingId: booking.publicId,
+        ownerUserId: booking.userId,
+        bookingVersion: Number(booking.version),
+        booking: {
+          checkIn: booking.checkIn,
+          checkOut: booking.checkOut,
+          status: booking.status,
+          room: { id: room.id, roomNumber: room.roomNumber },
+          price: {
+            amount: Number(booking.priceAmount),
+            currency: booking.currency,
+          },
+          ...(reason === null ? {} : { reason }),
+        },
+      },
+      availableAt: new Date(),
+      status: OutboxEventStatus.Pending,
+      idempotencyKey: `${eventType}:${booking.publicId}:${booking.version}`,
+      lockedAt: null,
+      lockExpiresAt: null,
+      lockedBy: null,
+      processedAt: null,
+      attempts: 0,
+    });
+  }
+
+  private logAdminTransition(
+    event: string,
+    input: AdminTransitionInput,
+    publicBookingId: string,
+    operation: string,
+    result: string,
+  ): void {
+    this.logger.log({
+      event,
+      requestId: input.requestId,
+      operation,
+      actorType: BookingActorType.Admin,
+      publicBookingId,
+      result,
+    });
+  }
+
+  private logAdminFailure(
+    input: AdminTransitionInput,
+    operation: string,
+    error: unknown,
+  ): void {
+    const applicationError =
+      error instanceof ApplicationException ? error : null;
+    this.logger.warn({
+      event: applicationError
+        ? 'booking_transition_conflict'
+        : 'booking_outbox_write_failed',
+      requestId: input.requestId,
+      operation,
+      actorType: BookingActorType.Admin,
+      publicBookingId: input.bookingPublicId,
+      result: applicationError ? 'conflict' : 'failed',
+      ...(applicationError ? { errorCode: applicationError.errorCode } : {}),
+    });
   }
 
   private async createInTransaction(
@@ -481,6 +887,18 @@ function toUserBookingResponse(booking: Booking): UserBookingResponse {
     version: Number(booking.version),
     createdAt: booking.createdAt.toISOString(),
     updatedAt: booking.updatedAt.toISOString(),
+  };
+}
+
+function toAdminBookingResponse(booking: Booking): AdminBookingResponse {
+  return {
+    ...toUserBookingResponse(booking),
+    owner: {
+      id: booking.user.id,
+      email: booking.user.email,
+      displayName: booking.user.displayName,
+      status: booking.user.status,
+    },
   };
 }
 

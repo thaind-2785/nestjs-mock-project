@@ -28,6 +28,7 @@ interface ErrorTranslations {
     bookingCreateUnavailable: string;
     bookingNotFound: string;
     bookingPriceOutOfRange: string;
+    bookingStateChanged: string;
     bookingStayInvalid: string;
     bookingStatusConflict: string;
     bookingWindowUnavailable: string;
@@ -43,6 +44,7 @@ interface ErrorTranslations {
     notFound: string;
     payloadTooLarge: string;
     roomHasHistory: string;
+    roomAlreadyBooked: string;
     roomNotFound: string;
     roomNumberConflict: string;
     roomReferenceNotFound: string;

@@ -329,17 +329,17 @@ application rollback or forward migration and does not drop Phase 4 data.
       and never bind a stale window.
 - [ ] Given overlapping pending requests, both may exist and public availability
       remains available until one request becomes confirmed.
-- [ ] Given two admins concurrently approving overlapping requests for the same
+- [x] Given two admins concurrently approving overlapping requests for the same
       physical room, exactly one becomes `CONFIRMED`; the other gets deterministic
       `409 ROOM_ALREADY_BOOKED`, and only the winner writes history/outbox.
-- [ ] Given an overlapping confirmed booking under another/legacy window of the same
+- [x] Given an overlapping confirmed booking under another/legacy window of the same
       room, approval and confirmed edit still reject the conflict.
-- [ ] Given adjacent confirmed stays, approval succeeds because checkout is exclusive.
+- [x] Given adjacent confirmed stays, approval succeeds because checkout is exclusive.
 - [x] Given a user list/detail request, only that user's bookings are returned; a
       cross-owner public ID is indistinguishable from an absent one.
 - [x] Given a pending owned booking, user cancellation applies once and an identical
       retry is side-effect free; cancellation from any other status conflicts.
-- [ ] Given reject or admin-cancel without a non-empty bounded reason, validation
+- [x] Given reject or admin-cancel without a non-empty bounded reason, validation
       fails; a successful transition writes status history and its outbox event in
       the same transaction.
 - [ ] Given a valid booking `If-Match`, an admin edit locks rooms in ascending order,

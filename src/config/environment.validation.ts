@@ -35,6 +35,10 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   REDIS_PORT: number;
   REDIS_TIMEOUT_MS: number;
   RATE_LIMIT_REDIS_KEY_PREFIX: string;
+  HOTEL_TIMEZONE: string;
+  BOOKING_CREATE_RATE_LIMIT_MAX: number;
+  BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS: number;
+  BOOKING_IDEMPOTENCY_RETENTION_HOURS: number;
   OBJECT_STORAGE_ENDPOINT?: string;
   OBJECT_STORAGE_REGION: string;
   OBJECT_STORAGE_FORCE_PATH_STYLE: boolean;
@@ -99,6 +103,29 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
       .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
       .default('hotel:rate'),
   }),
+  HOTEL_TIMEZONE: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().trim().custom(validateTimeZone).required(),
+    otherwise: Joi.string()
+      .trim()
+      .custom(validateTimeZone)
+      .default('Asia/Ho_Chi_Minh'),
+  }),
+  BOOKING_CREATE_RATE_LIMIT_MAX: Joi.number()
+    .integer()
+    .min(1)
+    .max(1_000)
+    .default(10),
+  BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS: Joi.number()
+    .integer()
+    .min(1)
+    .max(3_600)
+    .default(60),
+  BOOKING_IDEMPOTENCY_RETENTION_HOURS: Joi.number()
+    .integer()
+    .min(24)
+    .max(24 * 30)
+    .default(24),
   OBJECT_STORAGE_ENDPOINT: Joi.alternatives().conditional('NODE_ENV', {
     is: 'production',
     then: Joi.string()
@@ -302,4 +329,13 @@ function hasUnsafeRelativeUriCharacter(value: string): boolean {
       return codePoint === undefined || codePoint <= 31 || codePoint === 127;
     })
   );
+}
+
+function validateTimeZone(value: string, helpers: Joi.CustomHelpers) {
+  try {
+    Intl.DateTimeFormat('en-US', { timeZone: value });
+    return value;
+  } catch {
+    return helpers.error('string.timeZone');
+  }
 }

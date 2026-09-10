@@ -28,6 +28,7 @@ describe('createObjectStorageConfiguration', () => {
         'https://api.hotel.example.com/api/v1/auth/google/callback',
       JWT_ACCESS_SECRET: 'production_jwt_secret_at_least_32_chars',
       RATE_LIMIT_REDIS_KEY_PREFIX: 'hotel:production-rate',
+      HOTEL_TIMEZONE: 'Asia/Ho_Chi_Minh',
     });
 
     expect(createObjectStorageConfiguration(environment)).toEqual({

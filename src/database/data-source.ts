@@ -2,6 +2,11 @@ import 'reflect-metadata';
 import { DataSource } from 'typeorm';
 import { AuthIdentity } from '../auth/entities/auth-identity.entity';
 import { AuthSession } from '../auth/entities/auth-session.entity';
+import { BookingChangeHistory } from '../bookings/entities/booking-change-history.entity';
+import { BookingStatusHistory } from '../bookings/entities/booking-status-history.entity';
+import { Booking } from '../bookings/entities/booking.entity';
+import { IdempotencyKey } from '../bookings/entities/idempotency-key.entity';
+import { OutboxEvent } from '../bookings/entities/outbox-event.entity';
 import { createDatabaseConfiguration } from '../config/database.config';
 import { loadRepositoryEnvironment } from '../config/environment-file';
 import { validateEnvironment } from '../config/environment.validation';
@@ -18,6 +23,7 @@ import { StorageCleanupTask } from '../files/entities/storage-cleanup-task.entit
 import { createTypeOrmOptions } from './database.options';
 import { CreateAuthRbacSchema1788380000000 } from './migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from './migrations/1788490000000-CreateRoomCatalogSchema';
+import { CreateBookingCoreSchema1788580000000 } from './migrations/1788580000000-CreateBookingCoreSchema';
 
 loadRepositoryEnvironment();
 const environment = validateEnvironment(process.env);
@@ -37,10 +43,16 @@ export default new DataSource(
       RoomTime,
       Attachment,
       StorageCleanupTask,
+      Booking,
+      BookingStatusHistory,
+      BookingChangeHistory,
+      IdempotencyKey,
+      OutboxEvent,
     ],
     migrations: [
       CreateAuthRbacSchema1788380000000,
       CreateRoomCatalogSchema1788490000000,
+      CreateBookingCoreSchema1788580000000,
     ],
   }),
 );

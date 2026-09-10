@@ -9,6 +9,7 @@ const productionAuthEnvironment = {
   // Production must name its own limiter namespace: two environments sharing one
   // Redis instance would otherwise default to the same counters.
   RATE_LIMIT_REDIS_KEY_PREFIX: 'hotel:production-rate',
+  HOTEL_TIMEZONE: 'Asia/Ho_Chi_Minh',
 };
 
 describe('validateEnvironment', () => {
@@ -28,6 +29,10 @@ describe('validateEnvironment', () => {
     expect(environment.REDIS_PORT).toBe(6379);
     expect(environment.RATE_LIMIT_REDIS_KEY_PREFIX).toBe('hotel:rate');
     expect(environment.REDIS_TIMEOUT_MS).toBe(1000);
+    expect(environment.HOTEL_TIMEZONE).toBe('Asia/Ho_Chi_Minh');
+    expect(environment.BOOKING_CREATE_RATE_LIMIT_MAX).toBe(10);
+    expect(environment.BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
+    expect(environment.BOOKING_IDEMPOTENCY_RETENTION_HOURS).toBe(24);
     expect(environment.OBJECT_STORAGE_ENDPOINT).toBe('http://127.0.0.1:9000');
     expect(environment.OBJECT_STORAGE_REGION).toBe('us-east-1');
     expect(environment.OBJECT_STORAGE_FORCE_PATH_STYLE).toBe(true);
@@ -177,6 +182,33 @@ describe('validateEnvironment', () => {
       'Environment validation failed for: OBJECT_STORAGE_ACCESS_KEY, OBJECT_STORAGE_SECRET_KEY',
     );
   });
+
+  it('requires an explicit valid hotel timezone in production', () => {
+    const withoutHotelTimezone = Object.fromEntries(
+      Object.entries(productionAuthEnvironment).filter(
+        ([key]) => key !== 'HOTEL_TIMEZONE',
+      ),
+    );
+
+    expect(() =>
+      validateEnvironment({
+        NODE_ENV: 'production',
+        MYSQL_PASSWORD: 'production-password',
+        OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
+        OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
+        ...withoutHotelTimezone,
+      }),
+    ).toThrow('Environment validation failed for: HOTEL_TIMEZONE');
+  });
+
+  it.each([['not/a-timezone'], ['']])(
+    'rejects an unsupported hotel timezone %s',
+    (hotelTimezone) => {
+      expect(() =>
+        validateEnvironment({ HOTEL_TIMEZONE: hotelTimezone }),
+      ).toThrow('Environment validation failed for: HOTEL_TIMEZONE');
+    },
+  );
 
   it('requires Google and JWT configuration when Google auth is enabled', () => {
     expect(() => validateEnvironment({ GOOGLE_AUTH_ENABLED: 'true' })).toThrow(

@@ -24,10 +24,17 @@ interface ErrorTranslations {
     authenticationFailed: string;
     authorizationUnavailable: string;
     badRequest: string;
+    bookingCreateRateLimited: string;
+    bookingCreateUnavailable: string;
+    bookingPriceOutOfRange: string;
+    bookingStayInvalid: string;
+    bookingWindowUnavailable: string;
     conflict: string;
     databaseOverloaded: string;
     forbidden: string;
     identityConflict: string;
+    idempotencyKeyInvalid: string;
+    idempotencyKeyReused: string;
     internalServerError: string;
     lastAdminDeactivationForbidden: string;
     methodNotAllowed: string;

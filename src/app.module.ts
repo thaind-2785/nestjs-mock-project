@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { BookingsModule } from './bookings/bookings.module';
 import { HttpFoundationModule } from './common/http/http-foundation.module';
 import { AppConfigModule } from './config/app-config.module';
 import { DatabaseModule } from './database/database.module';
@@ -15,6 +16,7 @@ import { UsersModule } from './users/users.module';
   imports: [
     AppConfigModule,
     AuthModule,
+    BookingsModule,
     DatabaseModule,
     FilesModule,
     LocalizationModule,

@@ -38,3 +38,26 @@ held; then the room-wide overlap check and atomic change history/outbox write ru
 
 If the product later needs instant booking or temporary holds, add a separately
 specified hold model with expiry rather than changing `PENDING` semantics silently.
+
+## Phase 4 persistence decision (2026-09-09)
+
+The implementation keeps public booking references separate from internal joins: a
+server-generated 26-character ULID is unique in `bookings.public_id`, while foreign
+keys remain unsigned `BIGINT`. A new booking starts `PENDING` at version 1 and writes
+one immutable `null -> PENDING` status-history record in the same transaction.
+
+The room's current per-night price and currency are copied into a safe-integer minor-
+unit snapshot. Catalog edits and later admin room/date edits do not reprice that
+snapshot. Repricing requires a separately accepted contract and before/after price
+audit; it is not inferred from a new room or date range.
+
+Booking create idempotency is durable and scoped by `(actor user, operation, key)`.
+The same canonical request returns the stored result; a changed request fingerprint
+with that key is rejected. Rows are retained for at least 24 hours and may remain
+longer until Phase 7 cleanup, which is safe because stale-key reuse remains refused.
+
+Phase 4 also creates a general notification outbox but does not start a worker. Its
+rows have one checked lifecycle: pending without a lease, processing with a complete
+lease, or processed with no lease and a completion time. A unique logical event key
+prevents duplicate notification intent. Phase 5 alone claims and delivers these
+events; no network call happens inside the booking transaction.

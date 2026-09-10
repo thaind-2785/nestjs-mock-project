@@ -239,7 +239,7 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   history write. The ULID helper is an equivalent reviewed local implementation:
   it uses 48-bit millisecond time plus 80-bit cryptographic randomness and increments
   the random component for calls in the same millisecond, avoiding a new dependency.
-  Focused evidence: 21 unit tests, 7 real-MySQL integration tests (including the
+  Focused evidence: 3 unit suites / 12 tests, 7 real-MySQL integration tests (including the
   controlled create-versus-room-time-deactivation race), and 1 full API E2E journey
   for guest/user/admin RBAC, create, replay, key-reuse conflict, and rate limiting;
   typecheck, lint, formatting, and whitespace checks passed. `REVIEW-023` findings

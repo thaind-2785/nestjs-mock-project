@@ -248,12 +248,19 @@ referenced room tables.
 Two smoke procedures follow, and they are not interchangeable. Production gets the
 read-only one; anything that writes a booking runs against a non-production fixture.
 
-Set the shared variables first. `ADMIN_TOKEN` comes from the login flow above, and
-the dates are derived so the journey stays valid as time passes rather than expiring
-into the past-date rejection:
+Both need `curl`; the fixture journey also needs `jq` to read IDs out of the
+responses. `TOKEN` and `ADMIN_TOKEN` are application access tokens for a user and an
+administrator, obtained through the login flow above. Set them, then let the snippet
+fail fast rather than sending empty headers, and derive the dates so the journey stays
+valid as time passes instead of expiring into the past-date rejection:
 
 ```bash
-API=http://localhost:3000/api/v1
+# Export TOKEN and ADMIN_TOKEN yourself, then paste the rest verbatim.
+export TOKEN='...' ADMIN_TOKEN='...'
+
+API=${API:-http://localhost:3000/api/v1}
+: "${TOKEN:?export TOKEN with a user access token}"
+: "${ADMIN_TOKEN:?export ADMIN_TOKEN with an administrator access token}"
 CHECK_IN=$(date -u -d '+21 days' +%F 2>/dev/null || date -u -v+21d +%F)
 CHECK_OUT=$(date -u -d '+24 days' +%F 2>/dev/null || date -u -v+24d +%F)
 ```
@@ -272,15 +279,23 @@ curl -fsS "$API/admin/bookings" -H "Authorization: Bearer $ADMIN_TOKEN" >/dev/nu
 ```
 
 **Non-production fixture journey — writes data.** Run this only against a disposable
-environment, never against production. `ROOM_ID` is a bookable room in that fixture:
+environment, never against production. It needs one more variable, and a fresh
+idempotency key per run: the key is what makes a retry safe, so reusing yesterday's
+key would replay that booking — now cancelled — and the approval below would fail
+against a terminal status instead of exercising a new journey.
 
 ```bash
+export ROOM_ID='...' # a bookable room in the fixture
+
+: "${ROOM_ID:?export ROOM_ID with a bookable room id from the fixture}"
+RUN_KEY="smoke-$(date -u +%Y%m%dT%H%M%SZ)"
+
 # Create one request. The Idempotency-Key is required and makes a retry safe: the
 # same key with the same body replays the original response, while the same key
 # with a different body is refused rather than creating a second booking.
 BOOKING_ID=$(curl -fsS -X POST "$API/bookings" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -H "Idempotency-Key: smoke-$CHECK_IN" \
+  -H "Idempotency-Key: $RUN_KEY" \
   -d "{\"roomId\":\"$ROOM_ID\",\"checkIn\":\"$CHECK_IN\",\"checkOut\":\"$CHECK_OUT\"}" \
   | jq -r .id)
 

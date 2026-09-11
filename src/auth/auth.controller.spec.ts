@@ -47,10 +47,14 @@ describe('AuthController OpenAPI contract', () => {
 
   it('leaves logout out of the limited set', () => {
     // Logout revokes an already-authenticated session and charges no budget, so
-    // documenting a limiter status there would misdescribe the contract.
-    expect(
-      Object.keys(document.paths['/auth/logout']?.post?.responses ?? {}),
-    ).not.toEqual(expect.arrayContaining(['429']));
+    // documenting either limiter status there would misdescribe the contract.
+    // `not.toEqual(arrayContaining([...]))` would pass while one of the two was
+    // present, so each absence is asserted on its own.
+    const statuses = Object.keys(
+      document.paths['/auth/logout']?.post?.responses ?? {},
+    );
+    expect(statuses).not.toContain('429');
+    expect(statuses).not.toContain('503');
   });
 
   afterAll(async () => {

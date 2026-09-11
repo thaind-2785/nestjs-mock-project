@@ -65,30 +65,37 @@ describe('AdminBookingsController OpenAPI contract', () => {
 
   it('names every stable error code the edit can answer', () => {
     // A status set alone cannot catch a dropped code: the edit answers four
-    // distinct 400s and four distinct 409s, so the published descriptions are
-    // the only thing a client can use to tell them apart.
+    // distinct 400s and four distinct 409s, so the published descriptions are the
+    // only thing a client can use to tell them apart. Comparing extracted code
+    // sets rather than substrings makes this exhaustive in both directions — a
+    // code removed from a description fails, and a code added without updating
+    // this expectation fails too.
     const responses = document.paths['/admin/bookings/{bookingId}']?.patch
       ?.responses as
       Record<string, { description?: string } | undefined> | undefined;
-    const describes = (status: string, codes: string[]) => {
-      const description = responses?.[status]?.description ?? '';
-      for (const code of codes) expect(description).toContain(code);
-    };
+    const codesIn = (status: string) =>
+      [
+        ...new Set(
+          (responses?.[status]?.description ?? '').match(/[A-Z][A-Z_]{4,}/g) ??
+            [],
+        ),
+      ].sort();
 
-    describes('400', [
-      'BOOKING_VERSION_MALFORMED',
+    expect(codesIn('400')).toEqual([
       'BOOKING_CHANGE_EMPTY',
       'BOOKING_STAY_INVALID',
+      'BOOKING_VERSION_MALFORMED',
+      'VALIDATION_FAILED',
     ]);
-    describes('404', ['BOOKING_NOT_FOUND', 'ROOM_NOT_FOUND']);
-    describes('409', [
+    expect(codesIn('404')).toEqual(['BOOKING_NOT_FOUND', 'ROOM_NOT_FOUND']);
+    expect(codesIn('409')).toEqual([
       'BOOKING_STATE_CHANGED',
       'BOOKING_STATUS_CONFLICT',
       'BOOKING_WINDOW_UNAVAILABLE',
       'ROOM_ALREADY_BOOKED',
     ]);
-    describes('412', ['BOOKING_VERSION_CONFLICT']);
-    describes('428', ['BOOKING_VERSION_REQUIRED']);
+    expect(codesIn('412')).toEqual(['BOOKING_VERSION_CONFLICT']);
+    expect(codesIn('428')).toEqual(['BOOKING_VERSION_REQUIRED']);
   });
 
   it('requires If-Match on the edit and nowhere else', () => {

@@ -132,9 +132,8 @@
 - **Notes:** Replace `ZeroRoomTimeUsageRepository` and make reads/writes share the
   canonical overlap predicate. Capture representative `EXPLAIN` output before and
   after any index change. Pending and terminal bookings must never block.
-- **Status:** Complete pending re-review (2026-09-11; `REVIEW-027` and all four
-  `REVIEW-029` findings fixed, each with a mutation-proven test; the independent
-  reviewer's confirmation of those dispositions is the remaining step).
+- **Status:** Complete (2026-09-11; `REVIEW-027` closed, and the independent
+  `REVIEW-029` re-review confirmed the P4-T06 findings R29-03 and R29-04 fixed).
 
 ### P4-T07 — Phase 4 handoff
 
@@ -148,10 +147,10 @@
   security, data, concurrency, idempotency, and operations review.
 - **Notes:** Run the full gate once at handoff, fix every finding, and rerun it only
   when a changed gate input or an accepted Blocker/High fix requires it.
-- **Status:** Complete pending re-review (2026-09-11; `REVIEW-028` exit report plus
-  the four `REVIEW-029` dispositions. Sixteen of seventeen `SPEC-006` acceptance
-  boxes are checked; the contract-agreement box stays unchecked deliberately, because
-  the independent reviewer who unchecked it is the one who should confirm it).
+- **Status:** Complete pending re-review (2026-09-11; `REVIEW-028` exit report and all
+  four `REVIEW-029` findings closed, the two Medium ones over a second pass. Sixteen
+  of seventeen `SPEC-006` acceptance boxes are checked; the contract-agreement box is
+  left for the independent reviewer who unchecked it).
 
 ## Verification commands
 
@@ -379,8 +378,8 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   Vietnamese, with no orphan or missing entry in either direction. Both new OpenAPI
   assertions are mutation-proven. `REVIEW-028` records five findings, all fixed, with
   no Blocker or High.
-- 2026-09-11: `REVIEW-029` (independent) closed `P4-T06`/`P4-T07` with four findings,
-  all fixed in one pass. The public booking ID pattern becomes `^[0-7][0-9A-HJKMNP-TV-Z]{25}$`:
+- 2026-09-11: `REVIEW-029` (independent) re-review confirmed two of four findings
+  fixed. The public booking ID pattern becomes `^[0-7][0-9A-HJKMNP-TV-Z]{25}$`:
   ten base32 characters carry 50 bits while a ULID timestamp is 48, so the leading
   character can never exceed `7`, and the pattern now lives beside the generator that
   guarantees it rather than being restated in the DTO. Two documentation fixes from
@@ -392,6 +391,17 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   read-only production procedure and a labelled non-production fixture journey with
   defined variables, derived hotel dates, captured ID/version, and cleanup, matching
   this plan's rule that mutations run only against a non-production fixture.
+- 2026-09-11: the `REVIEW-029` re-review confirmed both Low findings fixed and both
+  Medium ones only partly addressed, so a second pass closed the rest. The runbook now
+  names its prerequisites, assigns and guards `TOKEN`/`ADMIN_TOKEN`/`ROOM_ID` with
+  fail-fast `:?` checks, and derives a per-run idempotency key so a rerun creates a
+  fresh booking rather than replaying the cancelled one; the first attempt used
+  `TOKEN=<...>` placeholders, which are shell redirects, so every block in the section
+  is now parsed with `bash -n`. The edit's OpenAPI assertion compares extracted code
+  sets per status instead of substrings, making it exhaustive in both directions
+  across all twelve documented codes rather than the eleven first claimed, and the
+  logout exclusion asserts each status separately because
+  `not.toEqual(arrayContaining([...]))` passes while one of the two is present.
 - Later implementation-only choices remain subject to evidence and review. Record
   every durable decision here and in the appropriate ADR before changing its
   contract.

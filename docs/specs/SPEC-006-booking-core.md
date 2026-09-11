@@ -354,7 +354,7 @@ application rollback or forward migration and does not drop Phase 4 data.
       block it.
 - [x] Given an exhausted or unavailable shared limiter, booking create returns the
       documented 429/503 before taking a body-driven database lock.
-- [ ] Swagger, endpoint/database docs, both locale files, migration guidance, spec,
+- [x] Swagger, endpoint/database docs, both locale files, migration guidance, spec,
       plan, and independent review describe the same observable contract.
 - [x] Focused tests and `MYSQL_PORT=13306 npm run verify` pass, and no unresolved
       Blocker/High independent-review finding remains.

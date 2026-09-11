@@ -4,10 +4,10 @@
   `docs/plans/PLAN-007-booking-core.md` (`P4-T06`, `P4-T07`)
 - Author: Claude authoring session (`1e83d45`, `b89f744`)
 - Independent reviewer: OpenAI Codex (did not author either reviewed commit)
-- Commit/revision reviewed: `09d443a..d70ac08`, specifically `1e83d45`, `b89f744`,
-  and the finding-fix commit `d70ac08`
+- Commit/revision reviewed: `09d443a..f100bb5`, specifically `1e83d45`, `b89f744`,
+  and the finding-fix commits `d70ac08` and `f100bb5`
 - Date: 2026-09-11
-- Verdict: Approve after fixes
+- Verdict: Approve
 
 ## Verification performed
 
@@ -29,6 +29,14 @@
   (45 suites), integration 102/102 (11 suites), E2E 24/24 (6 suites), plus Harness,
   Compose, formatting, lint, whole-project typecheck, and build.
 - `git diff --check b89f744..d70ac08` — succeeded with no whitespace errors.
+- Final independent re-review of `f100bb5` confirmed R29-01 and R29-02 fixed. The
+  README shell blocks parse with `bash -n`; an unset-token invocation fails at the
+  documented guard; the generated run key matches the server's
+  `^[A-Za-z0-9._:-]{8,128}$` pattern.
+- Independent final `MYSQL_PORT=13306 npm run verify` — succeeded: unit 247/247
+  (45 suites), integration 102/102 (11 suites), E2E 24/24 (6 suites), plus Harness,
+  Compose, formatting, lint, whole-project typecheck, and build.
+- `git diff --check d70ac08..f100bb5` — succeeded with no whitespace errors.
 
 ## Findings
 
@@ -39,11 +47,9 @@
 | R29-03 | Low      | `src/bookings/room-time-usage.repository.ts:21-27`; `ADR-0002:87-90`; `PLAN-007:325-327`; `BookingsService.cancelOwn`, `reject`, and `cancelAdmin`                              | The safety explanation says cancellation is the only booking write that skips the physical-room lock. Rejection also changes `activeBookingCount` without that lock; user and admin cancellation are two distinct paths. The implementation remains safe because all three only lower active usage, but the proof is incomplete. | Name every current non-room-locking transition and state the common monotonic-decrease argument in the adapter comment, ADR, and plan.                                                                                                         | Implementation author | Fixed       | The adapter comment, `ADR-0002`, and `PLAN-007` now name all three non-room-locking transitions — user cancellation, admin rejection, admin cancellation — and state the argument as: every write that can raise a count takes the room lock, these three only move a booking to a terminal status and so only lower `activeBookingCount`, therefore a concurrent read is at worst too high and refuses rather than permits.                                                                                                                                                                                                                                                                                                                                                                     |
 | R29-04 | Low      | `src/bookings/dto/booking-id-param.dto.ts:4-14`; `src/bookings/booking-create.helpers.ts:9-20`; `src/bookings/bookings.controller.spec.ts:75-81`                                | The route is documented as a ULID, but its pattern allows `8-Z` as the first character. The generator's 48-bit timestamp encoding can emit only `0-7` there, so non-canonical 130-bit values pass validation and become misleading not-found lookups.                                                                            | Use a canonical pattern with `[0-7]` in the first position and assert both the published pattern and runtime rejection of an overflow value.                                                                                                   | Implementation author | Fixed       | `bookingPublicIdPattern` is now `^[0-7][0-9A-HJKMNP-TV-Z]{25}$`, exported from `booking-create.helpers.ts` beside the generator that guarantees it and imported by the DTO, so the two cannot drift. New unit tests assert the generator's leading character across the timestamp range including `2^48-1`, that the published Swagger pattern matches, and that a 26-character overflow value (`8` + 25 zeros) is rejected by DTO validation while a generated ID passes.                                                                                                                                                                                                                                                                                                                       |
 
-No Blocker or High findings. The independent re-review confirmed both Low findings
-fixed and both Medium findings only partially addressed. The remaining gaps in R29-01
-and R29-02 were closed in a second pass on 2026-09-11, each verified by execution or
-by mutation rather than by a green gate. A final independent confirmation of these two
-dispositions is the remaining Phase 4 exit step.
+No Blocker or High findings. The independent final re-review confirms all four
+findings fixed. P4-T06, P4-T07, and the Phase 4 contract-agreement acceptance
+criterion are complete.
 
 ## Review checklist
 
@@ -81,3 +87,6 @@ dispositions is the remaining Phase 4 exit step.
   The second pass therefore verified each remaining gap directly — by running the
   runbook's guards, key derivation, and `bash -n` parse, and by mutating each
   documented code the edit and logout assertions claim to cover.
+- Final independent confirmation found no new finding in `f100bb5`. The timestamp
+  key has one-second granularity, which is adequate for this manual non-production
+  smoke; concurrent automation should inject its own unique `RUN_KEY`.

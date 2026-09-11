@@ -3,11 +3,10 @@
 - Spec / plan: `docs/specs/SPEC-006-booking-core.md`,
   `docs/plans/PLAN-007-booking-core.md` (P4-T01 through P4-T07)
 - Author: this session (P4-T05 fixes, P4-T06, P4-T07)
-- Independent reviewer: **not yet performed.** `P4-T01` through `P4-T04` were reviewed
-  independently in `REVIEW-023` through `REVIEW-025`. `P4-T05` was reviewed by this
-  session against an implementation it did not write (`REVIEW-026`). `P4-T06` and
-  `P4-T07` are this session's own work, so `REVIEW-027` and this report are author
-  records, not independent review. See "Residual risk and follow-up".
+- Independent reviewer: OpenAI Codex subsequently reviewed `P4-T06` and `P4-T07` in
+  `REVIEW-029`. `P4-T01` through `P4-T04` were reviewed independently in `REVIEW-023`
+  through `REVIEW-025`; this session independently reviewed `P4-T05` in `REVIEW-026`.
+  `REVIEW-027` and this report remain author records for `P4-T06`/`P4-T07`.
 - Commit/revision reviewed: working tree on `feat/phase-4-booking-user-history` at
   parent commit `1e83d45`
 - Date: 2026-09-11

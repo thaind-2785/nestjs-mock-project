@@ -1,9 +1,9 @@
 # PLAN-007: Booking core
 
 - Spec: [`SPEC-006`](../specs/SPEC-006-booking-core.md)
-- Status: In progress (approved 2026-09-09)
+- Status: Complete (2026-09-11)
 - Owner: Project owner
-- Reviewer (must be independent): To be assigned before Phase 4 handoff
+- Reviewer (must be independent): OpenAI Codex (`REVIEW-029`)
 
 ## Constraints and risks
 
@@ -147,10 +147,9 @@
   security, data, concurrency, idempotency, and operations review.
 - **Notes:** Run the full gate once at handoff, fix every finding, and rerun it only
   when a changed gate input or an accepted Blocker/High fix requires it.
-- **Status:** Complete pending re-review (2026-09-11; `REVIEW-028` exit report and all
-  four `REVIEW-029` findings closed, the two Medium ones over a second pass. Sixteen
-  of seventeen `SPEC-006` acceptance boxes are checked; the contract-agreement box is
-  left for the independent reviewer who unchecked it).
+- **Status:** Complete (2026-09-11; `REVIEW-028` records the author handoff and the
+  independent `REVIEW-029` re-review confirms all four findings fixed. All seventeen
+  `SPEC-006` acceptance criteria are checked).
 
 ## Verification commands
 
@@ -402,6 +401,11 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   across all twelve documented codes rather than the eleven first claimed, and the
   logout exclusion asserts each status separately because
   `not.toEqual(arrayContaining([...]))` passes while one of the two is present.
+- 2026-09-11: final independent re-review of `f100bb5` confirmed R29-01 and R29-02
+  fixed. The runbook blocks parse with `bash -n`, its missing-variable guard fails as
+  documented, and its generated key matches the server pattern. The changed test
+  inputs passed the full handoff gate: unit 247/247, integration 102/102, E2E 24/24,
+  plus Harness, Compose, formatting, lint, whole-project typecheck, and build.
 - Later implementation-only choices remain subject to evidence and review. Record
   every durable decision here and in the appropriate ADR before changing its
   contract.

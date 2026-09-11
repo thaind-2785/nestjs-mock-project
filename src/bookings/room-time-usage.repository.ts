@@ -18,13 +18,19 @@ interface CountRow {
 /**
  * The real usage port behind room-time administration.
  *
- * Every caller that can act on usage already holds the physical room lock, and
- * so does every booking write that could change these counts, so the counts a
- * caller reads inside its transaction cannot move under it. Cancellation is the
- * one booking write that takes no room lock, and it only ever lowers the active
- * count, so a count read alongside it errs toward blocking a window mutation —
- * the safe direction for this port, whose absent-entry contract already treats
- * unknown usage as blocking.
+ * Every caller that can act on usage already holds the physical room lock, and so
+ * does every booking write that can *raise* a count: creation, and the
+ * destination side of an admin edit. Those therefore cannot move under a caller
+ * inside its transaction.
+ *
+ * Three transitions take no room lock — user cancellation, admin rejection, and
+ * admin cancellation — because none of them needs to serialize against room
+ * inventory. Each moves a booking from `PENDING` or `CONFIRMED` to a terminal
+ * status, so each can only *lower* `activeBookingCount` and can change nothing
+ * else. A count read concurrently with one of them is therefore at worst too
+ * high, which refuses a window mutation that would have been allowed a moment
+ * later. That is the safe direction for this port, whose absent-entry contract
+ * already treats unknown usage as blocking rather than as zero.
  */
 @Injectable()
 export class BookingRoomTimeUsageRepository implements RoomTimeUsageRepository {

@@ -84,10 +84,16 @@ this ADR already stated are therefore enforced rather than merely specified: a w
 referenced by any booking or change history has immutable dates and cannot be hard
 deleted, and a window with a `PENDING` or `CONFIRMED` booking cannot be deactivated.
 A change-history row is credited once per window, because a date-only edit keeps the
-same window in both its `from` and `to` columns. The counts need no lock of their
-own: every mutation that can change them takes the physical room lock the caller
-already holds, and cancellation only lowers the active count, which errs toward
-refusing a window mutation.
+same window in both its `from` and `to` columns.
+
+The counts need no lock of their own. Every write that can raise one — creation and
+the destination side of an admin edit — takes the physical room lock the reading
+caller already holds. Three transitions deliberately take no room lock, because none
+of them competes for room inventory: user cancellation, admin rejection, and admin
+cancellation. Each moves a booking from `PENDING` or `CONFIRMED` to a terminal status,
+so each only lowers `activeBookingCount`. A count read beside one of them is at worst
+too high, which refuses a window mutation that would have been permitted a moment
+later — the same direction as this port's rule that unknown usage blocks.
 
 No availability or usage index is added. The captured query plan shows the overlap
 probe reaching `bookings` through the existing

@@ -63,6 +63,34 @@ describe('AdminBookingsController OpenAPI contract', () => {
     ]);
   });
 
+  it('names every stable error code the edit can answer', () => {
+    // A status set alone cannot catch a dropped code: the edit answers four
+    // distinct 400s and four distinct 409s, so the published descriptions are
+    // the only thing a client can use to tell them apart.
+    const responses = document.paths['/admin/bookings/{bookingId}']?.patch
+      ?.responses as
+      Record<string, { description?: string } | undefined> | undefined;
+    const describes = (status: string, codes: string[]) => {
+      const description = responses?.[status]?.description ?? '';
+      for (const code of codes) expect(description).toContain(code);
+    };
+
+    describes('400', [
+      'BOOKING_VERSION_MALFORMED',
+      'BOOKING_CHANGE_EMPTY',
+      'BOOKING_STAY_INVALID',
+    ]);
+    describes('404', ['BOOKING_NOT_FOUND', 'ROOM_NOT_FOUND']);
+    describes('409', [
+      'BOOKING_STATE_CHANGED',
+      'BOOKING_STATUS_CONFLICT',
+      'BOOKING_WINDOW_UNAVAILABLE',
+      'ROOM_ALREADY_BOOKED',
+    ]);
+    describes('412', ['BOOKING_VERSION_CONFLICT']);
+    describes('428', ['BOOKING_VERSION_REQUIRED']);
+  });
+
   it('requires If-Match on the edit and nowhere else', () => {
     const ifMatchOn = (operation: { parameters?: unknown[] } | undefined) =>
       (operation?.parameters ?? []).find(

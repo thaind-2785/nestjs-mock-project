@@ -1,7 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, Matches } from 'class-validator';
-
-const bookingPublicIdPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+import { bookingPublicIdPattern } from '../booking-create.helpers';
 
 export class BookingIdParamDto {
   @ApiProperty({

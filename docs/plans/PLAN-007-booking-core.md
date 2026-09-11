@@ -132,7 +132,9 @@
 - **Notes:** Replace `ZeroRoomTimeUsageRepository` and make reads/writes share the
   canonical overlap predicate. Capture representative `EXPLAIN` output before and
   after any index change. Pending and terminal bookings must never block.
-- **Status:** Complete (2026-09-11; `REVIEW-027` findings fixed in the same pass).
+- **Status:** Complete pending re-review (2026-09-11; `REVIEW-027` and all four
+  `REVIEW-029` findings fixed, each with a mutation-proven test; the independent
+  reviewer's confirmation of those dispositions is the remaining step).
 
 ### P4-T07 — Phase 4 handoff
 
@@ -146,8 +148,10 @@
   security, data, concurrency, idempotency, and operations review.
 - **Notes:** Run the full gate once at handoff, fix every finding, and rerun it only
   when a changed gate input or an accepted Blocker/High fix requires it.
-- **Status:** Complete (2026-09-11; `REVIEW-028` exit report, all 17 `SPEC-006`
-  acceptance boxes checked).
+- **Status:** Complete pending re-review (2026-09-11; `REVIEW-028` exit report plus
+  the four `REVIEW-029` dispositions. Sixteen of seventeen `SPEC-006` acceptance
+  boxes are checked; the contract-agreement box stays unchecked deliberately, because
+  the independent reviewer who unchecked it is the one who should confirm it).
 
 ## Verification commands
 
@@ -322,9 +326,12 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   usage repository, so room-time policy still depends only on its port. Change
   history is credited once per window per row: a date-only edit keeps one window in
   both `from`/`to` columns, so the destination count skips rows whose source window
-  is identical. Usage counts need no extra lock, because every mutation that can
-  change them takes the physical room lock the caller already holds, and admin
-  cancellation only lowers the active count, which errs toward blocking.
+  is identical. Usage counts need no extra lock. Every write that can raise a
+  count — creation and an edit's destination side — takes the physical room lock the
+  reading caller already holds, while the three transitions that take no room lock
+  (user cancellation, admin rejection, and admin cancellation) only move a booking to
+  a terminal status and therefore only lower `activeBookingCount`. A concurrent read
+  is at worst too high, which refuses a window mutation rather than permitting one.
 - 2026-09-11: `P4-T06` migration decision: **no index added**. Captured
   `EXPLAIN FORMAT=JSON` for the emitted search query shows the overlap probe reaching
   `bookings` through the existing `idx_bookings_room_time_status_check_in_out` and
@@ -372,6 +379,19 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   Vietnamese, with no orphan or missing entry in either direction. Both new OpenAPI
   assertions are mutation-proven. `REVIEW-028` records five findings, all fixed, with
   no Blocker or High.
+- 2026-09-11: `REVIEW-029` (independent) closed `P4-T06`/`P4-T07` with four findings,
+  all fixed in one pass. The public booking ID pattern becomes `^[0-7][0-9A-HJKMNP-TV-Z]{25}$`:
+  ten base32 characters carry 50 bits while a ULID timestamp is 48, so the leading
+  character can never exceed `7`, and the pattern now lives beside the generator that
+  guarantees it rather than being restated in the DTO. Two documentation fixes from
+  `P4-T07` had no test that would fail if reverted, so the admin edit's stable error
+  codes and the auth limiter's `429`/`503` are now asserted and mutation-proven, and
+  `REVIEW-028`'s verification column is corrected to name only checks that actually
+  protect each fix. The room-lock safety argument now names all three transitions that
+  take no room lock rather than only cancellation. The README smoke is split into a
+  read-only production procedure and a labelled non-production fixture journey with
+  defined variables, derived hotel dates, captured ID/version, and cleanup, matching
+  this plan's rule that mutations run only against a non-production fixture.
 - Later implementation-only choices remain subject to evidence and review. Record
   every durable decision here and in the appropriate ADR before changing its
   contract.

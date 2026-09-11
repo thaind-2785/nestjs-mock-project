@@ -2,6 +2,16 @@ import { createHash, randomBytes } from 'node:crypto';
 import { BookingCreateInput } from './booking-create.types';
 
 const ulidAlphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/**
+ * The canonical form this generator can actually emit. Ten Crockford base32
+ * characters carry 50 bits, but a ULID timestamp is 48, so the leading character
+ * is the top two timestamp bits padded with three zeros and can never exceed `7`.
+ * Accepting `8`-`Z` there would let a 130-bit value through validation only to
+ * become a misleading not-found lookup, so the route pattern and the generator
+ * agree here rather than in two places.
+ */
+export const bookingPublicIdPattern = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 const ulidRandomMaximum = (1n << 80n) - 1n;
 let lastTimestamp = -1;
 let lastRandom = 0n;

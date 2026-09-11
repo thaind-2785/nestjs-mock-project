@@ -245,27 +245,63 @@ stop booking mutation traffic and use a compatible application rollback or a for
 fix: never drop booking, history, idempotency, or outbox data, and never revert the
 referenced room tables.
 
-Smoke journey after a deploy, using a bearer token obtained as described above:
+Two smoke procedures follow, and they are not interchangeable. Production gets the
+read-only one; anything that writes a booking runs against a non-production fixture.
+
+Set the shared variables first. `ADMIN_TOKEN` comes from the login flow above, and
+the dates are derived so the journey stays valid as time passes rather than expiring
+into the past-date rejection:
 
 ```bash
-# Public availability, which excludes rooms with an overlapping confirmed stay
-curl "$API/rooms?checkIn=2026-10-06&checkOut=2026-10-09"
+API=http://localhost:3000/api/v1
+CHECK_IN=$(date -u -d '+21 days' +%F 2>/dev/null || date -u -v+21d +%F)
+CHECK_OUT=$(date -u -d '+24 days' +%F 2>/dev/null || date -u -v+24d +%F)
+```
 
-# Create one request. The Idempotency-Key is required and makes a retry safe:
-# the same key with the same body replays the original response, while the same
-# key with a different body is refused rather than creating a second booking.
-curl -X POST "$API/bookings" -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -H 'Idempotency-Key: smoke-2026-10-06' \
-  -d '{"roomId":"1","checkIn":"2026-10-06","checkOut":"2026-10-09"}'
+**Production smoke — read only.** This is the whole of what runs against live data.
+It proves the new routes are reachable, authorized, and reading the Phase 4 tables,
+and it creates nothing:
 
-# Admin transitions. Approve and reject are idempotent for an identical repeat.
-curl -X POST "$API/admin/bookings/$BOOKING_ID/approve" -H "Authorization: Bearer $ADMIN_TOKEN"
+```bash
+# Public availability, which now excludes rooms with an overlapping confirmed stay
+curl -fsS "$API/rooms?checkIn=$CHECK_IN&checkOut=$CHECK_OUT" >/dev/null
 
-# Editing room or dates requires the current version in If-Match. Read the booking
-# first; a stale version returns 412 and changes nothing, and a missing one 428.
-curl -X PATCH "$API/admin/bookings/$BOOKING_ID" -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' -H 'If-Match: "2"' \
-  -d '{"checkOut":"2026-10-10","reason":"Guest extended the stay."}'
+# Owner and admin lists, proving the booking tables and RBAC are live
+curl -fsS "$API/bookings" -H "Authorization: Bearer $TOKEN" >/dev/null
+curl -fsS "$API/admin/bookings" -H "Authorization: Bearer $ADMIN_TOKEN" >/dev/null
+```
+
+**Non-production fixture journey — writes data.** Run this only against a disposable
+environment, never against production. `ROOM_ID` is a bookable room in that fixture:
+
+```bash
+# Create one request. The Idempotency-Key is required and makes a retry safe: the
+# same key with the same body replays the original response, while the same key
+# with a different body is refused rather than creating a second booking.
+BOOKING_ID=$(curl -fsS -X POST "$API/bookings" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: smoke-$CHECK_IN" \
+  -d "{\"roomId\":\"$ROOM_ID\",\"checkIn\":\"$CHECK_IN\",\"checkOut\":\"$CHECK_OUT\"}" \
+  | jq -r .id)
+
+# Approve it, capturing the version the next step must send back.
+VERSION=$(curl -fsS -X POST "$API/admin/bookings/$BOOKING_ID/approve" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r .version)
+
+# Editing room or dates requires that current version in If-Match. A stale version
+# returns 412 and changes nothing; a missing one returns 428.
+NEW_CHECK_OUT=$(date -u -d '+25 days' +%F 2>/dev/null || date -u -v+25d +%F)
+curl -fsS -X PATCH "$API/admin/bookings/$BOOKING_ID" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -H "If-Match: \"$VERSION\"" \
+  -d "{\"checkOut\":\"$NEW_CHECK_OUT\",\"reason\":\"Smoke test extension.\"}" >/dev/null
+
+# Clean up by cancelling the booking. Rows stay for audit by design: booking,
+# status history, change history, and outbox events are never deleted by the API,
+# so reset the fixture database if a pristine state is needed.
+curl -fsS -X POST "$API/admin/bookings/$BOOKING_ID/cancel" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"reason":"Smoke test cleanup."}' >/dev/null
 ```
 
 An edit never reprices the booking: the per-night snapshot taken at creation is

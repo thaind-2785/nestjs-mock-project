@@ -75,7 +75,7 @@ describe('BookingsController OpenAPI contract', () => {
       in: 'path',
       required: true,
       name: 'bookingId',
-      schema: { pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' },
+      schema: { pattern: '^[0-7][0-9A-HJKMNP-TV-Z]{25}$' },
     });
   });
 

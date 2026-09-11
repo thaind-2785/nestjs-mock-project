@@ -116,9 +116,15 @@ date values.
 - Public room results expose only `ACTIVE` rooms. Admin endpoints use an `ADMIN`
   policy in addition to JWT authentication.
 - Public availability requires one active `room_times` row containing the complete
-  requested range. The API resolves that row from `{ roomId, checkIn, checkOut }`;
-  clients cannot select a foreign room-time ID directly. Active windows of a room
-  are non-overlapping, so resolution is deterministic.
+  requested range **and** no `CONFIRMED` booking of that physical room overlapping it.
+  The overlap is room-wide rather than window-wide, because an admin edit can move a
+  confirmed stay to another window and an older stay may still reference a deactivated
+  one. Checkout is exclusive, so a stay beginning on another's checkout day stays
+  available, and pending or terminal bookings never withdraw a room. `ROOM-01` and
+  `ROOM-02` answer this identically, and booking writes use the same comparison. The
+  API resolves the window from `{ roomId, checkIn, checkOut }`; clients cannot select
+  a foreign room-time ID directly. Active windows of a room are non-overlapping, so
+  resolution is deterministic.
 - `BOOK-01` locks the physical room first, then resolves and locks the active window,
   revalidates containment, and retains both locks through booking/history/
   idempotency commit. A concurrent window update therefore completes either before

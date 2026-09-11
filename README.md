@@ -211,6 +211,78 @@ history atomically. Admin status changes require a reason, cannot deactivate the
 calling admin, cannot remove the last active admin, and immediately revoke the
 target user's sessions.
 
+## Booking requests
+
+Phase 4 adds the booking vertical: a user creates a `PENDING` request, an admin
+approves, rejects, edits, or cancels it, and public availability stops advertising a
+room whose `CONFIRMED` stay overlaps the requested dates.
+
+Booking policy is configured explicitly and validated at startup:
+
+```dotenv
+# The business-local calendar used to decide whether a stay starts today or in the
+# past. Production must set this deliberately; the server clock's zone is not used.
+HOTEL_TIMEZONE=Asia/Ho_Chi_Minh
+# Per-user create budget enforced by the shared Redis limiter before any body-driven
+# database lock is taken.
+BOOKING_CREATE_RATE_LIMIT_MAX=10
+BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS=60
+# Minimum retention for booking-create idempotency records. Phase 7 owns cleanup.
+BOOKING_IDEMPOTENCY_RETENTION_HOURS=24
+```
+
+Deploy order is migration first, application second:
+
+```bash
+# 1. Run the reviewed Phase 4 migration and verify the new tables and indexes.
+npm run migration:run
+# 2. Deploy the API, then confirm MySQL and Redis readiness before opening traffic.
+```
+
+The Phase 4 migration is additive, so the previous application tolerates the empty
+new tables and a pre-traffic rollback is safe. After the first real booking write,
+stop booking mutation traffic and use a compatible application rollback or a forward
+fix: never drop booking, history, idempotency, or outbox data, and never revert the
+referenced room tables.
+
+Smoke journey after a deploy, using a bearer token obtained as described above:
+
+```bash
+# Public availability, which excludes rooms with an overlapping confirmed stay
+curl "$API/rooms?checkIn=2026-10-06&checkOut=2026-10-09"
+
+# Create one request. The Idempotency-Key is required and makes a retry safe:
+# the same key with the same body replays the original response, while the same
+# key with a different body is refused rather than creating a second booking.
+curl -X POST "$API/bookings" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: smoke-2026-10-06' \
+  -d '{"roomId":"1","checkIn":"2026-10-06","checkOut":"2026-10-09"}'
+
+# Admin transitions. Approve and reject are idempotent for an identical repeat.
+curl -X POST "$API/admin/bookings/$BOOKING_ID/approve" -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Editing room or dates requires the current version in If-Match. Read the booking
+# first; a stale version returns 412 and changes nothing, and a missing one 428.
+curl -X PATCH "$API/admin/bookings/$BOOKING_ID" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' -H 'If-Match: "2"' \
+  -d '{"checkOut":"2026-10-10","reason":"Guest extended the stay."}'
+```
+
+An edit never reprices the booking: the per-night snapshot taken at creation is
+preserved by design, and repricing needs a separately accepted contract.
+
+**Phase 4 enqueues notifications but delivers none.** Every transition writes an
+`outbox_events` row in the same transaction as the booking change, and those rows
+stay `PENDING` until Phase 5 ships a worker. Activating the booking feature in
+production therefore requires either pairing it with Phase 5 delivery, or recording
+explicit acceptance of delayed mail plus a backlog-age and backlog-count monitor and
+an idempotent later-drain procedure. Owners are not notified of an approval,
+rejection, edit, or cancellation until that worker runs.
+
+Redis limiter failure denies booking creation but must never break read endpoints,
+and MySQL overload uses the existing bounded `503`. Neither failure may fall back to
+unbounded requests or to an availability claim the database did not support.
+
 ## Quality commands
 
 ```bash

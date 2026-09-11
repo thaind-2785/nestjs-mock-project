@@ -146,7 +146,8 @@
   security, data, concurrency, idempotency, and operations review.
 - **Notes:** Run the full gate once at handoff, fix every finding, and rerun it only
   when a changed gate input or an accepted Blocker/High fix requires it.
-- **Status:** Pending.
+- **Status:** Complete (2026-09-11; `REVIEW-028` exit report, all 17 `SPEC-006`
+  acceptance boxes checked).
 
 ## Verification commands
 
@@ -342,6 +343,35 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   exclusive-checkout boundary. The availability exclusion is mutation-proven:
   neutralizing it fails three search tests. `REVIEW-027` findings were fixed in the
   same pass.
+- 2026-09-11: `P4-T07` reconciled the published contract with the implementation.
+  `BookingIdParamDto` now publishes the 26-character ULID pattern rather than only an
+  example, the admin edit's `400` lists `BOOKING_STAY_INVALID`, and two OpenAPI
+  contract specs assert every booking operation's status set, the required
+  `Idempotency-Key`, the ULID path pattern, and that `If-Match` is required on the
+  edit and on nothing else. `README.md` gained the booking operator section: policy
+  configuration, migration-before-application deploy order, the additive-rollback and
+  forward-fix rule, a smoke journey covering create/approve/edit with retry guidance,
+  and the explicit caveat that Phase 4 enqueues notifications but delivers none.
+  `ADR-0002` records the Phase 4 completion decisions, and `endpoint-catalog.md` now
+  states the room-wide confirmed exclusion in its availability rule.
+- 2026-09-11: `P4-T07` closed the inherited Phase 2 Swagger debt. The three
+  rate-limited auth operations now document `429 AUTH_RATE_LIMITED` and
+  `503 AUTHORIZATION_UNAVAILABLE`. The change is decorator-only and touches no auth
+  behavior, which is what the documentation plan required before closing it here
+  rather than carrying it forward as unrelated debt.
+- 2026-09-11: `P4-T07` migration state: **no ad hoc schema change**. The production
+  data source registers `CreateBookingCoreSchema1788580000000` with all five Phase 4
+  entities, `synchronize` stays false, and `src/database/migrations/` has been
+  untouched since `P4-T01` (commit `9190898`). The booking integration suite proves
+  the migration reverts and reapplies cleanly against real MySQL, and the forward-fix
+  procedure is documented in both `README.md` and this plan's deployment section.
+- `P4-T07` handoff evidence: `MYSQL_PORT=13306 npm run verify` green — unit 240/240
+  (44 suites), integration 102/102 (11 suites), E2E 24/24 (6 suites), plus typecheck,
+  lint, formatting, Harness check/test/eval, Compose contract/config, and build.
+  Locale parity verified mechanically: 67 declared error keys, 67 English, 67
+  Vietnamese, with no orphan or missing entry in either direction. Both new OpenAPI
+  assertions are mutation-proven. `REVIEW-028` records five findings, all fixed, with
+  no Blocker or High.
 - Later implementation-only choices remain subject to evidence and review. Record
   every durable decision here and in the appropriate ADR before changing its
   contract.

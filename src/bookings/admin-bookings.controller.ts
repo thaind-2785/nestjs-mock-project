@@ -137,7 +137,7 @@ export class AdminBookingsController {
     status: 400,
     type: ErrorResponseDto,
     description:
-      'BOOKING_VERSION_MALFORMED, BOOKING_CHANGE_EMPTY, or VALIDATION_FAILED.',
+      'BOOKING_VERSION_MALFORMED, BOOKING_CHANGE_EMPTY, BOOKING_STAY_INVALID, or VALIDATION_FAILED.',
   })
   @ApiResponse({
     status: 404,

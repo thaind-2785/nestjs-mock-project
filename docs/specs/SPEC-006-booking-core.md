@@ -328,7 +328,7 @@ application rollback or forward migration and does not drop Phase 4 data.
 - [x] Given a concurrent booking create and room-window edit/deactivation, then lock
       ordering makes creation observe either the complete before-state or after-state
       and never bind a stale window.
-- [ ] Given overlapping pending requests, both may exist and public availability
+- [x] Given overlapping pending requests, both may exist and public availability
       remains available until one request becomes confirmed.
 - [x] Given two admins concurrently approving overlapping requests for the same
       physical room, exactly one becomes `CONFIRMED`; the other gets deterministic
@@ -346,10 +346,10 @@ application rollback or forward migration and does not drop Phase 4 data.
 - [x] Given a valid booking `If-Match`, an admin edit locks rooms in ascending order,
       revalidates source/destination, updates once, appends before/after history, and
       emits one event; a stale version changes nothing and returns 412.
-- [ ] Given Phase 4 booking/history rows, room-time list usage reports real counts,
+- [x] Given Phase 4 booking/history rows, room-time list usage reports real counts,
       date edits/deletes respect any history, and deactivation rejects pending or
       confirmed usage.
-- [ ] Given a stay search/detail, every room with overlapping `CONFIRMED` booking is
+- [x] Given a stay search/detail, every room with overlapping `CONFIRMED` booking is
       excluded/marked unavailable while overlapping pending or terminal rows do not
       block it.
 - [ ] Given an exhausted or unavailable shared limiter, booking create returns the

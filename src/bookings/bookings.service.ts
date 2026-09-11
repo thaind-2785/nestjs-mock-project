@@ -41,6 +41,10 @@ import { UpdateBookingDto } from './dto/update-booking.dto';
 import { bookingsErrors } from './bookings.errors';
 import { orderedUniqueRoomIds } from './booking-lock-order';
 import {
+  confirmedOverlapCondition,
+  confirmedOverlapParameters,
+} from './booking-overlap';
+import {
   PaginatedUserBookingsResponse,
   UserBookingDetailResponse,
   UserBookingResponse,
@@ -867,16 +871,10 @@ export class BookingsService {
       .select('confirmed.id')
       .innerJoin('confirmed.roomTime', 'confirmedRoomTime')
       .where('confirmedRoomTime.room_id = :roomId', { roomId })
-      .andWhere('confirmed.status = :confirmedStatus', {
-        confirmedStatus: BookingStatus.Confirmed,
-      })
       .andWhere('confirmed.id != :bookingId', { bookingId })
       .andWhere(
-        'confirmed.check_in < :checkOut AND confirmed.check_out > :checkIn',
-        {
-          checkIn,
-          checkOut,
-        },
+        confirmedOverlapCondition('confirmed'),
+        confirmedOverlapParameters({ checkIn, checkOut }),
       )
       .setLock('pessimistic_write')
       .getOne();

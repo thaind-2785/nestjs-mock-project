@@ -26,7 +26,7 @@ import { Room } from '../src/rooms/entities/room.entity';
 import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { ReferenceCatalogService } from '../src/rooms/reference-catalog.service';
 import { lockRoom } from '../src/rooms/room-lock';
-import { ZeroRoomTimeUsageRepository } from '../src/rooms/room-time-usage.repository';
+import { UnusedRoomTimeUsageRepository } from './fixtures/room-time-usage';
 import { RoomTimesService } from '../src/rooms/room-times.service';
 import { RoomsService } from '../src/rooms/rooms.service';
 import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
@@ -48,7 +48,7 @@ describe('Phase 3 room administration persistence', () => {
   let imageFixture: RoomImageFixture;
   let rooms: RoomsService;
   let roomTimes: RoomTimesService;
-  let usageRepository: ZeroRoomTimeUsageRepository;
+  let usageRepository: UnusedRoomTimeUsageRepository;
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
@@ -108,7 +108,7 @@ describe('Phase 3 room administration persistence', () => {
     catalog = new ReferenceCatalogService(dataSource, connection);
     imageFixture = createRoomImageFixture(dataSource, connection, environment);
     rooms = new RoomsService(dataSource, connection, imageFixture.images);
-    usageRepository = new ZeroRoomTimeUsageRepository();
+    usageRepository = new UnusedRoomTimeUsageRepository();
     roomTimes = new RoomTimesService(dataSource, connection, usageRepository);
   });
 

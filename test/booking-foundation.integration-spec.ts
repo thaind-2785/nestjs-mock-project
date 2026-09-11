@@ -16,6 +16,7 @@ import { Booking } from '../src/bookings/entities/booking.entity';
 import { IdempotencyKey } from '../src/bookings/entities/idempotency-key.entity';
 import { OutboxEvent } from '../src/bookings/entities/outbox-event.entity';
 import { BookingsService } from '../src/bookings/bookings.service';
+import { BookingRoomTimeUsageRepository } from '../src/bookings/room-time-usage.repository';
 import { BookingCreateResponse } from '../src/bookings/booking-create.types';
 import { createBookingsConfiguration } from '../src/config/bookings.config';
 import { createDatabaseConfiguration } from '../src/config/database.config';
@@ -32,6 +33,8 @@ import { RoomType } from '../src/rooms/entities/room-type.entity';
 import { Room } from '../src/rooms/entities/room.entity';
 import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { lockRoom } from '../src/rooms/room-lock';
+import { RoomTimesService } from '../src/rooms/room-times.service';
+import { DatabaseConnectionService } from '../src/database/database-connection.service';
 import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
@@ -46,6 +49,8 @@ describe('Phase 4 booking foundation persistence', () => {
   let adminConnection: mysql.Connection;
   let disposableDatabase: string;
   let bookings: BookingsService;
+  let usage: BookingRoomTimeUsageRepository;
+  let roomTimes: RoomTimesService;
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
@@ -109,6 +114,12 @@ describe('Phase 4 booking foundation persistence', () => {
     bookings = new BookingsService(
       dataSource,
       createBookingsConfiguration(environment),
+    );
+    usage = new BookingRoomTimeUsageRepository();
+    roomTimes = new RoomTimesService(
+      dataSource,
+      new DatabaseConnectionService(dataSource),
+      usage,
     );
   });
 
@@ -1435,6 +1446,193 @@ describe('Phase 4 booking foundation persistence', () => {
     );
     expect(column?.options.utc).toBe(true);
   }
+
+  it('reports real booking and change-history usage per window', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const other = await createRoomTime('B-301');
+    const pending = await bookings.create(user.id, 'usage-pending', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const terminal = await bookings.create(user.id, 'usage-terminal', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkOutDifferent,
+      checkOut: fixtureDates.availableTo,
+    });
+    await bookings.reject({
+      actorUserId: admin.id,
+      bookingPublicId: terminal.id,
+      reason: 'Dates unavailable.',
+    });
+
+    // A date-only edit keeps one window in both change-history columns, so the
+    // window must be credited with one change rather than two.
+    await bookings.updateAdmin({
+      actorUserId: admin.id,
+      bookingPublicId: pending.id,
+      expectedVersion: '1',
+      body: {
+        checkOut: fixtureDates.checkOutDifferent,
+        reason: 'Extend the stay inside the same window.',
+      },
+    });
+
+    expect(
+      await usage.findByRoomTimeIds(dataSource.manager, [
+        roomTime.id,
+        other.id,
+      ]),
+    ).toEqual(
+      new Map([
+        [
+          roomTime.id,
+          { bookingCount: 2, activeBookingCount: 1, changeHistoryCount: 1 },
+        ],
+        [
+          other.id,
+          { bookingCount: 0, activeBookingCount: 0, changeHistoryCount: 0 },
+        ],
+      ]),
+    );
+
+    // Moving the stay across rooms credits both windows with the same change.
+    await bookings.updateAdmin({
+      actorUserId: admin.id,
+      bookingPublicId: pending.id,
+      expectedVersion: '2',
+      body: { roomId: other.roomId, reason: 'Move to the other room.' },
+    });
+    const moved = await usage.findByRoomTimeIds(dataSource.manager, [
+      roomTime.id,
+      other.id,
+    ]);
+    expect(moved.get(roomTime.id)).toEqual({
+      bookingCount: 1,
+      activeBookingCount: 0,
+      changeHistoryCount: 2,
+    });
+    expect(moved.get(other.id)).toEqual({
+      bookingCount: 1,
+      activeBookingCount: 1,
+      changeHistoryCount: 1,
+    });
+  });
+
+  it('blocks window date edits, deactivation, and deletion by real usage', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'usage-policy', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+
+    await expect(
+      roomTimes.update(roomTime.roomId, roomTime.id, {
+        availableTo: fixtureDates.outsideCheckOut,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_DATES_IMMUTABLE' });
+    await expect(
+      roomTimes.update(roomTime.roomId, roomTime.id, {
+        status: RoomTimeStatus.Inactive,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_IN_USE' });
+    await expect(
+      roomTimes.delete(roomTime.roomId, roomTime.id),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_HAS_HISTORY' });
+
+    // A confirmed stay claims the window just as a pending request does.
+    await bookings.approve({
+      actorUserId: admin.id,
+      bookingPublicId: created.id,
+    });
+    await expect(
+      roomTimes.update(roomTime.roomId, roomTime.id, {
+        status: RoomTimeStatus.Inactive,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_IN_USE' });
+
+    // A terminal booking no longer claims the window, so deactivation reopens
+    // while the immutable history still protects the dates and the row itself.
+    await bookings.cancelAdmin({
+      actorUserId: admin.id,
+      bookingPublicId: created.id,
+      reason: 'Hotel maintenance.',
+    });
+    expect(
+      await roomTimes.update(roomTime.roomId, roomTime.id, {
+        status: RoomTimeStatus.Inactive,
+      }),
+    ).toMatchObject({
+      status: RoomTimeStatus.Inactive,
+      usage: { bookingCount: 1, activeBookingCount: 0 },
+    });
+    await expect(
+      roomTimes.delete(roomTime.roomId, roomTime.id),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_HAS_HISTORY' });
+  });
+
+  it('serializes a window deactivation against a concurrent booking create', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const barrier = dataSource.createQueryRunner();
+    await barrier.connect();
+    await barrier.startTransaction();
+    const queries = jest.spyOn(dataSource.logger, 'logQuery');
+
+    try {
+      // Both paths take the physical room lock first, so holding it queues them
+      // behind this barrier and lets MySQL, not test timing, pick the winner.
+      await lockRoom(barrier.manager, roomTime.roomId);
+      const deactivation = roomTimes
+        .update(roomTime.roomId, roomTime.id, {
+          status: RoomTimeStatus.Inactive,
+        })
+        .then(() => 'deactivated' as const)
+        .catch((error: unknown) => error);
+      const creation = bookings
+        .create(user.id, 'usage-race', {
+          roomId: roomTime.roomId,
+          checkIn: fixtureDates.checkIn,
+          checkOut: fixtureDates.checkOut,
+        })
+        .then(() => 'created' as const)
+        .catch((error: unknown) => error);
+      await waitForQueryCount(queries, /FROM `rooms` .*FOR UPDATE/i, 2);
+      await barrier.commitTransaction();
+      const [deactivated, created] = await Promise.all([
+        deactivation,
+        creation,
+      ]);
+
+      // Whichever wins, the loser must fail and the database must agree with it:
+      // a deactivated window never holds an active booking, and an active
+      // booking never sits under a window deactivated behind its back.
+      const window = await dataSource
+        .getRepository(RoomTime)
+        .findOneByOrFail({ id: roomTime.id });
+      const activeBookings = await dataSource
+        .getRepository(Booking)
+        .countBy({ roomTimeId: roomTime.id, status: BookingStatus.Pending });
+      if (created === 'created') {
+        expect(deactivated).toMatchObject({ errorCode: 'ROOM_TIME_IN_USE' });
+        expect(window.status).toBe(RoomTimeStatus.Active);
+        expect(activeBookings).toBe(1);
+      } else {
+        expect(deactivated).toBe('deactivated');
+        expect(created).toMatchObject({
+          errorCode: 'BOOKING_WINDOW_UNAVAILABLE',
+        });
+        expect(window.status).toBe(RoomTimeStatus.Inactive);
+        expect(activeBookings).toBe(0);
+      }
+    } finally {
+      queries.mockRestore();
+      if (barrier.isTransactionActive) await barrier.rollbackTransaction();
+      await barrier.release();
+    }
+  });
 
   async function createBookingGraph(): Promise<{
     user: User;

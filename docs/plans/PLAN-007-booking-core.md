@@ -132,7 +132,7 @@
 - **Notes:** Replace `ZeroRoomTimeUsageRepository` and make reads/writes share the
   canonical overlap predicate. Capture representative `EXPLAIN` output before and
   after any index change. Pending and terminal bookings must never block.
-- **Status:** Pending.
+- **Status:** Complete (2026-09-11; `REVIEW-027` findings fixed in the same pass).
 
 ### P4-T07 — Phase 4 handoff
 
@@ -304,6 +304,44 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   lesson had recurred in that probe and is now fixed and mutation-proven, while the
   `@IsOptional()` null-through lesson did not recur, because `UpdateBookingDto` uses
   `ValidateIf` with a null-matrix unit test.
+- 2026-09-11: `P4-T06` completed public availability and room-time usage. Public
+  list and detail now subtract room-wide `CONFIRMED` overlap from window
+  containment, and `ZeroRoomTimeUsageRepository` is gone: `BookingRoomTimeUsageRepository`
+  reports real per-window booking, active-booking, and change-history counts through
+  the caller's manager.
+- 2026-09-11: `P4-T06` accepted contract decisions. The half-open confirmed-overlap
+  comparison lives once in `src/bookings/booking-overlap.ts` and is used by booking
+  approval, admin edits, and both availability reads, so a read can no longer drift
+  from a write. The exclusion is room-wide rather than window-wide, because a
+  confirmed stay keeps occupying its physical room after an admin edit moved it and
+  because an older stay may still reference a deactivated window; list and detail
+  build it from one private helper. Availability therefore depends on the booking
+  module by design — `RoomSearchService` imports the predicate and the `Booking`
+  entity, while `RoomsModule` stays the composition root that names the concrete
+  usage repository, so room-time policy still depends only on its port. Change
+  history is credited once per window per row: a date-only edit keeps one window in
+  both `from`/`to` columns, so the destination count skips rows whose source window
+  is identical. Usage counts need no extra lock, because every mutation that can
+  change them takes the physical room lock the caller already holds, and admin
+  cancellation only lowers the active count, which errs toward blocking.
+- 2026-09-11: `P4-T06` migration decision: **no index added**. Captured
+  `EXPLAIN FORMAT=JSON` for the emitted search query shows the overlap probe reaching
+  `bookings` through the existing `idx_bookings_room_time_status_check_in_out` and
+  `room_times` by `PRIMARY` (`eq_ref`), so the Phase 4 schema already supports both
+  the availability read and the usage counts. The capture is asserted in
+  `room-search.integration-spec.ts` rather than pasted here, so a plan regression
+  fails the suite instead of ageing in a document.
+- `P4-T06` focused evidence: unit 236/236 including the new overlap-predicate suite
+  that pins the half-open operators and the confirmed-only status; integration
+  102/102 including legacy-window exclusion for list and detail, adjacency, pending
+  coexistence, terminal non-blocking, the query-plan assertion, real usage counts
+  across a same-window and a cross-room edit, usage-driven date/deactivate/delete
+  rules for pending and confirmed stays, and the room-lock race between a window
+  deactivation and a concurrent create that asserts either winner leaves a
+  consistent database; E2E 24/24 including the public list/detail exclusion and its
+  exclusive-checkout boundary. The availability exclusion is mutation-proven:
+  neutralizing it fails three search tests. `REVIEW-027` findings were fixed in the
+  same pass.
 - Later implementation-only choices remain subject to evidence and review. Record
   every durable decision here and in the appropriate ADR before changing its
   contract.

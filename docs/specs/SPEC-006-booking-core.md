@@ -194,10 +194,11 @@ transport-only data such as request ID and access token.
   `available: false` for the same condition. Pending and terminal bookings do not
   block either result.
 - Every Phase 4 outbox payload uses `schemaVersion: 1`, `bookingId` (public ULID),
-  `ownerUserId`, `bookingVersion`, and the resulting booking snapshot. Rejected and
-  admin-cancelled events also contain the authorized reason; changed events contain
-  before/after room IDs and date ranges. The owner email is resolved by Phase 5 and
-  is not copied into the Phase 4 payload.
+  `ownerUserId`, `bookingVersion`, and the resulting booking snapshot. Every reasoned
+  event carries its authorized reason at `booking.reason`, so rejected, changed, and
+  admin-cancelled events all read it from one place; changed events additionally carry
+  top-level `before`/`after` room IDs and date ranges. The owner email is resolved by
+  Phase 5 and is not copied into the Phase 4 payload.
 - Logical outbox keys are
   `<eventType>:<bookingPublicId>:<resultingBookingVersion>`. This makes an idempotent
   transition retry reuse the already committed event rather than enqueueing a second
@@ -342,7 +343,7 @@ application rollback or forward migration and does not drop Phase 4 data.
 - [x] Given reject or admin-cancel without a non-empty bounded reason, validation
       fails; a successful transition writes status history and its outbox event in
       the same transaction.
-- [ ] Given a valid booking `If-Match`, an admin edit locks rooms in ascending order,
+- [x] Given a valid booking `If-Match`, an admin edit locks rooms in ascending order,
       revalidates source/destination, updates once, appends before/after history, and
       emits one event; a stale version changes nothing and returns 412.
 - [ ] Given Phase 4 booking/history rows, room-time list usage reports real counts,

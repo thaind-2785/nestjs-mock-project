@@ -19,6 +19,21 @@ values; equal amenity sets skip assignment rewrites. Only `viewCode` is nullable
 on room writes; reference catalog writes allow null only for `description`.
 The admin list `view` filter is trimmed and uppercased before validation/filtering.
 
+## Admin booking mutation preconditions
+
+`PATCH /admin/bookings/:bookingId` requires the same strong quoted decimal
+`If-Match` syntax. Missing/empty, malformed, and stale values return
+`428 BOOKING_VERSION_REQUIRED`, `400 BOOKING_VERSION_MALFORMED`, and
+`412 BOOKING_VERSION_CONFLICT`. The request requires a trimmed 1-1000 character
+reason and an actual room/date change. A successful pending/confirmed edit preserves
+the original price snapshot, increments version once, and atomically writes change
+history plus `booking.changed`. Admin cancellation accepts the same bounded reason,
+supports `PENDING|CONFIRMED -> CANCELLED_BY_ADMIN`, and an identical retry is
+side-effect free; it atomically writes status history plus
+`booking.cancelled_by_admin`. Both events carry their authorized reason at
+`booking.reason`, and `booking.changed` adds top-level `before`/`after` room and
+date values.
+
 ## HTTP endpoints
 
 | ID                 | Method and path                                    | Actor             | Scope              | Purpose / key contract                                                                                                                                                                                                                 |

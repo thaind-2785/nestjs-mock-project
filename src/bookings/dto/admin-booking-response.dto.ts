@@ -12,6 +12,11 @@ class AdminBookingOwnerResponseDto {
   @ApiProperty({ enum: UserStatus }) status!: UserStatus;
 }
 
+class AdminBookingActorResponseDto {
+  @ApiProperty({ example: '42' }) id!: string;
+  @ApiProperty({ example: 'Hotel Admin' }) displayName!: string;
+}
+
 class AdminBookingChangeEndpointDto {
   @ApiProperty({ example: '1' }) roomId!: string;
   @ApiProperty({ format: 'date' }) checkIn!: string;
@@ -19,10 +24,8 @@ class AdminBookingChangeEndpointDto {
 }
 
 class AdminBookingChangeResponseDto {
-  @ApiProperty({ type: AdminBookingOwnerResponseDto }) actor!: Pick<
-    AdminBookingOwnerResponseDto,
-    'id' | 'displayName'
-  >;
+  @ApiProperty({ type: AdminBookingActorResponseDto })
+  actor!: AdminBookingActorResponseDto;
   @ApiProperty({ type: AdminBookingChangeEndpointDto })
   from!: AdminBookingChangeEndpointDto;
   @ApiProperty({ type: AdminBookingChangeEndpointDto })

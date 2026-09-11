@@ -116,7 +116,7 @@
 - **Notes:** Pre-read candidates, lock old/new room IDs ascending, lock and re-read
   booking/source window, reject drift, resolve/lock the destination, revalidate
   status/containment/overlap, then update history and outbox atomically.
-- **Status:** Pending.
+- **Status:** Complete (2026-09-11; `REVIEW-026` findings fixed in the same pass).
 
 ### P4-T06 — Complete availability and room-time usage
 
@@ -269,6 +269,41 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   RBAC, and HTTP transitions. Final verification passed: unit 221/221, integration
   87/87, E2E 23/23, format, lint, typecheck, Harness, and build; `REVIEW-025`
   approved after fixes.
+- 2026-09-11: `P4-T05` added admin booking edit and cancellation. `PATCH` parses one
+  strong quoted decimal `If-Match`, pre-reads only the source identity/version needed
+  for lock order, locks the old and new physical room IDs in ascending numeric order,
+  re-reads and locks the booking plus its source window, rejects source drift, resolves
+  and locks one active containing destination window, and revalidates
+  status/containment plus room-wide confirmed overlap for confirmed stays before
+  writing the booking, its before/after change history, and one `booking.changed`
+  event atomically. The edit preserves the original price snapshot and advances version
+  exactly once. Admin cancellation covers `PENDING|CONFIRMED -> CANCELLED_BY_ADMIN`,
+  replays an identical reason without a second history or outbox row, and conflicts on
+  a different reason or a terminal status.
+- 2026-09-11: `P4-T05` accepted contract decisions: room lock order compares decimal
+  IDs numerically rather than lexicographically, so IDs past 19 digits still serialize
+  in one order; every reasoned Phase 4 event carries its authorized reason at
+  `payload.booking.reason` (rejected, changed, and admin-cancelled alike) and
+  `booking.changed` adds top-level `before`/`after` room and date values. One private
+  outbox writer now emits every Phase 4 booking event so the envelope, the reason
+  position, and the `<eventType>:<publicId>:<resultingVersion>` key cannot drift per
+  transition. `SPEC-006` and `endpoint-catalog.md` record this reason position.
+- `P4-T05` focused evidence: 3 unit suites / 12 tests for lock order, `If-Match`
+  parsing, and edit DTO validation; 28 real-MySQL booking integration tests including
+  version control with price preservation, the opposite concurrent cross-room move
+  that proves ordered locks avoid deadlock, post-lock source drift, destination
+  overlap under a legacy window, empty/terminal edit policy, edit and cancel outbox
+  rollback, idempotent admin cancellation, and the pinned payload/idempotency-key
+  shape for both new events; and the extended admin E2E journey for 428/400/200/412
+  `If-Match` behavior, idempotent cancellation, reason validation, and user RBAC 403s
+  on both new routes. `REVIEW-026` findings (swapped reject/cancel request DTOs,
+  duplicated outbox row construction with an inconsistent reason position, and a dead
+  `fromStatus` branch, and a confirmed-overlap probe that hydrated and locked every
+  `bookings` column for an existence check) were fixed in the same pass. The review
+  also swept the two recurrence classes in `docs/logs/error-log.md`: the projection
+  lesson had recurred in that probe and is now fixed and mutation-proven, while the
+  `@IsOptional()` null-through lesson did not recur, because `UpdateBookingDto` uses
+  `ValidateIf` with a null-matrix unit test.
 - Later implementation-only choices remain subject to evidence and review. Record
   every durable decision here and in the appropriate ADR before changing its
   contract.

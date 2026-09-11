@@ -26,12 +26,16 @@ interface ErrorTranslations {
     badRequest: string;
     bookingCreateRateLimited: string;
     bookingCreateUnavailable: string;
+    bookingChangeEmpty: string;
     bookingNotFound: string;
     bookingPriceOutOfRange: string;
     bookingStateChanged: string;
     bookingStayInvalid: string;
     bookingStatusConflict: string;
     bookingWindowUnavailable: string;
+    bookingVersionConflict: string;
+    bookingVersionMalformed: string;
+    bookingVersionRequired: string;
     conflict: string;
     databaseOverloaded: string;
     forbidden: string;

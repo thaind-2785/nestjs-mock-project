@@ -3,6 +3,12 @@ import { ApplicationException } from '../common/errors/application.exception';
 import { errorMessageKeys } from '../common/errors/error-descriptor';
 
 export const bookingsErrors = {
+  changeEmpty: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'BOOKING_CHANGE_EMPTY',
+      errorMessageKeys.bookingChangeEmpty,
+    ),
   idempotencyKeyInvalid: () =>
     new ApplicationException(
       HttpStatus.BAD_REQUEST,
@@ -62,6 +68,24 @@ export const bookingsErrors = {
       HttpStatus.CONFLICT,
       'BOOKING_WINDOW_UNAVAILABLE',
       errorMessageKeys.bookingWindowUnavailable,
+    ),
+  versionRequired: () =>
+    new ApplicationException(
+      HttpStatus.PRECONDITION_REQUIRED,
+      'BOOKING_VERSION_REQUIRED',
+      errorMessageKeys.bookingVersionRequired,
+    ),
+  versionMalformed: () =>
+    new ApplicationException(
+      HttpStatus.BAD_REQUEST,
+      'BOOKING_VERSION_MALFORMED',
+      errorMessageKeys.bookingVersionMalformed,
+    ),
+  versionConflict: () =>
+    new ApplicationException(
+      HttpStatus.PRECONDITION_FAILED,
+      'BOOKING_VERSION_CONFLICT',
+      errorMessageKeys.bookingVersionConflict,
     ),
   stayInvalid: () =>
     new ApplicationException(

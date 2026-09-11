@@ -37,7 +37,9 @@ import {
 } from './booking-create.types';
 import { UserBookingQueryDto } from './dto/user-booking-query.dto';
 import { AdminBookingQueryDto } from './dto/admin-booking-query.dto';
+import { UpdateBookingDto } from './dto/update-booking.dto';
 import { bookingsErrors } from './bookings.errors';
+import { orderedUniqueRoomIds } from './booking-lock-order';
 import {
   PaginatedUserBookingsResponse,
   UserBookingDetailResponse,
@@ -54,7 +56,26 @@ const bookingCreateOperation = 'BOOKING_CREATE';
 const bookingCancelOperation = 'BOOKING_CANCEL';
 const bookingApproveOperation = 'BOOKING_APPROVE';
 const bookingRejectOperation = 'BOOKING_REJECT';
+const bookingUpdateOperation = 'BOOKING_UPDATE';
+const bookingAdminCancelOperation = 'BOOKING_ADMIN_CANCEL';
 const idempotencyKeyPattern = /^[A-Za-z0-9._:-]{8,128}$/;
+
+type BookingOutboxEventType =
+  | 'booking.confirmed'
+  | 'booking.rejected'
+  | 'booking.changed'
+  | 'booking.cancelled_by_admin';
+
+interface BookingChangeOutboxEndpoint {
+  roomId: string;
+  checkIn: string;
+  checkOut: string;
+}
+
+interface BookingChangeOutboxDetail {
+  before: BookingChangeOutboxEndpoint;
+  after: BookingChangeOutboxEndpoint;
+}
 
 interface BookingCreateTransactionResult {
   response: BookingCreateResponse;
@@ -298,6 +319,13 @@ export class BookingsService {
           throw bookingsErrors.statusConflict();
         const roomTime = await manager.findOne(RoomTime, {
           where: { id: booking.roomTimeId, roomId: room.id },
+          select: {
+            id: true,
+            roomId: true,
+            availableFrom: true,
+            availableTo: true,
+            status: true,
+          },
           lock: { mode: 'pessimistic_write' },
         });
         if (
@@ -308,22 +336,13 @@ export class BookingsService {
         ) {
           throw bookingsErrors.windowUnavailable();
         }
-        const conflict = await manager
-          .getRepository(Booking)
-          .createQueryBuilder('confirmed')
-          .innerJoin('confirmed.roomTime', 'confirmedRoomTime')
-          .where('confirmedRoomTime.room_id = :roomId', { roomId: room.id })
-          .andWhere('confirmed.status = :confirmedStatus', {
-            confirmedStatus: BookingStatus.Confirmed,
-          })
-          .andWhere('confirmed.id != :bookingId', { bookingId: booking.id })
-          .andWhere(
-            'confirmed.check_in < :checkOut AND confirmed.check_out > :checkIn',
-            booking,
-          )
-          .setLock('pessimistic_write')
-          .getOne();
-        if (conflict) throw bookingsErrors.roomAlreadyBooked();
+        await this.assertNoConfirmedOverlap(
+          manager,
+          room.id,
+          booking.id,
+          booking.checkIn,
+          booking.checkOut,
+        );
         booking.status = BookingStatus.Confirmed;
         const saved = await manager.save(booking);
         await this.appendTransitionAndOutbox(
@@ -403,6 +422,232 @@ export class BookingsService {
       response.id,
       bookingRejectOperation,
       replayed ? 'replayed' : 'rejected',
+    );
+    return response;
+  }
+
+  async updateAdmin(input: {
+    actorUserId: string;
+    bookingPublicId: string;
+    expectedVersion: string;
+    body: UpdateBookingDto;
+    requestId?: string;
+  }): Promise<AdminBookingDetailResponse> {
+    const snapshot = await this.bookingSourceSnapshot(input.bookingPublicId);
+    if (snapshot.version !== input.expectedVersion)
+      throw bookingsErrors.versionConflict();
+    const destinationRoomId = input.body.roomId ?? snapshot.roomTime.roomId;
+    await this.dataSource
+      .transaction(async (manager) => {
+        const roomIds = orderedUniqueRoomIds([
+          snapshot.roomTime.roomId,
+          destinationRoomId,
+        ]);
+        const rooms = new Map<string, LockedRoom>();
+        for (const roomId of roomIds)
+          rooms.set(roomId, await lockRoom(manager, roomId));
+        const booking = await manager.findOne(Booking, {
+          where: { publicId: input.bookingPublicId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!booking) throw bookingsErrors.notFound();
+        if (booking.version !== input.expectedVersion)
+          throw bookingsErrors.versionConflict();
+        if (booking.roomTimeId !== snapshot.roomTimeId)
+          throw bookingsErrors.stateChanged();
+        const sourceWindow = await manager.findOne(RoomTime, {
+          where: {
+            id: booking.roomTimeId,
+            roomId: snapshot.roomTime.roomId,
+          },
+          select: {
+            id: true,
+            roomId: true,
+            availableFrom: true,
+            availableTo: true,
+            status: true,
+          },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!sourceWindow) throw bookingsErrors.stateChanged();
+        if (
+          ![BookingStatus.Pending, BookingStatus.Confirmed].includes(
+            booking.status,
+          )
+        ) {
+          throw bookingsErrors.statusConflict();
+        }
+        const checkIn = input.body.checkIn ?? booking.checkIn;
+        const checkOut = input.body.checkOut ?? booking.checkOut;
+        if (
+          destinationRoomId === snapshot.roomTime.roomId &&
+          checkIn === booking.checkIn &&
+          checkOut === booking.checkOut
+        )
+          throw bookingsErrors.changeEmpty();
+        if (
+          !assertBookingDates(
+            { checkIn, checkOut },
+            this.configuration.hotelTimezone,
+          )
+        ) {
+          throw bookingsErrors.stayInvalid();
+        }
+        const destinationRoom = rooms.get(destinationRoomId);
+        if (!destinationRoom || destinationRoom.status !== RoomStatus.Active)
+          throw bookingsErrors.roomNotFound();
+        const destinationWindow = await manager.findOne(RoomTime, {
+          where: {
+            roomId: destinationRoomId,
+            status: RoomTimeStatus.Active,
+            availableFrom: LessThanOrEqual(checkIn),
+            availableTo: MoreThanOrEqual(checkOut),
+          },
+          select: {
+            id: true,
+            roomId: true,
+            availableFrom: true,
+            availableTo: true,
+            status: true,
+          },
+          lock: { mode: 'pessimistic_write' },
+          order: { availableFrom: 'ASC', id: 'ASC' },
+        });
+        if (!destinationWindow) throw bookingsErrors.windowUnavailable();
+        if (booking.status === BookingStatus.Confirmed) {
+          await this.assertNoConfirmedOverlap(
+            manager,
+            destinationRoomId,
+            booking.id,
+            checkIn,
+            checkOut,
+          );
+        }
+        const before = {
+          roomTimeId: booking.roomTimeId,
+          roomId: snapshot.roomTime.roomId,
+          checkIn: booking.checkIn,
+          checkOut: booking.checkOut,
+        };
+        booking.roomTimeId = destinationWindow.id;
+        booking.checkIn = checkIn;
+        booking.checkOut = checkOut;
+        const saved = await manager.save(booking);
+        await manager.insert(BookingChangeHistory, {
+          bookingId: saved.id,
+          actorUserId: input.actorUserId,
+          fromRoomTimeId: before.roomTimeId,
+          toRoomTimeId: destinationWindow.id,
+          fromCheckIn: before.checkIn,
+          fromCheckOut: before.checkOut,
+          toCheckIn: checkIn,
+          toCheckOut: checkOut,
+          reason: input.body.reason,
+        });
+        await this.insertOutbox(
+          manager,
+          saved,
+          'booking.changed',
+          destinationRoom,
+          {
+            reason: input.body.reason,
+            change: {
+              before: {
+                roomId: before.roomId,
+                checkIn: before.checkIn,
+                checkOut: before.checkOut,
+              },
+              after: { roomId: destinationRoomId, checkIn, checkOut },
+            },
+          },
+        );
+      })
+      .catch((error: unknown) => {
+        this.logAdminFailure(input, bookingUpdateOperation, error);
+        throw error;
+      });
+    const response = await this.getAdmin(input.bookingPublicId);
+    this.logAdminTransition(
+      'booking_updated',
+      input,
+      response.id,
+      bookingUpdateOperation,
+      'updated',
+    );
+    return response;
+  }
+
+  async cancelAdmin(
+    input: Required<
+      Pick<AdminTransitionInput, 'actorUserId' | 'bookingPublicId' | 'reason'>
+    > &
+      Pick<AdminTransitionInput, 'requestId'>,
+  ): Promise<AdminBookingDetailResponse> {
+    const replayed = await this.dataSource
+      .transaction(async (manager) => {
+        const booking = await manager.findOne(Booking, {
+          where: { publicId: input.bookingPublicId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!booking) throw bookingsErrors.notFound();
+        if (booking.status === BookingStatus.CancelledByAdmin) {
+          const latest = await manager.findOne(BookingStatusHistory, {
+            where: {
+              bookingId: booking.id,
+              toStatus: BookingStatus.CancelledByAdmin,
+            },
+            select: { id: true, reason: true },
+            order: { createdAt: 'DESC', id: 'DESC' },
+          });
+          if (latest?.reason === input.reason) return true;
+          throw bookingsErrors.statusConflict();
+        }
+        if (
+          ![BookingStatus.Pending, BookingStatus.Confirmed].includes(
+            booking.status,
+          )
+        )
+          throw bookingsErrors.statusConflict();
+        const fromStatus = booking.status;
+        booking.status = BookingStatus.CancelledByAdmin;
+        const saved = await manager.save(booking);
+        const roomTime = await manager.findOneOrFail(RoomTime, {
+          where: { id: booking.roomTimeId },
+          relations: { room: true },
+          select: {
+            id: true,
+            roomId: true,
+            room: { id: true, roomNumber: true },
+          },
+        });
+        await manager.insert(BookingStatusHistory, {
+          bookingId: booking.id,
+          fromStatus,
+          toStatus: BookingStatus.CancelledByAdmin,
+          actorType: BookingActorType.Admin,
+          actorUserId: input.actorUserId,
+          reason: input.reason,
+        });
+        await this.insertOutbox(
+          manager,
+          saved,
+          'booking.cancelled_by_admin',
+          roomTime.room,
+          { reason: input.reason },
+        );
+        return false;
+      })
+      .catch((error: unknown) => {
+        this.logAdminFailure(input, bookingAdminCancelOperation, error);
+        throw error;
+      });
+    const response = await this.getAdmin(input.bookingPublicId);
+    this.logAdminTransition(
+      replayed ? 'booking_admin_cancel_replayed' : 'booking_cancelled_by_admin',
+      input,
+      response.id,
+      bookingAdminCancelOperation,
+      replayed ? 'replayed' : 'cancelled',
     );
     return response;
   }
@@ -589,26 +834,67 @@ export class BookingsService {
     }));
   }
 
-  private async appendTransitionAndOutbox(
+  private async bookingSourceSnapshot(
+    bookingPublicId: string,
+  ): Promise<Booking> {
+    const booking = await this.dataSource.manager.findOne(Booking, {
+      where: { publicId: bookingPublicId },
+      relations: { roomTime: true },
+      select: {
+        id: true,
+        roomTimeId: true,
+        version: true,
+        roomTime: { id: true, roomId: true },
+      },
+    });
+    if (!booking) throw bookingsErrors.notFound();
+    return booking;
+  }
+
+  private async assertNoConfirmedOverlap(
+    manager: EntityManager,
+    roomId: string,
+    bookingId: string,
+    checkIn: string,
+    checkOut: string,
+  ): Promise<void> {
+    const conflict = await manager
+      .getRepository(Booking)
+      .createQueryBuilder('confirmed')
+      // Only existence decides this check, so the locking probe projects the key
+      // alone instead of hydrating a whole competing booking. The FROM/JOIN shape
+      // is unchanged, so both tables still take the same row locks.
+      .select('confirmed.id')
+      .innerJoin('confirmed.roomTime', 'confirmedRoomTime')
+      .where('confirmedRoomTime.room_id = :roomId', { roomId })
+      .andWhere('confirmed.status = :confirmedStatus', {
+        confirmedStatus: BookingStatus.Confirmed,
+      })
+      .andWhere('confirmed.id != :bookingId', { bookingId })
+      .andWhere(
+        'confirmed.check_in < :checkOut AND confirmed.check_out > :checkIn',
+        {
+          checkIn,
+          checkOut,
+        },
+      )
+      .setLock('pessimistic_write')
+      .getOne();
+    if (conflict) throw bookingsErrors.roomAlreadyBooked();
+  }
+
+  /**
+   * Every Phase 4 booking event is written here so the accepted payload envelope,
+   * the authorized reason position inside the booking snapshot, and the logical
+   * `<eventType>:<publicId>:<resultingVersion>` key cannot drift per transition.
+   */
+  private async insertOutbox(
     manager: EntityManager,
     booking: Booking,
-    actorUserId: string,
-    reason: string | null,
-    eventType: 'booking.confirmed' | 'booking.rejected',
+    eventType: BookingOutboxEventType,
     room: Pick<LockedRoom, 'id' | 'roomNumber'>,
+    detail: { reason?: string | null; change?: BookingChangeOutboxDetail } = {},
   ): Promise<void> {
-    const fromStatus =
-      eventType === 'booking.confirmed'
-        ? BookingStatus.Pending
-        : BookingStatus.Pending;
-    await manager.insert(BookingStatusHistory, {
-      bookingId: booking.id,
-      fromStatus,
-      toStatus: booking.status,
-      actorType: BookingActorType.Admin,
-      actorUserId,
-      reason,
-    });
     await manager.insert(OutboxEvent, {
       id: randomUUID(),
       eventType,
@@ -618,16 +904,17 @@ export class BookingsService {
         ownerUserId: booking.userId,
         bookingVersion: Number(booking.version),
         booking: {
+          room: { id: room.id, roomNumber: room.roomNumber },
           checkIn: booking.checkIn,
           checkOut: booking.checkOut,
           status: booking.status,
-          room: { id: room.id, roomNumber: room.roomNumber },
           price: {
             amount: Number(booking.priceAmount),
             currency: booking.currency,
           },
-          ...(reason === null ? {} : { reason }),
+          ...(detail.reason == null ? {} : { reason: detail.reason }),
         },
+        ...detail.change,
       },
       availableAt: new Date(),
       status: OutboxEventStatus.Pending,
@@ -638,6 +925,25 @@ export class BookingsService {
       processedAt: null,
       attempts: 0,
     });
+  }
+
+  private async appendTransitionAndOutbox(
+    manager: EntityManager,
+    booking: Booking,
+    actorUserId: string,
+    reason: string | null,
+    eventType: 'booking.confirmed' | 'booking.rejected',
+    room: Pick<LockedRoom, 'id' | 'roomNumber'>,
+  ): Promise<void> {
+    await manager.insert(BookingStatusHistory, {
+      bookingId: booking.id,
+      fromStatus: BookingStatus.Pending,
+      toStatus: booking.status,
+      actorType: BookingActorType.Admin,
+      actorUserId,
+      reason,
+    });
+    await this.insertOutbox(manager, booking, eventType, room, { reason });
   }
 
   private logAdminTransition(

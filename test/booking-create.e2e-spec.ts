@@ -271,6 +271,17 @@ describe('P4-T02 booking create API', () => {
       .get('/api/v1/admin/bookings')
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(403);
+    await browser
+      .patch(`/api/v1/admin/bookings/${bookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('If-Match', '"1"')
+      .send({ checkOut: dates.checkOutDifferent, reason: 'Forbidden edit.' })
+      .expect(403);
+    await browser
+      .post(`/api/v1/admin/bookings/${bookingId}/cancel`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: 'Forbidden cancellation.' })
+      .expect(403);
 
     const dataSource = app.get(DataSource);
     await dataSource
@@ -322,6 +333,95 @@ describe('P4-T02 booking create API', () => {
       .expect(({ body }) =>
         expect(body as unknown).toMatchObject({ status: 'CONFIRMED' }),
       );
+    await browser
+      .patch(`/api/v1/admin/bookings/${otherBookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        checkOut: dates.checkOutDifferent,
+        reason: 'Guest extended the stay.',
+      })
+      .expect(428)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          code: 'BOOKING_VERSION_REQUIRED',
+        }),
+      );
+    await browser
+      .patch(`/api/v1/admin/bookings/${otherBookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('If-Match', '2')
+      .send({
+        checkOut: dates.checkOutDifferent,
+        reason: 'Guest extended the stay.',
+      })
+      .expect(400)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          code: 'BOOKING_VERSION_MALFORMED',
+        }),
+      );
+    const edited = await browser
+      .patch(`/api/v1/admin/bookings/${otherBookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('If-Match', '"2"')
+      .send({
+        checkOut: dates.checkOutDifferent,
+        reason: 'Guest extended the stay.',
+      })
+      .expect(200);
+    expect(edited.body as unknown).toMatchObject({
+      checkOut: dates.checkOutDifferent,
+      version: 3,
+      price: { amount: 4500000, currency: 'VND' },
+      changes: [
+        {
+          reason: 'Guest extended the stay.',
+          from: { checkOut: dates.checkOut },
+          to: { checkOut: dates.checkOutDifferent },
+        },
+      ],
+    });
+    await browser
+      .patch(`/api/v1/admin/bookings/${otherBookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('If-Match', '"2"')
+      .send({
+        checkIn: dates.checkIn,
+        reason: 'A stale client must refresh.',
+      })
+      .expect(412)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          code: 'BOOKING_VERSION_CONFLICT',
+        }),
+      );
+    await browser
+      .post(`/api/v1/admin/bookings/${otherBookingId}/cancel`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: 'Hotel maintenance.' })
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          status: 'CANCELLED_BY_ADMIN',
+          version: 4,
+        }),
+      );
+    await browser
+      .post(`/api/v1/admin/bookings/${otherBookingId}/cancel`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: 'Hotel maintenance.' })
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          status: 'CANCELLED_BY_ADMIN',
+          version: 4,
+        }),
+      );
+    await browser
+      .post(`/api/v1/admin/bookings/${otherRejectedBookingId}/cancel`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: ' ' })
+      .expect(400);
     await browser
       .post(`/api/v1/admin/bookings/${otherRejectedBookingId}/reject`)
       .set('Authorization', `Bearer ${accessToken}`)

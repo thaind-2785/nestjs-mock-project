@@ -17,6 +17,7 @@ import { DatabaseConnectionService } from '../src/database/database-connection.s
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
+import { CreateBookingCoreSchema1788580000000 } from '../src/database/migrations/1788580000000-CreateBookingCoreSchema';
 import { Attachment } from '../src/files/entities/attachment.entity';
 import { StorageCleanupTask } from '../src/files/entities/storage-cleanup-task.entity';
 import { Amenity } from '../src/rooms/entities/amenity.entity';
@@ -121,6 +122,9 @@ describe('Room image upload budget over HTTP (e2e)', () => {
           migrations: [
             CreateAuthRbacSchema1788380000000,
             CreateRoomCatalogSchema1788490000000,
+            // Room-time usage now counts real bookings, so every suite that
+            // boots the application needs the Phase 4 tables present.
+            CreateBookingCoreSchema1788580000000,
           ],
         },
       ),

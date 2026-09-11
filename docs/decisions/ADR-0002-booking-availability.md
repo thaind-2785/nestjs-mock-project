@@ -61,3 +61,50 @@ rows have one checked lifecycle: pending without a lease, processing with a comp
 lease, or processed with no lease and a completion time. A unique logical event key
 prevents duplicate notification intent. Phase 5 alone claims and delivers these
 events; no network call happens inside the booking transaction.
+
+## Phase 4 completion decision (2026-09-11)
+
+Availability is window containment minus room-wide `CONFIRMED` overlap, and the
+comparison is defined exactly once. `src/bookings/booking-overlap.ts` holds the
+half-open predicate, and booking approval, admin edits, `GET /rooms`, and
+`GET /rooms/:roomId` all build their query from it. A read that drifted from a write
+would either advertise a room that cannot be booked or hide one that can, so the
+duplication is removed rather than documented.
+
+The exclusion is room-wide, not window-wide, for two independent reasons: an admin
+edit can move a confirmed stay to another window while it keeps occupying the same
+physical room, and an older stay may still reference a since-deactivated window.
+Checkout stays exclusive, so a stay beginning on another's checkout day is available.
+Pending and terminal bookings never withdraw a room, which keeps the request
+semantics of `PENDING` that this ADR established.
+
+Room-time usage is now counted from real booking and change-history rows through the
+caller's own manager, replacing the placeholder that always reported zero. The rules
+this ADR already stated are therefore enforced rather than merely specified: a window
+referenced by any booking or change history has immutable dates and cannot be hard
+deleted, and a window with a `PENDING` or `CONFIRMED` booking cannot be deactivated.
+A change-history row is credited once per window, because a date-only edit keeps the
+same window in both its `from` and `to` columns.
+
+The counts need no lock of their own. Every write that can raise one — creation and
+the destination side of an admin edit — takes the physical room lock the reading
+caller already holds. Three transitions deliberately take no room lock, because none
+of them competes for room inventory: user cancellation, admin rejection, and admin
+cancellation. Each moves a booking from `PENDING` or `CONFIRMED` to a terminal status,
+so each only lowers `activeBookingCount`. A count read beside one of them is at worst
+too high, which refuses a window mutation that would have been permitted a moment
+later — the same direction as this port's rule that unknown usage blocks.
+
+No availability or usage index is added. The captured query plan shows the overlap
+probe reaching `bookings` through the existing
+`idx_bookings_room_time_status_check_in_out` and `room_times` by primary key, so the
+Phase 4 schema already supports both the read and the counts. That capture is
+asserted in the search integration suite, so a regression fails the gate instead of
+ageing inside a document.
+
+Every Phase 4 notification event carries its authorized reason at
+`payload.booking.reason`, whether it was a rejection, a change, or an admin
+cancellation, and a change event additionally carries top-level `before`/`after` room
+and date values. One writer emits them all, so the envelope, the reason position, and
+the `<eventType>:<bookingPublicId>:<resultingVersion>` logical key cannot drift per
+transition. Admin edits preserve the original price snapshot, as recorded above.

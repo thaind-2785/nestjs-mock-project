@@ -23,6 +23,7 @@ import type { Request, Response } from 'express';
 import { ApplicationException } from '../common/errors/application.exception';
 import { authConfig } from '../config/auth.config';
 import { CurrentPrincipal } from './decorators/current-principal.decorator';
+import { ErrorResponseDto } from '../common/errors/error-response.dto';
 import { Public } from './decorators/public.decorator';
 import { AccessTokenResponseDto } from './dto/access-token-response.dto';
 import { GoogleCallbackQueryDto } from './dto/google-callback-query.dto';
@@ -53,6 +54,17 @@ export class AuthController {
   @Get('google')
   @ApiOperation({ summary: 'Start Google Authorization Code login' })
   @ApiResponse({ status: 302, description: 'Redirects to Google' })
+  @ApiResponse({
+    status: 429,
+    type: ErrorResponseDto,
+    description: 'AUTH_RATE_LIMITED: the shared limiter refused this caller.',
+  })
+  @ApiResponse({
+    status: 503,
+    type: ErrorResponseDto,
+    description:
+      'AUTHORIZATION_UNAVAILABLE: the limiter is unreachable, so the request fails closed.',
+  })
   async startGoogleLogin(
     @Req() request: Request,
     @Res() response: Response,
@@ -81,6 +93,17 @@ export class AuthController {
     type: String,
     description:
       'OAuth provider error; returned to clients as a generic failure',
+  })
+  @ApiResponse({
+    status: 429,
+    type: ErrorResponseDto,
+    description: 'AUTH_RATE_LIMITED: the shared limiter refused this caller.',
+  })
+  @ApiResponse({
+    status: 503,
+    type: ErrorResponseDto,
+    description:
+      'AUTHORIZATION_UNAVAILABLE: the limiter is unreachable, so the request fails closed.',
   })
   async googleCallback(
     @Query() query: Record<string, unknown>,
@@ -123,6 +146,17 @@ export class AuthController {
   })
   @ApiCookieAuth(refreshCookieName)
   @ApiOkResponse({ type: AccessTokenResponseDto })
+  @ApiResponse({
+    status: 429,
+    type: ErrorResponseDto,
+    description: 'AUTH_RATE_LIMITED: the shared limiter refused this caller.',
+  })
+  @ApiResponse({
+    status: 503,
+    type: ErrorResponseDto,
+    description:
+      'AUTHORIZATION_UNAVAILABLE: the limiter is unreachable, so the request fails closed.',
+  })
   async refresh(
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,

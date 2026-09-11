@@ -194,10 +194,11 @@ transport-only data such as request ID and access token.
   `available: false` for the same condition. Pending and terminal bookings do not
   block either result.
 - Every Phase 4 outbox payload uses `schemaVersion: 1`, `bookingId` (public ULID),
-  `ownerUserId`, `bookingVersion`, and the resulting booking snapshot. Rejected and
-  admin-cancelled events also contain the authorized reason; changed events contain
-  before/after room IDs and date ranges. The owner email is resolved by Phase 5 and
-  is not copied into the Phase 4 payload.
+  `ownerUserId`, `bookingVersion`, and the resulting booking snapshot. Every reasoned
+  event carries its authorized reason at `booking.reason`, so rejected, changed, and
+  admin-cancelled events all read it from one place; changed events additionally carry
+  top-level `before`/`after` room IDs and date ranges. The owner email is resolved by
+  Phase 5 and is not copied into the Phase 4 payload.
 - Logical outbox keys are
   `<eventType>:<bookingPublicId>:<resultingBookingVersion>`. This makes an idempotent
   transition retry reuse the already committed event rather than enqueueing a second
@@ -314,48 +315,48 @@ application rollback or forward migration and does not drop Phase 4 data.
 
 ## Acceptance criteria
 
-- [ ] Given an active user, active room, and containing active window, when the user
+- [x] Given an active user, active room, and containing active window, when the user
       creates a valid request with a new idempotency key, then one `PENDING` booking,
       one `null -> PENDING` history row, one completed idempotency row, and the
       snapshotted total price commit atomically.
-- [ ] Given the same user, key, and canonical body, when creation is retried, then the
+- [x] Given the same user, key, and canonical body, when creation is retried, then the
       original `201` response is replayed and no duplicate side effect exists; a
       different body with that key returns `409 IDEMPOTENCY_KEY_REUSED`.
-- [ ] Given an inactive/maintenance room, invalid/past date range, or no containing
+- [x] Given an inactive/maintenance room, invalid/past date range, or no containing
       active window, creation fails with the documented code and writes no partial
       booking, history, or idempotency result.
-- [ ] Given a concurrent booking create and room-window edit/deactivation, then lock
+- [x] Given a concurrent booking create and room-window edit/deactivation, then lock
       ordering makes creation observe either the complete before-state or after-state
       and never bind a stale window.
-- [ ] Given overlapping pending requests, both may exist and public availability
+- [x] Given overlapping pending requests, both may exist and public availability
       remains available until one request becomes confirmed.
-- [ ] Given two admins concurrently approving overlapping requests for the same
+- [x] Given two admins concurrently approving overlapping requests for the same
       physical room, exactly one becomes `CONFIRMED`; the other gets deterministic
       `409 ROOM_ALREADY_BOOKED`, and only the winner writes history/outbox.
-- [ ] Given an overlapping confirmed booking under another/legacy window of the same
+- [x] Given an overlapping confirmed booking under another/legacy window of the same
       room, approval and confirmed edit still reject the conflict.
-- [ ] Given adjacent confirmed stays, approval succeeds because checkout is exclusive.
-- [ ] Given a user list/detail request, only that user's bookings are returned; a
+- [x] Given adjacent confirmed stays, approval succeeds because checkout is exclusive.
+- [x] Given a user list/detail request, only that user's bookings are returned; a
       cross-owner public ID is indistinguishable from an absent one.
-- [ ] Given a pending owned booking, user cancellation applies once and an identical
+- [x] Given a pending owned booking, user cancellation applies once and an identical
       retry is side-effect free; cancellation from any other status conflicts.
-- [ ] Given reject or admin-cancel without a non-empty bounded reason, validation
+- [x] Given reject or admin-cancel without a non-empty bounded reason, validation
       fails; a successful transition writes status history and its outbox event in
       the same transaction.
-- [ ] Given a valid booking `If-Match`, an admin edit locks rooms in ascending order,
+- [x] Given a valid booking `If-Match`, an admin edit locks rooms in ascending order,
       revalidates source/destination, updates once, appends before/after history, and
       emits one event; a stale version changes nothing and returns 412.
-- [ ] Given Phase 4 booking/history rows, room-time list usage reports real counts,
+- [x] Given Phase 4 booking/history rows, room-time list usage reports real counts,
       date edits/deletes respect any history, and deactivation rejects pending or
       confirmed usage.
-- [ ] Given a stay search/detail, every room with overlapping `CONFIRMED` booking is
+- [x] Given a stay search/detail, every room with overlapping `CONFIRMED` booking is
       excluded/marked unavailable while overlapping pending or terminal rows do not
       block it.
-- [ ] Given an exhausted or unavailable shared limiter, booking create returns the
+- [x] Given an exhausted or unavailable shared limiter, booking create returns the
       documented 429/503 before taking a body-driven database lock.
-- [ ] Swagger, endpoint/database docs, both locale files, migration guidance, spec,
+- [x] Swagger, endpoint/database docs, both locale files, migration guidance, spec,
       plan, and independent review describe the same observable contract.
-- [ ] Focused tests and `MYSQL_PORT=13306 npm run verify` pass, and no unresolved
+- [x] Focused tests and `MYSQL_PORT=13306 npm run verify` pass, and no unresolved
       Blocker/High independent-review finding remains.
 
 ## Test strategy

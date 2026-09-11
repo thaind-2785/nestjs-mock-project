@@ -53,6 +53,7 @@ describe('P4-T02 booking create API', () => {
   let app: INestApplication<App>;
   let adminConnection: mysql.Connection;
   let disposableDatabase: string;
+  let googleOAuthClient: FakeGoogleOAuthClient;
   const savedEnvironment = new Map<string, string | undefined>();
   const environmentKeys = [
     'NODE_ENV',
@@ -113,9 +114,10 @@ describe('P4-T02 booking create API', () => {
     await migrationDataSource.runMigrations();
     await migrationDataSource.destroy();
 
+    googleOAuthClient = new FakeGoogleOAuthClient();
     const fixture = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(GOOGLE_OAUTH_CLIENT)
-      .useValue(new FakeGoogleOAuthClient())
+      .useValue(googleOAuthClient)
       .compile();
     app = fixture.createNestApplication();
     configureApplication(app, { requestLogger: { log: jest.fn() } });
@@ -166,6 +168,94 @@ describe('P4-T02 booking create API', () => {
       .send({ ...body, checkOut: dates.checkOutDifferent })
       .expect(409);
     expect(conflict.body).toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
+    const bookingId = (created.body as { id: string }).id;
+
+    await browser
+      .get('/api/v1/bookings')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body as unknown).toMatchObject({
+          total: 1,
+          items: [{ id: bookingId }],
+        });
+      });
+    await browser
+      .get('/api/v1/bookings')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .query({ status: 'PENDING', page: 1, pageSize: 20 })
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body as unknown).toMatchObject({
+          total: 1,
+          items: [{ id: bookingId }],
+        });
+      });
+    const detail = await browser
+      .get(`/api/v1/bookings/${bookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+    expect(detail.body as unknown).toMatchObject({
+      id: bookingId,
+      history: [{ toStatus: 'PENDING' }],
+    });
+    const cancelled = await browser
+      .post(`/api/v1/bookings/${bookingId}/cancel`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+    expect(cancelled.body as unknown).toMatchObject({
+      status: 'CANCELLED_BY_USER',
+    });
+    await browser
+      .post(`/api/v1/bookings/${bookingId}/cancel`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200)
+      .expect(({ body }) =>
+        expect((body as { history: unknown[] }).history).toHaveLength(2),
+      );
+
+    googleOAuthClient.claims = {
+      subject: 'booking-e2e-other-user',
+      email: 'booking-e2e-other@example.com',
+      displayName: 'Booking E2E Other User',
+    };
+    const otherBrowser = request.agent(server);
+    const otherAccessToken = await login(otherBrowser);
+    await otherBrowser
+      .get('/api/v1/bookings')
+      .set('Authorization', `Bearer ${otherAccessToken}`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body as unknown).toMatchObject({ total: 0, items: [] });
+      });
+    await otherBrowser
+      .get(`/api/v1/bookings/${bookingId}`)
+      .set('Authorization', `Bearer ${otherAccessToken}`)
+      .expect(404)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({ code: 'BOOKING_NOT_FOUND' }),
+      );
+    await otherBrowser
+      .post(`/api/v1/bookings/${bookingId}/cancel`)
+      .set('Authorization', `Bearer ${otherAccessToken}`)
+      .expect(404)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({ code: 'BOOKING_NOT_FOUND' }),
+      );
+    const otherCreated = await otherBrowser
+      .post('/api/v1/bookings')
+      .set('Authorization', `Bearer ${otherAccessToken}`)
+      .set('Idempotency-Key', 'booking-e2e-other-approve')
+      .send(body)
+      .expect(201);
+    const otherBookingId = (otherCreated.body as { id: string }).id;
+    const otherRejected = await otherBrowser
+      .post('/api/v1/bookings')
+      .set('Authorization', `Bearer ${otherAccessToken}`)
+      .set('Idempotency-Key', 'booking-e2e-other-reject')
+      .send(body)
+      .expect(201);
+    const otherRejectedBookingId = (otherRejected.body as { id: string }).id;
 
     const rateLimited = await browser
       .post('/api/v1/bookings')
@@ -177,6 +267,22 @@ describe('P4-T02 booking create API', () => {
       code: 'BOOKING_CREATE_RATE_LIMITED',
     });
 
+    await browser
+      .get('/api/v1/admin/bookings')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(403);
+    await browser
+      .patch(`/api/v1/admin/bookings/${bookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('If-Match', '"1"')
+      .send({ checkOut: dates.checkOutDifferent, reason: 'Forbidden edit.' })
+      .expect(403);
+    await browser
+      .post(`/api/v1/admin/bookings/${bookingId}/cancel`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: 'Forbidden cancellation.' })
+      .expect(403);
+
     const dataSource = app.get(DataSource);
     await dataSource
       .getRepository(User)
@@ -187,6 +293,151 @@ describe('P4-T02 booking create API', () => {
       .set('Idempotency-Key', 'booking-e2e-admin-forbidden')
       .send(body)
       .expect(403);
+    await browser
+      .get('/api/v1/bookings')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(403);
+    await browser
+      .get('/api/v1/admin/bookings')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200)
+      .expect(({ body }) => {
+        const response = body as {
+          total: number;
+          items: Array<{ id: string; owner: { email: string } }>;
+        };
+        expect(response.total).toBe(3);
+        expect(
+          response.items.some(
+            (item) =>
+              item.id === bookingId &&
+              item.owner.email === 'booking-e2e@example.com',
+          ),
+        ).toBe(true);
+      });
+    await browser
+      .get(`/api/v1/admin/bookings/${bookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          id: bookingId,
+          owner: { email: 'booking-e2e@example.com' },
+          changes: [],
+        }),
+      );
+    await browser
+      .post(`/api/v1/admin/bookings/${otherBookingId}/approve`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({ status: 'CONFIRMED' }),
+      );
+    await browser
+      .patch(`/api/v1/admin/bookings/${otherBookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        checkOut: dates.checkOutDifferent,
+        reason: 'Guest extended the stay.',
+      })
+      .expect(428)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          code: 'BOOKING_VERSION_REQUIRED',
+        }),
+      );
+    await browser
+      .patch(`/api/v1/admin/bookings/${otherBookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('If-Match', '2')
+      .send({
+        checkOut: dates.checkOutDifferent,
+        reason: 'Guest extended the stay.',
+      })
+      .expect(400)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          code: 'BOOKING_VERSION_MALFORMED',
+        }),
+      );
+    const edited = await browser
+      .patch(`/api/v1/admin/bookings/${otherBookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('If-Match', '"2"')
+      .send({
+        checkOut: dates.checkOutDifferent,
+        reason: 'Guest extended the stay.',
+      })
+      .expect(200);
+    expect(edited.body as unknown).toMatchObject({
+      checkOut: dates.checkOutDifferent,
+      version: 3,
+      price: { amount: 4500000, currency: 'VND' },
+      changes: [
+        {
+          reason: 'Guest extended the stay.',
+          from: { checkOut: dates.checkOut },
+          to: { checkOut: dates.checkOutDifferent },
+        },
+      ],
+    });
+    await browser
+      .patch(`/api/v1/admin/bookings/${otherBookingId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('If-Match', '"2"')
+      .send({
+        checkIn: dates.checkIn,
+        reason: 'A stale client must refresh.',
+      })
+      .expect(412)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          code: 'BOOKING_VERSION_CONFLICT',
+        }),
+      );
+    await browser
+      .post(`/api/v1/admin/bookings/${otherBookingId}/cancel`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: 'Hotel maintenance.' })
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          status: 'CANCELLED_BY_ADMIN',
+          version: 4,
+        }),
+      );
+    await browser
+      .post(`/api/v1/admin/bookings/${otherBookingId}/cancel`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: 'Hotel maintenance.' })
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          status: 'CANCELLED_BY_ADMIN',
+          version: 4,
+        }),
+      );
+    await browser
+      .post(`/api/v1/admin/bookings/${otherRejectedBookingId}/cancel`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: ' ' })
+      .expect(400);
+    await browser
+      .post(`/api/v1/admin/bookings/${otherRejectedBookingId}/reject`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: 'Requested dates are unavailable.' })
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body as unknown).toMatchObject({
+          status: 'REJECTED',
+          rejectionReason: 'Requested dates are unavailable.',
+        }),
+      );
+    await browser
+      .post(`/api/v1/admin/bookings/${bookingId}/reject`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ reason: ' ' })
+      .expect(400);
   });
 
   async function createRoom(dates: BookingFixtureDates): Promise<string> {

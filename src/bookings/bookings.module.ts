@@ -11,6 +11,7 @@ import { IdempotencyKey } from './entities/idempotency-key.entity';
 import { OutboxEvent } from './entities/outbox-event.entity';
 import { BookingCreateRateLimitGuard } from './booking-create-rate-limit.guard';
 import { BookingsController } from './bookings.controller';
+import { AdminBookingsController } from './admin-bookings.controller';
 import { BookingsService } from './bookings.service';
 
 /** P4-T02 exposes the first booking mutation after P4-T01 established its schema. */
@@ -27,7 +28,7 @@ import { BookingsService } from './bookings.service';
       OutboxEvent,
     ]),
   ],
-  controllers: [BookingsController],
+  controllers: [BookingsController, AdminBookingsController],
   providers: [BookingsService, BookingCreateRateLimitGuard],
 })
 export class BookingsModule {}

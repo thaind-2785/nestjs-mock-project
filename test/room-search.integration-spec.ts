@@ -11,6 +11,9 @@ import { DatabaseConnectionService } from '../src/database/database-connection.s
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
+import { CreateBookingCoreSchema1788580000000 } from '../src/database/migrations/1788580000000-CreateBookingCoreSchema';
+import { Booking } from '../src/bookings/entities/booking.entity';
+import { BookingStatus } from '../src/bookings/entities/booking.enums';
 import { Attachment } from '../src/files/entities/attachment.entity';
 import { StorageCleanupTask } from '../src/files/entities/storage-cleanup-task.entity';
 import { SearchRoomsQueryDto } from '../src/rooms/dto/public-room-query.dto';
@@ -23,12 +26,13 @@ import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { ReferenceCatalogService } from '../src/rooms/reference-catalog.service';
 import { resolveAmenityFilter } from '../src/rooms/room-search-policy';
 import { RoomSearchService } from '../src/rooms/room-search.service';
-import { ZeroRoomTimeUsageRepository } from '../src/rooms/room-time-usage.repository';
+import { UnusedRoomTimeUsageRepository } from './fixtures/room-time-usage';
 import { RoomTimesService } from '../src/rooms/room-times.service';
 import { RoomsService } from '../src/rooms/rooms.service';
 import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
+import { UserRole, UserStatus } from '../src/users/entities/user.enums';
 import {
   createRoomImageFixture,
   RoomImageFixture,
@@ -90,10 +94,14 @@ describe('Phase 3 public room search', () => {
             RoomTime,
             Attachment,
             StorageCleanupTask,
+            // Availability subtracts room-wide confirmed stays, so the search
+            // query reads the booking table even in a rooms-only suite.
+            Booking,
           ],
           migrations: [
             CreateAuthRbacSchema1788380000000,
             CreateRoomCatalogSchema1788490000000,
+            CreateBookingCoreSchema1788580000000,
           ],
         },
       ),
@@ -107,18 +115,21 @@ describe('Phase 3 public room search', () => {
     roomTimes = new RoomTimesService(
       dataSource,
       connection,
-      new ZeroRoomTimeUsageRepository(),
+      new UnusedRoomTimeUsageRepository(),
     );
     search = new RoomSearchService(dataSource, connection, imageFixture.images);
   });
 
   beforeEach(async () => {
     for (const table of [
+      'booking_status_history',
+      'bookings',
       'room_times',
       'room_amenities',
       'rooms',
       'amenities',
       'room_types',
+      'users',
     ]) {
       await dataSource.query(`DELETE FROM ${table}`);
     }
@@ -410,6 +421,197 @@ describe('Phase 3 public room search', () => {
       errorCode: 'ROOM_NOT_FOUND',
     });
   });
+
+  it('excludes a room whose confirmed stay overlaps, whatever window it references', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const booked = await rooms.create(roomInput(type.id, [], 'A-201'));
+    const free = await rooms.create(roomInput(type.id, [], 'A-202'));
+    const bookable = await roomTimes.create(booked.id, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+      status: RoomTimeStatus.Active,
+    });
+    await roomTimes.create(free.id, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+      status: RoomTimeStatus.Active,
+    });
+    // The confirmed stay references a since-deactivated window of the booked
+    // room, so a window-scoped exclusion would still advertise the room.
+    const legacy = await roomTimes.create(booked.id, {
+      availableFrom: '2026-09-01',
+      availableTo: '2026-09-30',
+      status: RoomTimeStatus.Inactive,
+    });
+    expect(legacy.id).not.toBe(bookable.id);
+    await createConfirmedStay(legacy.id, '2026-10-05', '2026-10-08');
+
+    const stay = { checkIn: '2026-10-06', checkOut: '2026-10-07' };
+    expect((await search.search(query(stay))).items).toMatchObject([
+      { id: free.id, available: true },
+    ]);
+    expect(await search.get(booked.id, stay)).toMatchObject({
+      available: false,
+    });
+    expect(await search.get(free.id, stay)).toMatchObject({ available: true });
+  });
+
+  it('lets adjacent stays share a boundary and never blocks on unconfirmed status', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const adjacent = await rooms.create(roomInput(type.id, [], 'A-201'));
+    const pending = await rooms.create(roomInput(type.id, [], 'A-202'));
+    const terminal = await rooms.create(roomInput(type.id, [], 'A-203'));
+    const windows = new Map<string, string>();
+    for (const room of [adjacent, pending, terminal]) {
+      const window = await roomTimes.create(room.id, {
+        availableFrom: '2026-10-01',
+        availableTo: '2026-10-20',
+        status: RoomTimeStatus.Active,
+      });
+      windows.set(room.id, window.id);
+    }
+    // Checkout is exclusive, so this stay ends exactly when the query begins.
+    await createConfirmedStay(
+      windows.get(adjacent.id)!,
+      '2026-10-03',
+      '2026-10-06',
+    );
+    await createStay(
+      windows.get(pending.id)!,
+      '2026-10-06',
+      '2026-10-09',
+      BookingStatus.Pending,
+    );
+    await createStay(
+      windows.get(terminal.id)!,
+      '2026-10-06',
+      '2026-10-09',
+      BookingStatus.CancelledByAdmin,
+    );
+
+    // Two overlapping pending requests may coexist, and neither withdraws the
+    // room from public availability until one of them is confirmed.
+    await createStay(
+      windows.get(pending.id)!,
+      '2026-10-07',
+      '2026-10-10',
+      BookingStatus.Pending,
+    );
+
+    const stay = { checkIn: '2026-10-06', checkOut: '2026-10-09' };
+    expect(
+      (await search.search(query(stay))).items.map((item) => item.id).sort(),
+    ).toEqual([adjacent.id, pending.id, terminal.id].sort());
+    for (const room of [adjacent, pending, terminal]) {
+      expect(await search.get(room.id, stay)).toMatchObject({
+        available: true,
+      });
+    }
+  });
+
+  it('reads availability through the room-wide confirmed index', async () => {
+    const type = await catalog.createRoomType({ name: 'Deluxe' });
+    const room = await rooms.create(roomInput(type.id, [], 'A-201'));
+    const window = await roomTimes.create(room.id, {
+      availableFrom: '2026-10-01',
+      availableTo: '2026-10-20',
+      status: RoomTimeStatus.Active,
+    });
+    await createConfirmedStay(window.id, '2026-10-05', '2026-10-08');
+    const queries = jest.spyOn(dataSource.logger, 'logQuery');
+    let executed: [string, unknown[] | undefined] | undefined;
+    try {
+      await search.search(
+        query({ checkIn: '2026-10-06', checkOut: '2026-10-07' }),
+      );
+      const call = queries.mock.calls.find(([sql]) =>
+        /FROM `rooms` `room`/i.test(sql),
+      );
+      // Explaining the emitted statement with its own bound parameters keeps the
+      // plan evidence tied to the query the service actually runs.
+      if (call) executed = [call[0], call[1]];
+    } finally {
+      queries.mockRestore();
+    }
+    expect(executed).toBeDefined();
+    const [searchSql, searchParameters] = executed!;
+    // The exclusion must be room-wide: it correlates the blocking stay's window
+    // to the candidate room, not to the window the containment check matched.
+    expect(searchSql).toMatch(/NOT EXISTS/i);
+    expect(searchSql).toContain('`blockingWindow`.`room_id` = `room`.`id`');
+
+    const explained: { EXPLAIN: string }[] = await dataSource.query(
+      `EXPLAIN FORMAT=JSON ${searchSql}`,
+      searchParameters,
+    );
+    const plans = collectTablePlans(JSON.parse(explained[0].EXPLAIN));
+    // Query-plan evidence for PLAN-007: the overlap probe rides the existing
+    // room-time composite index, so no availability index is added.
+    expect(plans.get('blocking')).toMatchObject({
+      key: 'idx_bookings_room_time_status_check_in_out',
+    });
+    expect(plans.get('blocking')?.access_type).not.toBe('ALL');
+    expect(plans.get('blockingWindow')).toMatchObject({ key: 'PRIMARY' });
+  });
+
+  async function createConfirmedStay(
+    roomTimeId: string,
+    checkIn: string,
+    checkOut: string,
+  ): Promise<void> {
+    await createStay(roomTimeId, checkIn, checkOut, BookingStatus.Confirmed);
+  }
+
+  async function createStay(
+    roomTimeId: string,
+    checkIn: string,
+    checkOut: string,
+    status: BookingStatus,
+  ): Promise<void> {
+    const owner = await dataSource.getRepository(User).save({
+      email: `search-owner-${randomUUID()}@example.com`,
+      displayName: 'Search Owner',
+      role: UserRole.User,
+      status: UserStatus.Active,
+      emailVerifiedAt: new Date(),
+    });
+    await dataSource.getRepository(Booking).save({
+      publicId: randomUUID().replaceAll('-', '').slice(0, 26).toUpperCase(),
+      userId: owner.id,
+      roomTimeId,
+      checkIn,
+      checkOut,
+      status,
+      priceAmount: '4500000',
+      currency: 'VND',
+      rejectionReason: null,
+    });
+  }
+
+  interface TablePlan {
+    table_name: string;
+    access_type: string;
+    key?: string;
+  }
+
+  /** `EXPLAIN FORMAT=JSON` nests each table plan at an unpredictable depth. */
+  function collectTablePlans(node: unknown): Map<string, TablePlan> {
+    const plans = new Map<string, TablePlan>();
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      if (value === null || typeof value !== 'object') return;
+      const record = value as Record<string, unknown>;
+      if (typeof record.table_name === 'string') {
+        plans.set(record.table_name, record as unknown as TablePlan);
+      }
+      Object.values(record).forEach(visit);
+    };
+    visit(node);
+    return plans;
+  }
 
   function query(overrides: Partial<SearchRoomsQueryDto>): SearchRoomsQueryDto {
     return Object.assign(new SearchRoomsQueryDto(), overrides);

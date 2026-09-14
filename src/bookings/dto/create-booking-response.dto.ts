@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { BookingStatus } from '../entities/booking.enums';
 
 class BookingRoomTypeResponseDto {
   @ApiProperty({ example: '7' })
@@ -43,14 +44,14 @@ export class CreateBookingResponseDto {
   @ApiProperty({ example: 3 })
   nights!: number;
 
-  @ApiProperty({ enum: ['PENDING'] })
-  status!: 'PENDING';
+  @ApiProperty({ enum: BookingStatus, example: BookingStatus.Pending })
+  status!: BookingStatus;
 
   @ApiProperty({ type: BookingPriceResponseDto })
   price!: BookingPriceResponseDto;
 
   @ApiProperty({ type: String, example: null, nullable: true })
-  rejectionReason!: null;
+  rejectionReason!: string | null;
 
   @ApiProperty({ example: 1 })
   version!: number;

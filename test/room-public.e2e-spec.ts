@@ -22,6 +22,9 @@ import { validateEnvironment } from '../src/config/environment.validation';
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
+import { CreateBookingCoreSchema1788580000000 } from '../src/database/migrations/1788580000000-CreateBookingCoreSchema';
+import { Booking } from '../src/bookings/entities/booking.entity';
+import { BookingStatus } from '../src/bookings/entities/booking.enums';
 import { Attachment } from '../src/files/entities/attachment.entity';
 import { StorageCleanupTask } from '../src/files/entities/storage-cleanup-task.entity';
 import { maxPageNumber } from '../src/common/constants/pagination.constants';
@@ -35,6 +38,7 @@ import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
+import { UserRole, UserStatus } from '../src/users/entities/user.enums';
 
 jest.setTimeout(30_000);
 
@@ -138,10 +142,12 @@ describe('Phase 3 public room API (e2e)', () => {
             RoomTime,
             Attachment,
             StorageCleanupTask,
+            Booking,
           ],
           migrations: [
             CreateAuthRbacSchema1788380000000,
             CreateRoomCatalogSchema1788490000000,
+            CreateBookingCoreSchema1788580000000,
           ],
         },
       ),
@@ -372,6 +378,65 @@ describe('Phase 3 public room API (e2e)', () => {
       .expect(400)
       .expect((response) => {
         expect(response.body).toMatchObject({ code: 'VALIDATION_FAILED' });
+      });
+  });
+
+  it('hides a room whose confirmed stay overlaps the requested range', async () => {
+    const guest = request(app.getHttpServer());
+    const owner = await seed.getRepository(User).save({
+      email: `public-owner-${randomUUID()}@example.com`,
+      displayName: 'Public Owner',
+      role: UserRole.User,
+      status: UserStatus.Active,
+      emailVerifiedAt: new Date(),
+    });
+    const window = await seed
+      .getRepository(RoomTime)
+      .findOneByOrFail({ roomId: activeRoomId });
+    await seed.getRepository(Booking).save({
+      publicId: randomUUID().replaceAll('-', '').slice(0, 26).toUpperCase(),
+      userId: owner.id,
+      roomTimeId: window.id,
+      checkIn: '2026-10-05',
+      checkOut: '2026-10-08',
+      status: BookingStatus.Confirmed,
+      priceAmount: '4500000',
+      currency: 'VND',
+      rejectionReason: null,
+    });
+
+    await guest
+      .get('/api/v1/rooms')
+      .query({ checkIn: '2026-10-06', checkOut: '2026-10-07' })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toMatchObject({ total: 0, items: [] });
+      });
+    await guest
+      .get(`/api/v1/rooms/${activeRoomId}`)
+      .query({ checkIn: '2026-10-06', checkOut: '2026-10-07' })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toMatchObject({ available: false });
+      });
+
+    // Checkout is exclusive, so a stay beginning on the checkout day is free.
+    await guest
+      .get('/api/v1/rooms')
+      .query({ checkIn: '2026-10-08', checkOut: '2026-10-10' })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          total: 1,
+          items: [{ id: activeRoomId, available: true }],
+        });
+      });
+    await guest
+      .get(`/api/v1/rooms/${activeRoomId}`)
+      .query({ checkIn: '2026-10-08', checkOut: '2026-10-10' })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toMatchObject({ available: true });
       });
   });
 

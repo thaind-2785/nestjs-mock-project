@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource, EntityManager, SelectQueryBuilder } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  ObjectLiteral,
+  SelectQueryBuilder,
+} from 'typeorm';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import {
   RoomStayQueryDto,
@@ -18,6 +23,11 @@ import { RoomTime } from './entities/room-time.entity';
 import { RoomType } from './entities/room-type.entity';
 import { Room } from './entities/room.entity';
 import { RoomStatus, RoomTimeStatus } from './entities/room.enums';
+import {
+  confirmedOverlapCondition,
+  confirmedOverlapParameters,
+} from '../bookings/booking-overlap';
+import { Booking } from '../bookings/entities/booking.entity';
 import { applyRoomAttributeFilters } from './room-filters';
 import { RoomImageSet, RoomImagesService } from './room-images.service';
 import {
@@ -107,7 +117,7 @@ export class RoomSearchService {
       const [amenitiesByRoom, imagesByRoom, available] = await Promise.all([
         loadAmenitiesByRoom(manager, [room.id]),
         this.images.loadImageSets(manager, [room.id]),
-        stay ? this.hasContainingWindow(manager, room.id, stay) : undefined,
+        stay ? this.isAvailableForStay(manager, room.id, stay) : undefined,
       ]);
       return this.toPublicRoomDetailResponse(
         room,
@@ -197,41 +207,79 @@ export class RoomSearchService {
     builder: SelectQueryBuilder<Room>,
     stay: StayRange,
   ): void {
-    builder.andWhere(
-      (queryBuilder) =>
-        `EXISTS ${queryBuilder
-          .subQuery()
-          .select('1')
-          .from(RoomTime, 'window')
-          .where('window.room_id = room.id')
-          .andWhere(this.stayContainmentCondition('window'))
-          .getQuery()}`,
-      this.stayContainmentParameters(stay),
-    );
+    builder
+      .andWhere(
+        (queryBuilder) =>
+          `EXISTS ${queryBuilder
+            .subQuery()
+            .select('1')
+            .from(RoomTime, 'window')
+            .where('window.room_id = room.id')
+            .andWhere(this.stayContainmentCondition('window'))
+            .getQuery()}`,
+        this.stayContainmentParameters(stay),
+      )
+      .andWhere(
+        (queryBuilder) =>
+          this.confirmedOverlapExclusion(queryBuilder, 'room.id'),
+        confirmedOverlapParameters(stay),
+      );
   }
 
-  private hasContainingWindow(
+  private isAvailableForStay(
     manager: EntityManager,
     roomId: string,
     stay: StayRange,
   ): Promise<boolean> {
-    return manager
-      .getRepository(RoomTime)
-      .createQueryBuilder('window')
-      .select('window.id')
-      .where('window.room_id = :roomId', { roomId })
-      .andWhere(
-        this.stayContainmentCondition('window'),
-        this.stayContainmentParameters(stay),
-      )
-      .limit(1)
-      .getExists();
+    return (
+      manager
+        .getRepository(RoomTime)
+        .createQueryBuilder('window')
+        .select('window.id')
+        .where('window.room_id = :roomId', { roomId })
+        .andWhere(
+          this.stayContainmentCondition('window'),
+          this.stayContainmentParameters(stay),
+        )
+        // The exclusion correlates to the bound room ID rather than to a joined
+        // column, so detail asks the same question as the list without needing
+        // the list's `room` alias in scope.
+        .andWhere(
+          (queryBuilder) =>
+            this.confirmedOverlapExclusion(queryBuilder, ':roomId'),
+          confirmedOverlapParameters(stay),
+        )
+        .limit(1)
+        .getExists()
+    );
   }
 
   /**
-   * Phase 3 availability is window containment only. Phase 4 adds room-wide
-   * `CONFIRMED` exclusion here so list and detail cannot drift.
+   * Availability is window containment minus room-wide `CONFIRMED` overlap. The
+   * overlap is room-wide rather than window-wide because a confirmed stay keeps
+   * occupying its physical room after an admin edit moved it to another window,
+   * and because an older stay may still reference a since-deactivated window.
+   * List and detail build the exclusion here so they cannot drift apart, and the
+   * comparison itself comes from the booking module so reads and writes agree.
    */
+  private confirmedOverlapExclusion(
+    queryBuilder: SelectQueryBuilder<ObjectLiteral>,
+    roomIdExpression: string,
+  ): string {
+    return `NOT EXISTS ${queryBuilder
+      .subQuery()
+      .select('1')
+      .from(Booking, 'blocking')
+      .innerJoin(
+        RoomTime,
+        'blockingWindow',
+        'blockingWindow.id = blocking.room_time_id',
+      )
+      .where(`blockingWindow.room_id = ${roomIdExpression}`)
+      .andWhere(confirmedOverlapCondition('blocking'))
+      .getQuery()}`;
+  }
+
   private stayContainmentCondition(alias: string): string {
     return `${alias}.status = :windowStatus AND ${alias}.available_from <= :checkIn AND ${alias}.available_to >= :checkOut`;
   }

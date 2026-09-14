@@ -1,8 +1,12 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
+  HttpCode,
+  Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -10,6 +14,7 @@ import {
   ApiBearerAuth,
   ApiCreatedResponse,
   ApiHeader,
+  ApiOkResponse,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
@@ -24,6 +29,16 @@ import { BookingCreateResponse } from './booking-create.types';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { CreateBookingResponseDto } from './dto/create-booking-response.dto';
+import { BookingIdParamDto } from './dto/booking-id-param.dto';
+import { UserBookingQueryDto } from './dto/user-booking-query.dto';
+import {
+  PaginatedUserBookingsResponseDto,
+  UserBookingDetailResponseDto,
+} from './dto/user-booking-response.dto';
+import {
+  PaginatedUserBookingsResponse,
+  UserBookingDetailResponse,
+} from './user-booking.types';
 
 @ApiTags('Bookings')
 @ApiBearerAuth()
@@ -84,6 +99,57 @@ export class BookingsController {
       principal.userId,
       idempotencyKey,
       body,
+      request.requestId,
+    );
+  }
+
+  @Get()
+  @ApiOkResponse({ type: PaginatedUserBookingsResponseDto })
+  @ApiResponse({ status: 400, type: ErrorResponseDto })
+  list(
+    @CurrentPrincipal() principal: AuthenticatedPrincipal,
+    @Query() query: UserBookingQueryDto,
+  ): Promise<PaginatedUserBookingsResponse> {
+    return this.bookings.listOwn(principal.userId, query);
+  }
+
+  @Get(':bookingId')
+  @ApiOkResponse({ type: UserBookingDetailResponseDto })
+  @ApiResponse({ status: 400, type: ErrorResponseDto })
+  @ApiResponse({
+    status: 404,
+    type: ErrorResponseDto,
+    description: 'BOOKING_NOT_FOUND.',
+  })
+  detail(
+    @CurrentPrincipal() principal: AuthenticatedPrincipal,
+    @Param() params: BookingIdParamDto,
+  ): Promise<UserBookingDetailResponse> {
+    return this.bookings.getOwn(principal.userId, params.bookingId);
+  }
+
+  @Post(':bookingId/cancel')
+  @HttpCode(200)
+  @ApiOkResponse({ type: UserBookingDetailResponseDto })
+  @ApiResponse({ status: 400, type: ErrorResponseDto })
+  @ApiResponse({
+    status: 404,
+    type: ErrorResponseDto,
+    description: 'BOOKING_NOT_FOUND.',
+  })
+  @ApiResponse({
+    status: 409,
+    type: ErrorResponseDto,
+    description: 'BOOKING_STATUS_CONFLICT.',
+  })
+  cancel(
+    @CurrentPrincipal() principal: AuthenticatedPrincipal,
+    @Param() params: BookingIdParamDto,
+    @Req() request: RequestWithContext,
+  ): Promise<UserBookingDetailResponse> {
+    return this.bookings.cancelOwn(
+      principal.userId,
+      params.bookingId,
       request.requestId,
     );
   }

@@ -1,9 +1,9 @@
 # PLAN-007: Booking core
 
 - Spec: [`SPEC-006`](../specs/SPEC-006-booking-core.md)
-- Status: In progress (approved 2026-09-09)
+- Status: Complete (2026-09-11)
 - Owner: Project owner
-- Reviewer (must be independent): To be assigned before Phase 4 handoff
+- Reviewer (must be independent): OpenAI Codex (`REVIEW-029`)
 
 ## Constraints and risks
 
@@ -84,7 +84,7 @@
   cancel E2E coverage.
 - **Notes:** Ownership belongs in every repository predicate rather than a post-query
   check. Only `CANCELLED_BY_USER` is an idempotent repeat of user cancellation.
-- **Status:** Pending.
+- **Status:** Complete (2026-09-10; `REVIEW-024` approved after fixes).
 
 ### P4-T04 — Admin approval and rejection
 
@@ -99,7 +99,7 @@
 - **Notes:** Use one shared room-wide confirmed-overlap query. The concurrency test
   uses two independent transactions and asserts database history/outbox state, not
   only HTTP statuses. Retries must not duplicate logical events.
-- **Status:** Pending.
+- **Status:** Complete (2026-09-10; `REVIEW-025` approved after fixes).
 
 ### P4-T05 — Admin edit and cancellation
 
@@ -116,7 +116,7 @@
 - **Notes:** Pre-read candidates, lock old/new room IDs ascending, lock and re-read
   booking/source window, reject drift, resolve/lock the destination, revalidate
   status/containment/overlap, then update history and outbox atomically.
-- **Status:** Pending.
+- **Status:** Complete (2026-09-11; `REVIEW-026` findings fixed in the same pass).
 
 ### P4-T06 — Complete availability and room-time usage
 
@@ -132,7 +132,8 @@
 - **Notes:** Replace `ZeroRoomTimeUsageRepository` and make reads/writes share the
   canonical overlap predicate. Capture representative `EXPLAIN` output before and
   after any index change. Pending and terminal bookings must never block.
-- **Status:** Pending.
+- **Status:** Complete (2026-09-11; `REVIEW-027` closed, and the independent
+  `REVIEW-029` re-review confirmed the P4-T06 findings R29-03 and R29-04 fixed).
 
 ### P4-T07 — Phase 4 handoff
 
@@ -146,7 +147,9 @@
   security, data, concurrency, idempotency, and operations review.
 - **Notes:** Run the full gate once at handoff, fix every finding, and rerun it only
   when a changed gate input or an accepted Blocker/High fix requires it.
-- **Status:** Pending.
+- **Status:** Complete (2026-09-11; `REVIEW-028` records the author handoff and the
+  independent `REVIEW-029` re-review confirms all four findings fixed. All seventeen
+  `SPEC-006` acceptance criteria are checked).
 
 ## Verification commands
 
@@ -250,6 +253,159 @@ already includes them. Do not pay the full handoff cost after each vertical slic
   room-type response projection, and uses a direct idempotency completion update. The
   full gate passed (unit 221/221, integration 77/77, E2E 23/23, build) and independent
   re-review approved the follow-up.
+- 2026-09-10: `P4-T03` added owner-scoped booking list/detail and `PENDING` user
+  cancellation. Reads use paired half-open date-overlap filters and stable
+  `createdAt DESC, id DESC` ordering; detail returns chronologically ordered immutable
+  history with an optional safe actor projection. Cancellation locks the owned booking,
+  appends exactly one history row in the same transaction, replays only an already
+  user-cancelled request, and records non-PII applied/replay/conflict outcomes. Focused
+  evidence covers default/filter/date-boundary/pagination reads, ownership, history
+  mapping, rollback, transition conflict, query shape, logs, and HTTP user/cross-owner/
+  admin journeys. Final verification passed: unit 221/221, integration 82/82, E2E
+  23/23, format, lint, typecheck, Harness, and build. `REVIEW-024` approved after
+  all findings were fixed.
+- 2026-09-10: `P4-T04` added admin booking list/detail plus locked approval and
+  rejection. Approval serializes on the physical room, revalidates its window, and
+  checks confirmed overlap across every room window before writing status history and
+  a uniquely keyed outbox intent. Evidence includes same-booking and competing
+  approval concurrency, legacy-window overlap, adjacency, outbox rollback, filters,
+  RBAC, and HTTP transitions. Final verification passed: unit 221/221, integration
+  87/87, E2E 23/23, format, lint, typecheck, Harness, and build; `REVIEW-025`
+  approved after fixes.
+- 2026-09-11: `P4-T05` added admin booking edit and cancellation. `PATCH` parses one
+  strong quoted decimal `If-Match`, pre-reads only the source identity/version needed
+  for lock order, locks the old and new physical room IDs in ascending numeric order,
+  re-reads and locks the booking plus its source window, rejects source drift, resolves
+  and locks one active containing destination window, and revalidates
+  status/containment plus room-wide confirmed overlap for confirmed stays before
+  writing the booking, its before/after change history, and one `booking.changed`
+  event atomically. The edit preserves the original price snapshot and advances version
+  exactly once. Admin cancellation covers `PENDING|CONFIRMED -> CANCELLED_BY_ADMIN`,
+  replays an identical reason without a second history or outbox row, and conflicts on
+  a different reason or a terminal status.
+- 2026-09-11: `P4-T05` accepted contract decisions: room lock order compares decimal
+  IDs numerically rather than lexicographically, so IDs past 19 digits still serialize
+  in one order; every reasoned Phase 4 event carries its authorized reason at
+  `payload.booking.reason` (rejected, changed, and admin-cancelled alike) and
+  `booking.changed` adds top-level `before`/`after` room and date values. One private
+  outbox writer now emits every Phase 4 booking event so the envelope, the reason
+  position, and the `<eventType>:<publicId>:<resultingVersion>` key cannot drift per
+  transition. `SPEC-006` and `endpoint-catalog.md` record this reason position.
+- `P4-T05` focused evidence: 3 unit suites / 12 tests for lock order, `If-Match`
+  parsing, and edit DTO validation; 28 real-MySQL booking integration tests including
+  version control with price preservation, the opposite concurrent cross-room move
+  that proves ordered locks avoid deadlock, post-lock source drift, destination
+  overlap under a legacy window, empty/terminal edit policy, edit and cancel outbox
+  rollback, idempotent admin cancellation, and the pinned payload/idempotency-key
+  shape for both new events; and the extended admin E2E journey for 428/400/200/412
+  `If-Match` behavior, idempotent cancellation, reason validation, and user RBAC 403s
+  on both new routes. `REVIEW-026` findings (swapped reject/cancel request DTOs,
+  duplicated outbox row construction with an inconsistent reason position, and a dead
+  `fromStatus` branch, and a confirmed-overlap probe that hydrated and locked every
+  `bookings` column for an existence check) were fixed in the same pass. The review
+  also swept the two recurrence classes in `docs/logs/error-log.md`: the projection
+  lesson had recurred in that probe and is now fixed and mutation-proven, while the
+  `@IsOptional()` null-through lesson did not recur, because `UpdateBookingDto` uses
+  `ValidateIf` with a null-matrix unit test.
+- 2026-09-11: `P4-T06` completed public availability and room-time usage. Public
+  list and detail now subtract room-wide `CONFIRMED` overlap from window
+  containment, and `ZeroRoomTimeUsageRepository` is gone: `BookingRoomTimeUsageRepository`
+  reports real per-window booking, active-booking, and change-history counts through
+  the caller's manager.
+- 2026-09-11: `P4-T06` accepted contract decisions. The half-open confirmed-overlap
+  comparison lives once in `src/bookings/booking-overlap.ts` and is used by booking
+  approval, admin edits, and both availability reads, so a read can no longer drift
+  from a write. The exclusion is room-wide rather than window-wide, because a
+  confirmed stay keeps occupying its physical room after an admin edit moved it and
+  because an older stay may still reference a deactivated window; list and detail
+  build it from one private helper. Availability therefore depends on the booking
+  module by design — `RoomSearchService` imports the predicate and the `Booking`
+  entity, while `RoomsModule` stays the composition root that names the concrete
+  usage repository, so room-time policy still depends only on its port. Change
+  history is credited once per window per row: a date-only edit keeps one window in
+  both `from`/`to` columns, so the destination count skips rows whose source window
+  is identical. Usage counts need no extra lock. Every write that can raise a
+  count — creation and an edit's destination side — takes the physical room lock the
+  reading caller already holds, while the three transitions that take no room lock
+  (user cancellation, admin rejection, and admin cancellation) only move a booking to
+  a terminal status and therefore only lower `activeBookingCount`. A concurrent read
+  is at worst too high, which refuses a window mutation rather than permitting one.
+- 2026-09-11: `P4-T06` migration decision: **no index added**. Captured
+  `EXPLAIN FORMAT=JSON` for the emitted search query shows the overlap probe reaching
+  `bookings` through the existing `idx_bookings_room_time_status_check_in_out` and
+  `room_times` by `PRIMARY` (`eq_ref`), so the Phase 4 schema already supports both
+  the availability read and the usage counts. The capture is asserted in
+  `room-search.integration-spec.ts` rather than pasted here, so a plan regression
+  fails the suite instead of ageing in a document.
+- `P4-T06` focused evidence: unit 236/236 including the new overlap-predicate suite
+  that pins the half-open operators and the confirmed-only status; integration
+  102/102 including legacy-window exclusion for list and detail, adjacency, pending
+  coexistence, terminal non-blocking, the query-plan assertion, real usage counts
+  across a same-window and a cross-room edit, usage-driven date/deactivate/delete
+  rules for pending and confirmed stays, and the room-lock race between a window
+  deactivation and a concurrent create that asserts either winner leaves a
+  consistent database; E2E 24/24 including the public list/detail exclusion and its
+  exclusive-checkout boundary. The availability exclusion is mutation-proven:
+  neutralizing it fails three search tests. `REVIEW-027` findings were fixed in the
+  same pass.
+- 2026-09-11: `P4-T07` reconciled the published contract with the implementation.
+  `BookingIdParamDto` now publishes the 26-character ULID pattern rather than only an
+  example, the admin edit's `400` lists `BOOKING_STAY_INVALID`, and two OpenAPI
+  contract specs assert every booking operation's status set, the required
+  `Idempotency-Key`, the ULID path pattern, and that `If-Match` is required on the
+  edit and on nothing else. `README.md` gained the booking operator section: policy
+  configuration, migration-before-application deploy order, the additive-rollback and
+  forward-fix rule, a smoke journey covering create/approve/edit with retry guidance,
+  and the explicit caveat that Phase 4 enqueues notifications but delivers none.
+  `ADR-0002` records the Phase 4 completion decisions, and `endpoint-catalog.md` now
+  states the room-wide confirmed exclusion in its availability rule.
+- 2026-09-11: `P4-T07` closed the inherited Phase 2 Swagger debt. The three
+  rate-limited auth operations now document `429 AUTH_RATE_LIMITED` and
+  `503 AUTHORIZATION_UNAVAILABLE`. The change is decorator-only and touches no auth
+  behavior, which is what the documentation plan required before closing it here
+  rather than carrying it forward as unrelated debt.
+- 2026-09-11: `P4-T07` migration state: **no ad hoc schema change**. The production
+  data source registers `CreateBookingCoreSchema1788580000000` with all five Phase 4
+  entities, `synchronize` stays false, and `src/database/migrations/` has been
+  untouched since `P4-T01` (commit `9190898`). The booking integration suite proves
+  the migration reverts and reapplies cleanly against real MySQL, and the forward-fix
+  procedure is documented in both `README.md` and this plan's deployment section.
+- `P4-T07` handoff evidence: `MYSQL_PORT=13306 npm run verify` green — unit 240/240
+  (44 suites), integration 102/102 (11 suites), E2E 24/24 (6 suites), plus typecheck,
+  lint, formatting, Harness check/test/eval, Compose contract/config, and build.
+  Locale parity verified mechanically: 67 declared error keys, 67 English, 67
+  Vietnamese, with no orphan or missing entry in either direction. Both new OpenAPI
+  assertions are mutation-proven. `REVIEW-028` records five findings, all fixed, with
+  no Blocker or High.
+- 2026-09-11: `REVIEW-029` (independent) re-review confirmed two of four findings
+  fixed. The public booking ID pattern becomes `^[0-7][0-9A-HJKMNP-TV-Z]{25}$`:
+  ten base32 characters carry 50 bits while a ULID timestamp is 48, so the leading
+  character can never exceed `7`, and the pattern now lives beside the generator that
+  guarantees it rather than being restated in the DTO. Two documentation fixes from
+  `P4-T07` had no test that would fail if reverted, so the admin edit's stable error
+  codes and the auth limiter's `429`/`503` are now asserted and mutation-proven, and
+  `REVIEW-028`'s verification column is corrected to name only checks that actually
+  protect each fix. The room-lock safety argument now names all three transitions that
+  take no room lock rather than only cancellation. The README smoke is split into a
+  read-only production procedure and a labelled non-production fixture journey with
+  defined variables, derived hotel dates, captured ID/version, and cleanup, matching
+  this plan's rule that mutations run only against a non-production fixture.
+- 2026-09-11: the `REVIEW-029` re-review confirmed both Low findings fixed and both
+  Medium ones only partly addressed, so a second pass closed the rest. The runbook now
+  names its prerequisites, assigns and guards `TOKEN`/`ADMIN_TOKEN`/`ROOM_ID` with
+  fail-fast `:?` checks, and derives a per-run idempotency key so a rerun creates a
+  fresh booking rather than replaying the cancelled one; the first attempt used
+  `TOKEN=<...>` placeholders, which are shell redirects, so every block in the section
+  is now parsed with `bash -n`. The edit's OpenAPI assertion compares extracted code
+  sets per status instead of substrings, making it exhaustive in both directions
+  across all twelve documented codes rather than the eleven first claimed, and the
+  logout exclusion asserts each status separately because
+  `not.toEqual(arrayContaining([...]))` passes while one of the two is present.
+- 2026-09-11: final independent re-review of `f100bb5` confirmed R29-01 and R29-02
+  fixed. The runbook blocks parse with `bash -n`, its missing-variable guard fails as
+  documented, and its generated key matches the server pattern. The changed test
+  inputs passed the full handoff gate: unit 247/247, integration 102/102, E2E 24/24,
+  plus Harness, Compose, formatting, lint, whole-project typecheck, and build.
 - Later implementation-only choices remain subject to evidence and review. Record
   every durable decision here and in the appropriate ADR before changing its
   contract.

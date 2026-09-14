@@ -211,6 +211,129 @@ history atomically. Admin status changes require a reason, cannot deactivate the
 calling admin, cannot remove the last active admin, and immediately revoke the
 target user's sessions.
 
+## Booking requests
+
+Phase 4 adds the booking vertical: a user creates a `PENDING` request, an admin
+approves, rejects, edits, or cancels it, and public availability stops advertising a
+room whose `CONFIRMED` stay overlaps the requested dates.
+
+Booking policy is configured explicitly and validated at startup:
+
+```dotenv
+# The business-local calendar used to decide whether a stay starts today or in the
+# past. Production must set this deliberately; the server clock's zone is not used.
+HOTEL_TIMEZONE=Asia/Ho_Chi_Minh
+# Per-user create budget enforced by the shared Redis limiter before any body-driven
+# database lock is taken.
+BOOKING_CREATE_RATE_LIMIT_MAX=10
+BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS=60
+# Minimum retention for booking-create idempotency records. Phase 7 owns cleanup.
+BOOKING_IDEMPOTENCY_RETENTION_HOURS=24
+```
+
+Deploy order is migration first, application second:
+
+```bash
+# 1. Run the reviewed Phase 4 migration and verify the new tables and indexes.
+npm run migration:run
+# 2. Deploy the API, then confirm MySQL and Redis readiness before opening traffic.
+```
+
+The Phase 4 migration is additive, so the previous application tolerates the empty
+new tables and a pre-traffic rollback is safe. After the first real booking write,
+stop booking mutation traffic and use a compatible application rollback or a forward
+fix: never drop booking, history, idempotency, or outbox data, and never revert the
+referenced room tables.
+
+Two smoke procedures follow, and they are not interchangeable. Production gets the
+read-only one; anything that writes a booking runs against a non-production fixture.
+
+Both need `curl`; the fixture journey also needs `jq` to read IDs out of the
+responses. `TOKEN` and `ADMIN_TOKEN` are application access tokens for a user and an
+administrator, obtained through the login flow above. Set them, then let the snippet
+fail fast rather than sending empty headers, and derive the dates so the journey stays
+valid as time passes instead of expiring into the past-date rejection:
+
+```bash
+# Export TOKEN and ADMIN_TOKEN yourself, then paste the rest verbatim.
+export TOKEN='...' ADMIN_TOKEN='...'
+
+API=${API:-http://localhost:3000/api/v1}
+: "${TOKEN:?export TOKEN with a user access token}"
+: "${ADMIN_TOKEN:?export ADMIN_TOKEN with an administrator access token}"
+CHECK_IN=$(date -u -d '+21 days' +%F 2>/dev/null || date -u -v+21d +%F)
+CHECK_OUT=$(date -u -d '+24 days' +%F 2>/dev/null || date -u -v+24d +%F)
+```
+
+**Production smoke — read only.** This is the whole of what runs against live data.
+It proves the new routes are reachable, authorized, and reading the Phase 4 tables,
+and it creates nothing:
+
+```bash
+# Public availability, which now excludes rooms with an overlapping confirmed stay
+curl -fsS "$API/rooms?checkIn=$CHECK_IN&checkOut=$CHECK_OUT" >/dev/null
+
+# Owner and admin lists, proving the booking tables and RBAC are live
+curl -fsS "$API/bookings" -H "Authorization: Bearer $TOKEN" >/dev/null
+curl -fsS "$API/admin/bookings" -H "Authorization: Bearer $ADMIN_TOKEN" >/dev/null
+```
+
+**Non-production fixture journey — writes data.** Run this only against a disposable
+environment, never against production. It needs one more variable, and a fresh
+idempotency key per run: the key is what makes a retry safe, so reusing yesterday's
+key would replay that booking — now cancelled — and the approval below would fail
+against a terminal status instead of exercising a new journey.
+
+```bash
+export ROOM_ID='...' # a bookable room in the fixture
+
+: "${ROOM_ID:?export ROOM_ID with a bookable room id from the fixture}"
+RUN_KEY="smoke-$(date -u +%Y%m%dT%H%M%SZ)"
+
+# Create one request. The Idempotency-Key is required and makes a retry safe: the
+# same key with the same body replays the original response, while the same key
+# with a different body is refused rather than creating a second booking.
+BOOKING_ID=$(curl -fsS -X POST "$API/bookings" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $RUN_KEY" \
+  -d "{\"roomId\":\"$ROOM_ID\",\"checkIn\":\"$CHECK_IN\",\"checkOut\":\"$CHECK_OUT\"}" \
+  | jq -r .id)
+
+# Approve it, capturing the version the next step must send back.
+VERSION=$(curl -fsS -X POST "$API/admin/bookings/$BOOKING_ID/approve" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r .version)
+
+# Editing room or dates requires that current version in If-Match. A stale version
+# returns 412 and changes nothing; a missing one returns 428.
+NEW_CHECK_OUT=$(date -u -d '+25 days' +%F 2>/dev/null || date -u -v+25d +%F)
+curl -fsS -X PATCH "$API/admin/bookings/$BOOKING_ID" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -H "If-Match: \"$VERSION\"" \
+  -d "{\"checkOut\":\"$NEW_CHECK_OUT\",\"reason\":\"Smoke test extension.\"}" >/dev/null
+
+# Clean up by cancelling the booking. Rows stay for audit by design: booking,
+# status history, change history, and outbox events are never deleted by the API,
+# so reset the fixture database if a pristine state is needed.
+curl -fsS -X POST "$API/admin/bookings/$BOOKING_ID/cancel" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"reason":"Smoke test cleanup."}' >/dev/null
+```
+
+An edit never reprices the booking: the per-night snapshot taken at creation is
+preserved by design, and repricing needs a separately accepted contract.
+
+**Phase 4 enqueues notifications but delivers none.** Every transition writes an
+`outbox_events` row in the same transaction as the booking change, and those rows
+stay `PENDING` until Phase 5 ships a worker. Activating the booking feature in
+production therefore requires either pairing it with Phase 5 delivery, or recording
+explicit acceptance of delayed mail plus a backlog-age and backlog-count monitor and
+an idempotent later-drain procedure. Owners are not notified of an approval,
+rejection, edit, or cancellation until that worker runs.
+
+Redis limiter failure denies booking creation but must never break read endpoints,
+and MySQL overload uses the existing bounded `503`. Neither failure may fall back to
+unbounded requests or to an availability claim the database did not support.
+
 ## Quality commands
 
 ```bash

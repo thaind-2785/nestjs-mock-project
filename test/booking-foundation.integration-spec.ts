@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import mysql from 'mysql2/promise';
-import { DataSource, getMetadataArgsStorage } from 'typeorm';
+import { DataSource, EntityManager, getMetadataArgsStorage } from 'typeorm';
 import { AuthIdentity } from '../src/auth/entities/auth-identity.entity';
 import { AuthSession } from '../src/auth/entities/auth-session.entity';
 import { BookingChangeHistory } from '../src/bookings/entities/booking-change-history.entity';
@@ -16,6 +16,7 @@ import { Booking } from '../src/bookings/entities/booking.entity';
 import { IdempotencyKey } from '../src/bookings/entities/idempotency-key.entity';
 import { OutboxEvent } from '../src/bookings/entities/outbox-event.entity';
 import { BookingsService } from '../src/bookings/bookings.service';
+import { BookingRoomTimeUsageRepository } from '../src/bookings/room-time-usage.repository';
 import { BookingCreateResponse } from '../src/bookings/booking-create.types';
 import { createBookingsConfiguration } from '../src/config/bookings.config';
 import { createDatabaseConfiguration } from '../src/config/database.config';
@@ -32,6 +33,8 @@ import { RoomType } from '../src/rooms/entities/room-type.entity';
 import { Room } from '../src/rooms/entities/room.entity';
 import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { lockRoom } from '../src/rooms/room-lock';
+import { RoomTimesService } from '../src/rooms/room-times.service';
+import { DatabaseConnectionService } from '../src/database/database-connection.service';
 import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
@@ -46,6 +49,8 @@ describe('Phase 4 booking foundation persistence', () => {
   let adminConnection: mysql.Connection;
   let disposableDatabase: string;
   let bookings: BookingsService;
+  let usage: BookingRoomTimeUsageRepository;
+  let roomTimes: RoomTimesService;
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
@@ -109,6 +114,12 @@ describe('Phase 4 booking foundation persistence', () => {
     bookings = new BookingsService(
       dataSource,
       createBookingsConfiguration(environment),
+    );
+    usage = new BookingRoomTimeUsageRepository();
+    roomTimes = new RoomTimesService(
+      dataSource,
+      new DatabaseConnectionService(dataSource),
+      usage,
     );
   });
 
@@ -441,6 +452,907 @@ describe('Phase 4 booking foundation persistence', () => {
     expect(await dataSource.getRepository(IdempotencyKey).count()).toBe(0);
   });
 
+  it('lists, reads, and idempotently cancels only the booking owner records', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const created = await bookings.create(user.id, 'booking-user-cancel', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+
+    await expect(bookings.getOwn('999999', created.id)).rejects.toMatchObject({
+      errorCode: 'BOOKING_NOT_FOUND',
+    });
+    await expect(
+      bookings.listOwn(user.id, {
+        page: 1,
+        pageSize: 20,
+        status: BookingStatus.Pending,
+      }),
+    ).resolves.toMatchObject({ total: 1, items: [{ id: created.id }] });
+
+    const cancelled = await bookings.cancelOwn(user.id, created.id);
+    const replayed = await bookings.cancelOwn(user.id, created.id);
+    expect(cancelled.status).toBe(BookingStatus.CancelledByUser);
+    expect(replayed).toEqual(cancelled);
+    expect(cancelled.history).toHaveLength(2);
+    expect(cancelled.history.map((entry) => entry.toStatus)).toEqual([
+      BookingStatus.Pending,
+      BookingStatus.CancelledByUser,
+    ]);
+    expect(cancelled.history[0]).toMatchObject({
+      actorType: BookingActorType.User,
+      actor: { id: user.id, displayName: user.displayName },
+    });
+    await expect(
+      bookings.cancelOwn('999999', created.id),
+    ).rejects.toMatchObject({
+      errorCode: 'BOOKING_NOT_FOUND',
+    });
+  });
+
+  it('logs sanitized user-cancellation outcomes for apply, replay, and conflict', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const cancellable = await bookings.create(user.id, 'booking-cancel-log', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const conflicting = await bookings.create(
+      user.id,
+      'booking-cancel-log-conflict',
+      {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOut,
+      },
+    );
+    await dataSource
+      .getRepository(Booking)
+      .update(
+        { publicId: conflicting.id },
+        { status: BookingStatus.Confirmed },
+      );
+
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    try {
+      await bookings.cancelOwn(user.id, cancellable.id, 'request-cancel-apply');
+      await bookings.cancelOwn(
+        user.id,
+        cancellable.id,
+        'request-cancel-replay',
+      );
+      await expect(
+        bookings.cancelOwn(user.id, conflicting.id, 'request-cancel-conflict'),
+      ).rejects.toMatchObject({ errorCode: 'BOOKING_STATUS_CONFLICT' });
+
+      expect(log).toHaveBeenCalledTimes(2);
+      expect(log).toHaveBeenCalledWith({
+        event: 'booking_cancelled_by_user',
+        requestId: 'request-cancel-apply',
+        operation: 'BOOKING_CANCEL',
+        actorType: BookingActorType.User,
+        publicBookingId: cancellable.id,
+        result: 'cancelled',
+      });
+      expect(log).toHaveBeenCalledWith({
+        event: 'booking_cancel_replayed',
+        requestId: 'request-cancel-replay',
+        operation: 'BOOKING_CANCEL',
+        actorType: BookingActorType.User,
+        publicBookingId: cancellable.id,
+        result: 'replayed',
+      });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith({
+        event: 'booking_cancel_conflict',
+        requestId: 'request-cancel-conflict',
+        operation: 'BOOKING_CANCEL',
+        actorType: BookingActorType.User,
+        result: 'conflict',
+        errorCode: 'BOOKING_STATUS_CONFLICT',
+      });
+    } finally {
+      log.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it('applies half-open date overlap filters and stable pagination to the owner history', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const first = await bookings.create(user.id, 'booking-list-first', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const second = await bookings.create(user.id, 'booking-list-second', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    await dataSource.query(
+      'UPDATE bookings SET created_at = ? WHERE public_id IN (?, ?)',
+      ['2026-01-01 00:00:00.000000', first.id, second.id],
+    );
+
+    await expect(
+      bookings.listOwn(user.id, {
+        page: 1,
+        pageSize: 20,
+        from: fixtureDates.checkOut,
+        to: fixtureDates.checkOutDifferent,
+      }),
+    ).resolves.toMatchObject({ total: 0, items: [] });
+    await expect(
+      bookings.listOwn(user.id, {
+        page: 1,
+        pageSize: 1,
+        from: fixtureDates.checkIn,
+        to: fixtureDates.checkOut,
+      }),
+    ).resolves.toMatchObject({
+      total: 2,
+      items: [{ id: second.id }],
+    });
+    await expect(
+      bookings.listOwn(user.id, {
+        page: 2,
+        pageSize: 1,
+      }),
+    ).resolves.toMatchObject({ items: [{ id: first.id }] });
+  });
+
+  it('rejects non-pending cancellation and rolls back a failed history append', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const confirmed = await bookings.create(
+      user.id,
+      'booking-cancel-confirmed',
+      {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOut,
+      },
+    );
+    await dataSource
+      .getRepository(Booking)
+      .update({ publicId: confirmed.id }, { status: BookingStatus.Confirmed });
+    await expect(
+      bookings.cancelOwn(user.id, confirmed.id),
+    ).rejects.toMatchObject({
+      errorCode: 'BOOKING_STATUS_CONFLICT',
+    });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        bookingId: (
+          await dataSource.getRepository(Booking).findOneByOrFail({
+            publicId: confirmed.id,
+          })
+        ).id,
+      }),
+    ).toBe(1);
+
+    const pending = await bookings.create(user.id, 'booking-cancel-rollback', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const insert = jest
+      .spyOn(EntityManager.prototype, 'insert')
+      .mockRejectedValue(new Error('forced booking history append failure'));
+    try {
+      await expect(bookings.cancelOwn(user.id, pending.id)).rejects.toThrow(
+        'forced booking history append failure',
+      );
+    } finally {
+      insert.mockRestore();
+    }
+    expect(
+      await dataSource.getRepository(Booking).findOneByOrFail({
+        publicId: pending.id,
+      }),
+    ).toMatchObject({ status: BookingStatus.Pending });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        bookingId: (
+          await dataSource.getRepository(Booking).findOneByOrFail({
+            publicId: pending.id,
+          })
+        ).id,
+      }),
+    ).toBe(1);
+  });
+
+  it('projects only booking-history fields needed by the user response', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    await bookings.create(user.id, 'booking-projection-shape', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const queries = jest.spyOn(dataSource.logger, 'logQuery');
+    try {
+      await bookings.listOwn(user.id, { page: 1, pageSize: 20 });
+      const query = queries.mock.calls
+        .map(([sql]) => sql)
+        .find((sql) => /FROM `bookings` `booking`/i.test(sql));
+      expect(query).toBeDefined();
+      expect(query).toContain('`booking`.`public_id`');
+      expect(query).toContain('`room`.`room_number`');
+      expect(query).toContain('`roomType`.`name`');
+      expect(query).not.toContain('`room`.`base_price_amount`');
+      expect(query).not.toContain('`room`.`bed_count`');
+      expect(query).not.toContain('`roomTime`.`available_from`');
+      expect(query).not.toContain('`roomType`.`description`');
+    } finally {
+      queries.mockRestore();
+    }
+  });
+
+  it('probes confirmed overlap with a locking key-only query', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'booking-overlap-shape', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const queries = jest.spyOn(dataSource.logger, 'logQuery');
+    try {
+      await bookings.approve({
+        actorUserId: admin.id,
+        bookingPublicId: created.id,
+      });
+      const probe = queries.mock.calls
+        .map(([sql]) => sql)
+        .find((sql) => /FROM `bookings` `confirmed`/i.test(sql));
+      expect(probe).toBeDefined();
+      expect(probe).toContain('`confirmed`.`id`');
+      expect(probe).toMatch(/FOR UPDATE/i);
+      expect(probe).not.toContain('`confirmed`.`price_amount`');
+      expect(probe).not.toContain('`confirmed`.`rejection_reason`');
+      expect(probe).not.toContain('`confirmed`.`public_id`');
+    } finally {
+      queries.mockRestore();
+    }
+  });
+
+  it('serializes overlapping approvals and commits exactly one history and outbox event', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const first = await bookings.create(user.id, 'booking-approve-first', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const second = await bookings.create(user.id, 'booking-approve-second', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+
+    const results = await Promise.allSettled([
+      bookings.approve({ actorUserId: admin.id, bookingPublicId: first.id }),
+      bookings.approve({ actorUserId: admin.id, bookingPublicId: second.id }),
+    ]);
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === 'rejected'),
+    ).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({
+      reason: { errorCode: 'ROOM_ALREADY_BOOKED' },
+    });
+    expect(
+      await dataSource
+        .getRepository(Booking)
+        .countBy({ status: BookingStatus.Confirmed }),
+    ).toBe(1);
+    const outbox = await dataSource
+      .getRepository(OutboxEvent)
+      .findOneByOrFail({ eventType: 'booking.confirmed' });
+    expect(outbox.idempotencyKey).toMatch(
+      /^booking\.confirmed:[0-9A-HJKMNP-TV-Z]{26}:2$/,
+    );
+    expect(outbox.payload).toMatchObject({
+      schemaVersion: 1,
+      bookingVersion: 2,
+      booking: { room: { id: roomTime.roomId, roomNumber: 'A-201' } },
+    });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        toStatus: BookingStatus.Confirmed,
+      }),
+    ).toBe(1);
+  });
+
+  it('replays concurrent approval of the same booking without duplicate effects', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'booking-approve-replay', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const results = await Promise.all([
+      bookings.approve({ actorUserId: admin.id, bookingPublicId: created.id }),
+      bookings.approve({ actorUserId: admin.id, bookingPublicId: created.id }),
+    ]);
+    expect(results.map((result) => result.status)).toEqual([
+      BookingStatus.Confirmed,
+      BookingStatus.Confirmed,
+    ]);
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        toStatus: BookingStatus.Confirmed,
+      }),
+    ).toBe(1);
+    expect(
+      await dataSource
+        .getRepository(OutboxEvent)
+        .countBy({ eventType: 'booking.confirmed' }),
+    ).toBe(1);
+  });
+
+  it('replays an identical rejection without duplicating history or its outbox event', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'booking-reject-replay', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const input = {
+      actorUserId: admin.id,
+      bookingPublicId: created.id,
+      reason: 'Requested dates are unavailable.',
+    };
+    const rejected = await bookings.reject(input);
+    const replayed = await bookings.reject(input);
+    expect(replayed).toEqual(rejected);
+    expect(rejected).toMatchObject({
+      status: BookingStatus.Rejected,
+      rejectionReason: input.reason,
+    });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        toStatus: BookingStatus.Rejected,
+      }),
+    ).toBe(1);
+    expect(
+      await dataSource
+        .getRepository(OutboxEvent)
+        .countBy({ eventType: 'booking.rejected' }),
+    ).toBe(1);
+    await expect(
+      bookings.listAdmin({
+        page: 1,
+        pageSize: 20,
+        status: BookingStatus.Rejected,
+        userId: user.id,
+        roomId: roomTime.roomId,
+      }),
+    ).resolves.toMatchObject({ total: 1, items: [{ id: created.id }] });
+  });
+
+  it('checks confirmed overlap across a legacy window but permits an adjacent stay', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const legacyWindow = await dataSource.getRepository(RoomTime).save({
+      roomId: roomTime.roomId,
+      availableFrom: fixtureDates.availableFrom,
+      availableTo: fixtureDates.availableTo,
+      status: RoomTimeStatus.Inactive,
+    });
+    await dataSource.getRepository(Booking).save({
+      publicId: '01M25YZZZZZZZZZZZZZZZZZZZZ',
+      userId: user.id,
+      roomTimeId: legacyWindow.id,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+      status: BookingStatus.Confirmed,
+      priceAmount: '4500000',
+      currency: 'VND',
+      rejectionReason: null,
+    });
+    const overlapping = await bookings.create(
+      user.id,
+      'booking-legacy-overlap',
+      {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOut,
+      },
+    );
+    await expect(
+      bookings.approve({
+        actorUserId: admin.id,
+        bookingPublicId: overlapping.id,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_ALREADY_BOOKED' });
+
+    const adjacent = await bookings.create(user.id, 'booking-legacy-adjacent', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkOut,
+      checkOut: fixtureDates.checkOutDifferent,
+    });
+    await expect(
+      bookings.approve({ actorUserId: admin.id, bookingPublicId: adjacent.id }),
+    ).resolves.toMatchObject({ status: BookingStatus.Confirmed });
+  });
+
+  it('rolls an approval back when its transition write cannot complete', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'booking-approve-rollback', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const insert = jest.spyOn(EntityManager.prototype, 'insert');
+    const originalInsert = insert.getMockImplementation();
+    insert.mockImplementation(function (target, values) {
+      if (target === OutboxEvent) {
+        return Promise.reject(new Error('forced outbox write failure'));
+      }
+      if (!originalInsert) throw new Error('missing EntityManager.insert');
+      return originalInsert.call(this, target, values) as Promise<never>;
+    });
+    try {
+      await expect(
+        bookings.approve({
+          actorUserId: admin.id,
+          bookingPublicId: created.id,
+        }),
+      ).rejects.toThrow('forced outbox write failure');
+    } finally {
+      insert.mockRestore();
+    }
+    expect(
+      await dataSource
+        .getRepository(Booking)
+        .findOneByOrFail({ publicId: created.id }),
+    ).toMatchObject({ status: BookingStatus.Pending });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        toStatus: BookingStatus.Confirmed,
+      }),
+    ).toBe(0);
+    expect(await dataSource.getRepository(OutboxEvent).count()).toBe(0);
+  });
+
+  it('edits a booking once with version control while preserving its price snapshot', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'booking-admin-edit', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const updated = await bookings.updateAdmin({
+      actorUserId: admin.id,
+      bookingPublicId: created.id,
+      expectedVersion: '1',
+      body: {
+        checkOut: fixtureDates.checkOutDifferent,
+        reason: 'Guest requested one additional night.',
+      },
+    });
+    expect(updated).toMatchObject({
+      checkOut: fixtureDates.checkOutDifferent,
+      version: 2,
+      price: created.price,
+      changes: [
+        {
+          from: { roomId: roomTime.roomId, checkOut: fixtureDates.checkOut },
+          to: {
+            roomId: roomTime.roomId,
+            checkOut: fixtureDates.checkOutDifferent,
+          },
+        },
+      ],
+    });
+    const changedEvents = await dataSource
+      .getRepository(OutboxEvent)
+      .findBy({ eventType: 'booking.changed' });
+    expect(changedEvents).toHaveLength(1);
+    expect(changedEvents[0].idempotencyKey).toBe(
+      `booking.changed:${created.id}:2`,
+    );
+    expect(changedEvents[0].payload).toMatchObject({
+      schemaVersion: 1,
+      bookingId: created.id,
+      ownerUserId: user.id,
+      bookingVersion: 2,
+      booking: {
+        room: { id: roomTime.roomId, roomNumber: 'A-201' },
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOutDifferent,
+        status: BookingStatus.Pending,
+        price: created.price,
+        reason: 'Guest requested one additional night.',
+      },
+      before: {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOut,
+      },
+      after: {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOutDifferent,
+      },
+    });
+    await expect(
+      bookings.updateAdmin({
+        actorUserId: admin.id,
+        bookingPublicId: created.id,
+        expectedVersion: '1',
+        body: { checkIn: fixtureDates.checkIn, reason: 'stale' },
+      }),
+    ).rejects.toMatchObject({ errorCode: 'BOOKING_VERSION_CONFLICT' });
+  });
+
+  it('orders cross-room locks so opposite concurrent moves complete without deadlock', async () => {
+    const { user, roomTime: firstRoomTime } = await createBookingGraph();
+    const secondRoomTime = await createRoomTime('B-202');
+    const admin = await createAdminUser();
+    const first = await bookings.create(user.id, 'booking-move-first', {
+      roomId: firstRoomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const second = await bookings.create(user.id, 'booking-move-second', {
+      roomId: secondRoomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+
+    const [firstMoved, secondMoved] = await Promise.all([
+      bookings.updateAdmin({
+        actorUserId: admin.id,
+        bookingPublicId: first.id,
+        expectedVersion: '1',
+        body: {
+          roomId: secondRoomTime.roomId,
+          reason: 'Swap rooms for maintenance.',
+        },
+      }),
+      bookings.updateAdmin({
+        actorUserId: admin.id,
+        bookingPublicId: second.id,
+        expectedVersion: '1',
+        body: {
+          roomId: firstRoomTime.roomId,
+          reason: 'Swap rooms for maintenance.',
+        },
+      }),
+    ]);
+
+    expect(firstMoved).toMatchObject({
+      room: { id: secondRoomTime.roomId },
+      version: 2,
+      price: first.price,
+    });
+    expect(secondMoved).toMatchObject({
+      room: { id: firstRoomTime.roomId },
+      version: 2,
+      price: second.price,
+    });
+    expect(await dataSource.getRepository(BookingChangeHistory).count()).toBe(
+      2,
+    );
+    expect(
+      await dataSource
+        .getRepository(OutboxEvent)
+        .countBy({ eventType: 'booking.changed' }),
+    ).toBe(2);
+  });
+
+  it('rejects source drift observed after the room locks are acquired', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const alternateWindow = await dataSource.getRepository(RoomTime).save({
+      roomId: roomTime.roomId,
+      availableFrom: fixtureDates.availableFrom,
+      availableTo: fixtureDates.availableTo,
+      status: RoomTimeStatus.Inactive,
+    });
+    const created = await bookings.create(user.id, 'booking-edit-drift', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const booking = await dataSource
+      .getRepository(Booking)
+      .findOneByOrFail({ publicId: created.id });
+    const mutation = dataSource.createQueryRunner();
+    await mutation.connect();
+    await mutation.startTransaction();
+
+    try {
+      await lockRoom(mutation.manager, roomTime.roomId);
+      const queries = jest.spyOn(dataSource.logger, 'logQuery');
+      const update = bookings.updateAdmin({
+        actorUserId: admin.id,
+        bookingPublicId: created.id,
+        expectedVersion: '1',
+        body: {
+          checkOut: fixtureDates.checkOutDifferent,
+          reason: 'Move dates after source changed.',
+        },
+      });
+      await waitForQuery(
+        queries,
+        /FROM `bookings` `Booking` LEFT JOIN `room_times`/i,
+      );
+      await mutation.manager.query(
+        'UPDATE bookings SET room_time_id = ? WHERE id = ?',
+        [alternateWindow.id, booking.id],
+      );
+      await mutation.commitTransaction();
+
+      await expect(update).rejects.toMatchObject({
+        errorCode: 'BOOKING_STATE_CHANGED',
+      });
+      expect(await dataSource.getRepository(BookingChangeHistory).count()).toBe(
+        0,
+      );
+      expect(
+        await dataSource
+          .getRepository(OutboxEvent)
+          .countBy({ eventType: 'booking.changed' }),
+      ).toBe(0);
+    } finally {
+      if (mutation.isTransactionActive) await mutation.rollbackTransaction();
+      await mutation.release();
+      jest.restoreAllMocks();
+    }
+  });
+
+  it('checks confirmed edits against every destination-room window', async () => {
+    const { user, roomTime: sourceRoomTime } = await createBookingGraph();
+    const destinationRoomTime = await createRoomTime('B-203');
+    const admin = await createAdminUser();
+    const legacyWindow = await dataSource.getRepository(RoomTime).save({
+      roomId: destinationRoomTime.roomId,
+      availableFrom: fixtureDates.availableFrom,
+      availableTo: fixtureDates.availableTo,
+      status: RoomTimeStatus.Inactive,
+    });
+    await dataSource.getRepository(Booking).save({
+      publicId: '01M26YZZZZZZZZZZZZZZZZZZZZ',
+      userId: user.id,
+      roomTimeId: legacyWindow.id,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+      status: BookingStatus.Confirmed,
+      priceAmount: '4500000',
+      currency: 'VND',
+      rejectionReason: null,
+    });
+    const created = await bookings.create(user.id, 'booking-confirmed-edit', {
+      roomId: sourceRoomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    await bookings.approve({
+      actorUserId: admin.id,
+      bookingPublicId: created.id,
+    });
+
+    await expect(
+      bookings.updateAdmin({
+        actorUserId: admin.id,
+        bookingPublicId: created.id,
+        expectedVersion: '2',
+        body: {
+          roomId: destinationRoomTime.roomId,
+          reason: 'Move confirmed stay.',
+        },
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_ALREADY_BOOKED' });
+    expect(await dataSource.getRepository(BookingChangeHistory).count()).toBe(
+      0,
+    );
+    expect(
+      await dataSource
+        .getRepository(Booking)
+        .findOneByOrFail({ publicId: created.id }),
+    ).toMatchObject({ roomTimeId: sourceRoomTime.id, version: '2' });
+  });
+
+  it('rejects empty or terminal edits without writing audit state', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'booking-edit-policy', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    await expect(
+      bookings.updateAdmin({
+        actorUserId: admin.id,
+        bookingPublicId: created.id,
+        expectedVersion: '1',
+        body: {
+          checkIn: fixtureDates.checkIn,
+          reason: 'No actual change.',
+        },
+      }),
+    ).rejects.toMatchObject({ errorCode: 'BOOKING_CHANGE_EMPTY' });
+    await bookings.reject({
+      actorUserId: admin.id,
+      bookingPublicId: created.id,
+      reason: 'Dates unavailable.',
+    });
+    await expect(
+      bookings.updateAdmin({
+        actorUserId: admin.id,
+        bookingPublicId: created.id,
+        expectedVersion: '2',
+        body: {
+          checkOut: fixtureDates.checkOutDifferent,
+          reason: 'Terminal booking cannot change.',
+        },
+      }),
+    ).rejects.toMatchObject({ errorCode: 'BOOKING_STATUS_CONFLICT' });
+    expect(await dataSource.getRepository(BookingChangeHistory).count()).toBe(
+      0,
+    );
+  });
+
+  it('rolls an edit back when its outbox event cannot be written', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'booking-edit-rollback', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const insert = jest.spyOn(EntityManager.prototype, 'insert');
+    const originalInsert = insert.getMockImplementation();
+    insert.mockImplementation(function (target, values) {
+      if (target === OutboxEvent) {
+        return Promise.reject(new Error('forced outbox write failure'));
+      }
+      if (!originalInsert) throw new Error('missing EntityManager.insert');
+      return originalInsert.call(this, target, values) as Promise<never>;
+    });
+    try {
+      await expect(
+        bookings.updateAdmin({
+          actorUserId: admin.id,
+          bookingPublicId: created.id,
+          expectedVersion: '1',
+          body: {
+            checkOut: fixtureDates.checkOutDifferent,
+            reason: 'This transaction must roll back.',
+          },
+        }),
+      ).rejects.toThrow('forced outbox write failure');
+    } finally {
+      insert.mockRestore();
+    }
+    expect(
+      await dataSource
+        .getRepository(Booking)
+        .findOneByOrFail({ publicId: created.id }),
+    ).toMatchObject({
+      checkOut: fixtureDates.checkOut,
+      roomTimeId: roomTime.id,
+      version: '1',
+    });
+    expect(await dataSource.getRepository(BookingChangeHistory).count()).toBe(
+      0,
+    );
+    expect(
+      await dataSource
+        .getRepository(OutboxEvent)
+        .countBy({ eventType: 'booking.changed' }),
+    ).toBe(0);
+  });
+
+  it('idempotently cancels a pending booking as admin with one history and outbox', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'booking-admin-cancel', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const input = {
+      actorUserId: admin.id,
+      bookingPublicId: created.id,
+      reason: 'Hotel maintenance.',
+    };
+    const cancelled = await bookings.cancelAdmin(input);
+    expect(await bookings.cancelAdmin(input)).toEqual(cancelled);
+    expect(cancelled).toMatchObject({
+      status: BookingStatus.CancelledByAdmin,
+      version: 2,
+    });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        toStatus: BookingStatus.CancelledByAdmin,
+      }),
+    ).toBe(1);
+    const cancelEvents = await dataSource
+      .getRepository(OutboxEvent)
+      .findBy({ eventType: 'booking.cancelled_by_admin' });
+    expect(cancelEvents).toHaveLength(1);
+    expect(cancelEvents[0].idempotencyKey).toBe(
+      `booking.cancelled_by_admin:${created.id}:2`,
+    );
+    expect(cancelEvents[0].payload).toMatchObject({
+      schemaVersion: 1,
+      bookingId: created.id,
+      ownerUserId: user.id,
+      bookingVersion: 2,
+      booking: {
+        room: { id: roomTime.roomId, roomNumber: 'A-201' },
+        status: BookingStatus.CancelledByAdmin,
+        reason: 'Hotel maintenance.',
+      },
+    });
+    await expect(
+      bookings.cancelAdmin({ ...input, reason: 'Different reason.' }),
+    ).rejects.toMatchObject({ errorCode: 'BOOKING_STATUS_CONFLICT' });
+  });
+
+  it('rolls an admin cancellation back when its outbox event cannot be written', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(
+      user.id,
+      'booking-admin-cancel-rollback',
+      {
+        roomId: roomTime.roomId,
+        checkIn: fixtureDates.checkIn,
+        checkOut: fixtureDates.checkOut,
+      },
+    );
+    const insert = jest.spyOn(EntityManager.prototype, 'insert');
+    const originalInsert = insert.getMockImplementation();
+    insert.mockImplementation(function (target, values) {
+      if (target === OutboxEvent) {
+        return Promise.reject(new Error('forced outbox write failure'));
+      }
+      if (!originalInsert) throw new Error('missing EntityManager.insert');
+      return originalInsert.call(this, target, values) as Promise<never>;
+    });
+    try {
+      await expect(
+        bookings.cancelAdmin({
+          actorUserId: admin.id,
+          bookingPublicId: created.id,
+          reason: 'This transaction must roll back.',
+        }),
+      ).rejects.toThrow('forced outbox write failure');
+    } finally {
+      insert.mockRestore();
+    }
+    const booking = await dataSource
+      .getRepository(Booking)
+      .findOneByOrFail({ publicId: created.id });
+    expect(booking).toMatchObject({
+      status: BookingStatus.Pending,
+      version: '1',
+    });
+    expect(
+      await dataSource.getRepository(BookingStatusHistory).countBy({
+        bookingId: booking.id,
+      }),
+    ).toBe(1);
+    expect(
+      await dataSource
+        .getRepository(OutboxEvent)
+        .countBy({ eventType: 'booking.cancelled_by_admin' }),
+    ).toBe(0);
+  });
+
   it('waits for a competing room-time deactivation, then observes its committed state', async () => {
     const { user, roomTime } = await createBookingGraph();
     const roomTimeRepository = dataSource.getRepository(RoomTime);
@@ -535,6 +1447,193 @@ describe('Phase 4 booking foundation persistence', () => {
     expect(column?.options.utc).toBe(true);
   }
 
+  it('reports real booking and change-history usage per window', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const other = await createRoomTime('B-301');
+    const pending = await bookings.create(user.id, 'usage-pending', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+    const terminal = await bookings.create(user.id, 'usage-terminal', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkOutDifferent,
+      checkOut: fixtureDates.availableTo,
+    });
+    await bookings.reject({
+      actorUserId: admin.id,
+      bookingPublicId: terminal.id,
+      reason: 'Dates unavailable.',
+    });
+
+    // A date-only edit keeps one window in both change-history columns, so the
+    // window must be credited with one change rather than two.
+    await bookings.updateAdmin({
+      actorUserId: admin.id,
+      bookingPublicId: pending.id,
+      expectedVersion: '1',
+      body: {
+        checkOut: fixtureDates.checkOutDifferent,
+        reason: 'Extend the stay inside the same window.',
+      },
+    });
+
+    expect(
+      await usage.findByRoomTimeIds(dataSource.manager, [
+        roomTime.id,
+        other.id,
+      ]),
+    ).toEqual(
+      new Map([
+        [
+          roomTime.id,
+          { bookingCount: 2, activeBookingCount: 1, changeHistoryCount: 1 },
+        ],
+        [
+          other.id,
+          { bookingCount: 0, activeBookingCount: 0, changeHistoryCount: 0 },
+        ],
+      ]),
+    );
+
+    // Moving the stay across rooms credits both windows with the same change.
+    await bookings.updateAdmin({
+      actorUserId: admin.id,
+      bookingPublicId: pending.id,
+      expectedVersion: '2',
+      body: { roomId: other.roomId, reason: 'Move to the other room.' },
+    });
+    const moved = await usage.findByRoomTimeIds(dataSource.manager, [
+      roomTime.id,
+      other.id,
+    ]);
+    expect(moved.get(roomTime.id)).toEqual({
+      bookingCount: 1,
+      activeBookingCount: 0,
+      changeHistoryCount: 2,
+    });
+    expect(moved.get(other.id)).toEqual({
+      bookingCount: 1,
+      activeBookingCount: 1,
+      changeHistoryCount: 1,
+    });
+  });
+
+  it('blocks window date edits, deactivation, and deletion by real usage', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const admin = await createAdminUser();
+    const created = await bookings.create(user.id, 'usage-policy', {
+      roomId: roomTime.roomId,
+      checkIn: fixtureDates.checkIn,
+      checkOut: fixtureDates.checkOut,
+    });
+
+    await expect(
+      roomTimes.update(roomTime.roomId, roomTime.id, {
+        availableTo: fixtureDates.outsideCheckOut,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_DATES_IMMUTABLE' });
+    await expect(
+      roomTimes.update(roomTime.roomId, roomTime.id, {
+        status: RoomTimeStatus.Inactive,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_IN_USE' });
+    await expect(
+      roomTimes.delete(roomTime.roomId, roomTime.id),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_HAS_HISTORY' });
+
+    // A confirmed stay claims the window just as a pending request does.
+    await bookings.approve({
+      actorUserId: admin.id,
+      bookingPublicId: created.id,
+    });
+    await expect(
+      roomTimes.update(roomTime.roomId, roomTime.id, {
+        status: RoomTimeStatus.Inactive,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_IN_USE' });
+
+    // A terminal booking no longer claims the window, so deactivation reopens
+    // while the immutable history still protects the dates and the row itself.
+    await bookings.cancelAdmin({
+      actorUserId: admin.id,
+      bookingPublicId: created.id,
+      reason: 'Hotel maintenance.',
+    });
+    expect(
+      await roomTimes.update(roomTime.roomId, roomTime.id, {
+        status: RoomTimeStatus.Inactive,
+      }),
+    ).toMatchObject({
+      status: RoomTimeStatus.Inactive,
+      usage: { bookingCount: 1, activeBookingCount: 0 },
+    });
+    await expect(
+      roomTimes.delete(roomTime.roomId, roomTime.id),
+    ).rejects.toMatchObject({ errorCode: 'ROOM_TIME_HAS_HISTORY' });
+  });
+
+  it('serializes a window deactivation against a concurrent booking create', async () => {
+    const { user, roomTime } = await createBookingGraph();
+    const barrier = dataSource.createQueryRunner();
+    await barrier.connect();
+    await barrier.startTransaction();
+    const queries = jest.spyOn(dataSource.logger, 'logQuery');
+
+    try {
+      // Both paths take the physical room lock first, so holding it queues them
+      // behind this barrier and lets MySQL, not test timing, pick the winner.
+      await lockRoom(barrier.manager, roomTime.roomId);
+      const deactivation = roomTimes
+        .update(roomTime.roomId, roomTime.id, {
+          status: RoomTimeStatus.Inactive,
+        })
+        .then(() => 'deactivated' as const)
+        .catch((error: unknown) => error);
+      const creation = bookings
+        .create(user.id, 'usage-race', {
+          roomId: roomTime.roomId,
+          checkIn: fixtureDates.checkIn,
+          checkOut: fixtureDates.checkOut,
+        })
+        .then(() => 'created' as const)
+        .catch((error: unknown) => error);
+      await waitForQueryCount(queries, /FROM `rooms` .*FOR UPDATE/i, 2);
+      await barrier.commitTransaction();
+      const [deactivated, created] = await Promise.all([
+        deactivation,
+        creation,
+      ]);
+
+      // Whichever wins, the loser must fail and the database must agree with it:
+      // a deactivated window never holds an active booking, and an active
+      // booking never sits under a window deactivated behind its back.
+      const window = await dataSource
+        .getRepository(RoomTime)
+        .findOneByOrFail({ id: roomTime.id });
+      const activeBookings = await dataSource
+        .getRepository(Booking)
+        .countBy({ roomTimeId: roomTime.id, status: BookingStatus.Pending });
+      if (created === 'created') {
+        expect(deactivated).toMatchObject({ errorCode: 'ROOM_TIME_IN_USE' });
+        expect(window.status).toBe(RoomTimeStatus.Active);
+        expect(activeBookings).toBe(1);
+      } else {
+        expect(deactivated).toBe('deactivated');
+        expect(created).toMatchObject({
+          errorCode: 'BOOKING_WINDOW_UNAVAILABLE',
+        });
+        expect(window.status).toBe(RoomTimeStatus.Inactive);
+        expect(activeBookings).toBe(0);
+      }
+    } finally {
+      queries.mockRestore();
+      if (barrier.isTransactionActive) await barrier.rollbackTransaction();
+      await barrier.release();
+    }
+  });
+
   async function createBookingGraph(): Promise<{
     user: User;
     roomTime: RoomTime;
@@ -566,6 +1665,38 @@ describe('Phase 4 booking foundation persistence', () => {
       status: RoomTimeStatus.Active,
     });
     return { user, roomTime };
+  }
+
+  async function createRoomTime(roomNumber: string): Promise<RoomTime> {
+    const roomType = await dataSource.getRepository(RoomType).save({
+      name: `Room type ${roomNumber}`,
+      description: null,
+    });
+    const room = await dataSource.getRepository(Room).save({
+      roomTypeId: roomType.id,
+      roomNumber,
+      bedCount: 2,
+      viewCode: 'CITY',
+      basePriceAmount: '2300000',
+      currency: 'VND',
+      status: RoomStatus.Active,
+    });
+    return dataSource.getRepository(RoomTime).save({
+      roomId: room.id,
+      availableFrom: fixtureDates.availableFrom,
+      availableTo: fixtureDates.availableTo,
+      status: RoomTimeStatus.Active,
+    });
+  }
+
+  async function createAdminUser(): Promise<User> {
+    return dataSource.getRepository(User).save({
+      email: `booking-admin-${randomUUID()}@example.com`,
+      displayName: 'Booking Admin',
+      role: UserRole.Admin,
+      status: UserStatus.Active,
+      emailVerifiedAt: new Date(),
+    });
   }
 
   afterAll(async () => {

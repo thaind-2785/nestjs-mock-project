@@ -63,6 +63,27 @@ const bookingRejectOperation = 'BOOKING_REJECT';
 const bookingUpdateOperation = 'BOOKING_UPDATE';
 const bookingAdminCancelOperation = 'BOOKING_ADMIN_CANCEL';
 const idempotencyKeyPattern = /^[A-Za-z0-9._:-]{8,128}$/;
+const bookingSummarySelect = [
+  'booking.id',
+  'booking.publicId',
+  'booking.roomTimeId',
+  'booking.checkIn',
+  'booking.checkOut',
+  'booking.status',
+  'booking.priceAmount',
+  'booking.currency',
+  'booking.rejectionReason',
+  'booking.version',
+  'booking.createdAt',
+  'booking.updatedAt',
+  'roomTime.id',
+  'roomTime.roomId',
+  'room.id',
+  'room.roomTypeId',
+  'room.roomNumber',
+  'roomType.id',
+  'roomType.name',
+] as const;
 
 type BookingOutboxEventType =
   | 'booking.confirmed'
@@ -660,35 +681,9 @@ export class BookingsService {
     manager: EntityManager,
     actorUserId: string,
   ): SelectQueryBuilder<Booking> {
-    return manager
-      .getRepository(Booking)
-      .createQueryBuilder('booking')
-      .innerJoinAndSelect('booking.roomTime', 'roomTime')
-      .innerJoinAndSelect('roomTime.room', 'room')
-      .innerJoinAndSelect('room.roomType', 'roomType')
+    return this.bookingSummaryQuery(manager)
       .where('booking.user_id = :actorUserId', { actorUserId })
-      .select([
-        'booking.id',
-        'booking.publicId',
-        'booking.userId',
-        'booking.roomTimeId',
-        'booking.checkIn',
-        'booking.checkOut',
-        'booking.status',
-        'booking.priceAmount',
-        'booking.currency',
-        'booking.rejectionReason',
-        'booking.version',
-        'booking.createdAt',
-        'booking.updatedAt',
-        'roomTime.id',
-        'roomTime.roomId',
-        'room.id',
-        'room.roomTypeId',
-        'room.roomNumber',
-        'roomType.id',
-        'roomType.name',
-      ]);
+      .select([...bookingSummarySelect, 'booking.userId']);
   }
 
   private async getOwnDetail(
@@ -700,24 +695,7 @@ export class BookingsService {
       .andWhere('booking.public_id = :bookingPublicId', { bookingPublicId })
       .getOne();
     if (!booking) throw bookingsErrors.notFound();
-    const history = await manager
-      .getRepository(BookingStatusHistory)
-      .createQueryBuilder('history')
-      .leftJoinAndSelect('history.actorUser', 'actor')
-      .where('history.booking_id = :bookingId', { bookingId: booking.id })
-      .select([
-        'history.id',
-        'history.fromStatus',
-        'history.toStatus',
-        'history.actorType',
-        'history.reason',
-        'history.createdAt',
-        'actor.id',
-        'actor.displayName',
-      ])
-      .orderBy('history.createdAt', 'ASC')
-      .addOrderBy('history.id', 'ASC')
-      .getMany();
+    const history = await this.statusHistory(manager, booking.id);
     return {
       ...toUserBookingResponse(booking),
       history: history.map(toHistoryResponse),
@@ -727,38 +705,26 @@ export class BookingsService {
   private adminBookingSummaryQuery(
     manager: EntityManager,
   ): SelectQueryBuilder<Booking> {
-    return manager
-      .getRepository(Booking)
-      .createQueryBuilder('booking')
-      .innerJoinAndSelect('booking.roomTime', 'roomTime')
-      .innerJoinAndSelect('roomTime.room', 'room')
-      .innerJoinAndSelect('room.roomType', 'roomType')
+    return this.bookingSummaryQuery(manager)
       .innerJoinAndSelect('booking.user', 'owner')
       .select([
-        'booking.id',
-        'booking.publicId',
-        'booking.roomTimeId',
-        'booking.checkIn',
-        'booking.checkOut',
-        'booking.status',
-        'booking.priceAmount',
-        'booking.currency',
-        'booking.rejectionReason',
-        'booking.version',
-        'booking.createdAt',
-        'booking.updatedAt',
-        'roomTime.id',
-        'roomTime.roomId',
-        'room.id',
-        'room.roomTypeId',
-        'room.roomNumber',
-        'roomType.id',
-        'roomType.name',
+        ...bookingSummarySelect,
         'owner.id',
         'owner.email',
         'owner.displayName',
         'owner.status',
       ]);
+  }
+
+  private bookingSummaryQuery(
+    manager: EntityManager,
+  ): SelectQueryBuilder<Booking> {
+    return manager
+      .getRepository(Booking)
+      .createQueryBuilder('booking')
+      .innerJoinAndSelect('booking.roomTime', 'roomTime')
+      .innerJoinAndSelect('roomTime.room', 'room')
+      .innerJoinAndSelect('room.roomType', 'roomType');
   }
 
   private statusHistory(

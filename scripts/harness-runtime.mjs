@@ -183,6 +183,7 @@ export const commandCatalog = Object.freeze({
   compose_smoke: npmCommand(['run', 'compose:smoke']),
   verify: npmCommand(['run', 'verify']),
   dev: npmCommand(['run', 'start:dev']),
+  notification_worker: npmCommand(['run', 'start:worker']),
   build: npmCommand(['run', 'build']),
   format_check: npmCommand(['run', 'format:check']),
   lint_check: npmCommand(['run', 'lint:check']),

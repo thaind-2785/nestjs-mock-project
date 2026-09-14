@@ -20,9 +20,6 @@ import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
 import { createTypeOrmOptions } from '../src/database/database.options';
-import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
-import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
-import { CreateBookingCoreSchema1788580000000 } from '../src/database/migrations/1788580000000-CreateBookingCoreSchema';
 import { Booking } from '../src/bookings/entities/booking.entity';
 import { BookingStatus } from '../src/bookings/entities/booking.enums';
 import { Attachment } from '../src/files/entities/attachment.entity';
@@ -39,6 +36,7 @@ import { UserRoleHistory } from '../src/users/entities/user-role-history.entity'
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
 import { UserRole, UserStatus } from '../src/users/entities/user.enums';
+import { applicationMigrations } from './fixtures/application-migrations';
 
 jest.setTimeout(30_000);
 
@@ -144,11 +142,7 @@ describe('Phase 3 public room API (e2e)', () => {
             StorageCleanupTask,
             Booking,
           ],
-          migrations: [
-            CreateAuthRbacSchema1788380000000,
-            CreateRoomCatalogSchema1788490000000,
-            CreateBookingCoreSchema1788580000000,
-          ],
+          migrations: applicationMigrations,
         },
       ),
     );

@@ -47,7 +47,7 @@
 | Slice    | Observable outcome                                                 | Migration                   | Primary tests                                 | Status   |
 | -------- | ------------------------------------------------------------------ | --------------------------- | --------------------------------------------- | -------- |
 | `P5-T01` | Delivery decisions, configuration, and worker entrypoint are fixed | None                        | Config and application-context unit tests     | Complete |
-| `P5-T02` | Outbox failure and email-delivery state persist safely             | Phase 5 notification schema | Real-MySQL migration/constraint integration   | Pending  |
+| `P5-T02` | Outbox failure and email-delivery state persist safely             | Phase 5 notification schema | Real-MySQL migration/constraint integration   | Complete |
 | `P5-T03` | Four versioned events render safe bilingual messages               | None                        | Parser/template/escaping unit and integration | Pending  |
 | `P5-T04` | MySQL events reach BullMQ with lease/crash recovery                | Use P5-T02 schema           | Real MySQL/Redis concurrency integration      | Pending  |
 | `P5-T05` | Worker sends through Mailpit/Gmail ports with bounded retries      | Use P5-T02 schema           | SMTP contract and real-Mailpit integration    | Pending  |
@@ -93,6 +93,10 @@
 - **Notes:** Do not store rendered bodies or provider error strings. Update
   `docs/architecture/database.md` and the Draw.io ERD in the same slice; no schema
   drift through `synchronize`.
+- **Status:** Complete (2026-09-14). Migration
+  `CreateNotificationDeliverySchema1789370000000` applies, reverts, and reapplies
+  against real MySQL; every Phase 4 outbox shape stays valid; three mutations
+  (delivery unique key, terminal error code, revert guard) confirmed failing.
 
 ### P5-T03 — Event validation, recipient snapshot, and templates
 
@@ -268,5 +272,17 @@ booking/outbox/delivery data to make a retry pass.
 - 2026-09-14 (`P5-T01`): `WorkerHeartbeat` holds the process open until `P5-T04`
   installs the poll loop, which replaces it. Without an owned handle the worker
   exited before a signal could reach it; the lesson is recorded in the error log.
-- Migration timestamp and metric backend remain implementation details to record
-  here and in `ADR-0006` when selected.
+- 2026-09-14 (`P5-T02`): the migration's `down` refuses to run once a delivery row or
+  a terminal outbox failure exists, rather than relying on an operator to remember
+  the rule. Reverting after that point would destroy the only record of what was or
+  was not sent.
+- 2026-09-14 (`P5-T02`): `last_error_code` survives on a `PENDING` outbox row so a
+  scheduled retry can be explained, is cleared by success, and is required by
+  `FAILED`. The spec's lifecycle wording is unchanged by this; it only fixes where a
+  code may appear.
+- 2026-09-14 (`P5-T02`): the per-suite migration lists are replaced by
+  `test/fixtures/application-migrations.ts`. Adding two columns to the outbox entity
+  broke six suites that still created the Phase 4 table; a shared ordered list is the
+  fix, and a new phase appends to it once.
+- Metric backend remains an implementation detail to record here and in `ADR-0006`
+  when selected.

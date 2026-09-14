@@ -15,9 +15,6 @@ import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
 import { DatabaseConnectionService } from '../src/database/database-connection.service';
 import { createTypeOrmOptions } from '../src/database/database.options';
-import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
-import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
-import { CreateBookingCoreSchema1788580000000 } from '../src/database/migrations/1788580000000-CreateBookingCoreSchema';
 import { Attachment } from '../src/files/entities/attachment.entity';
 import { StorageCleanupTask } from '../src/files/entities/storage-cleanup-task.entity';
 import { Amenity } from '../src/rooms/entities/amenity.entity';
@@ -30,6 +27,7 @@ import { UserRole, UserStatus } from '../src/users/entities/user.enums';
 import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
+import { applicationMigrations } from './fixtures/application-migrations';
 import { ensureAttachmentBucket } from './fixtures/room-images';
 
 jest.setTimeout(60_000);
@@ -119,13 +117,7 @@ describe('Room image upload budget over HTTP (e2e)', () => {
         }),
         {
           entities,
-          migrations: [
-            CreateAuthRbacSchema1788380000000,
-            CreateRoomCatalogSchema1788490000000,
-            // Room-time usage now counts real bookings, so every suite that
-            // boots the application needs the Phase 4 tables present.
-            CreateBookingCoreSchema1788580000000,
-          ],
+          migrations: applicationMigrations,
         },
       ),
     );

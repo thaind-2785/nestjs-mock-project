@@ -20,10 +20,12 @@ import { RoomType } from '../rooms/entities/room-type.entity';
 import { Room } from '../rooms/entities/room.entity';
 import { Attachment } from '../files/entities/attachment.entity';
 import { StorageCleanupTask } from '../files/entities/storage-cleanup-task.entity';
+import { EmailDelivery } from '../notifications/entities/email-delivery.entity';
 import { createTypeOrmOptions } from './database.options';
 import { CreateAuthRbacSchema1788380000000 } from './migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from './migrations/1788490000000-CreateRoomCatalogSchema';
 import { CreateBookingCoreSchema1788580000000 } from './migrations/1788580000000-CreateBookingCoreSchema';
+import { CreateNotificationDeliverySchema1789370000000 } from './migrations/1789370000000-CreateNotificationDeliverySchema';
 
 loadRepositoryEnvironment();
 const environment = validateEnvironment(process.env);
@@ -48,11 +50,13 @@ export default new DataSource(
       BookingChangeHistory,
       IdempotencyKey,
       OutboxEvent,
+      EmailDelivery,
     ],
     migrations: [
       CreateAuthRbacSchema1788380000000,
       CreateRoomCatalogSchema1788490000000,
       CreateBookingCoreSchema1788580000000,
+      CreateNotificationDeliverySchema1789370000000,
     ],
   }),
 );

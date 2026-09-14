@@ -207,14 +207,21 @@ erDiagram
       varchar locked_by "nullable"
       datetime processed_at "nullable"
       smallint attempts
+      varchar last_error_code "nullable"
+      datetime failed_at "nullable"
     }
     EMAIL_DELIVERIES {
       bigint id PK
       char36 outbox_event_id FK
       varchar recipient
       varchar template_key
+      enum locale
       enum status
+      smallint attempts
       varchar provider_message_id "nullable"
+      varchar last_error_code "nullable"
+      datetime sent_at "nullable"
+      datetime failed_at "nullable"
     }
     EXPORT_JOBS {
       char36 id PK
@@ -264,8 +271,8 @@ erDiagram
 | `storage_cleanup_tasks`   | unique object key; claim index `(available_at, lock_expires_at)`                                                                                                                                                                |
 | `reviews`                 | unique `booking_id`; check `rating BETWEEN 1 AND 5`                                                                                                                                                                             |
 | `payment_provider_events` | unique `(provider, provider_event_id)`; index `(payment_id, created_at)`                                                                                                                                                        |
-| `outbox_events`           | unique `idempotency_key`; claim index `(status, available_at, lock_expires_at)`; status/lease/processed-time shape is checked                                                                                                   |
-| `email_deliveries`        | unique `(outbox_event_id, recipient, template_key)`                                                                                                                                                                             |
+| `outbox_events`           | unique `idempotency_key`; claim index `(status, available_at, lock_expires_at)`; lease, processed-time, and terminal failure shape is checked                                                                                   |
+| `email_deliveries`        | unique `(outbox_event_id, recipient, template_key)`; operations index `(status, created_at, id)`; restrictive FK to `outbox_events`; sent/failed shape is checked                                                               |
 | `idempotency_keys`        | unique `(actor_user_id, operation, idempotency_key)`; index `expires_at`; pending/completed response shape is checked                                                                                                           |
 | `schedule_runs`           | unique `(job_key, period_key)` for cron idempotency                                                                                                                                                                             |
 
@@ -290,11 +297,37 @@ operation / key tuple lets the creation transaction store and replay one exact r
 Expired records are retained until the Phase 7 cleanup owner runs; retaining longer
 than the configured minimum is safe because it only refuses a changed reuse.
 
-An `outbox_events` row is exactly one of: `PENDING` with no lease or processed time,
-`PROCESSING` with a complete lease, or `PROCESSED` with no lease and a processed time.
+An `outbox_events` row is exactly one of: `PENDING` with no lease, processed time, or
+failure time; `PROCESSING` with a complete lease; `PROCESSED` with a processed time
+and no failure evidence; or `FAILED` with a failure time and a stable error code.
 The unique logical event key prevents duplicate notification intent. Phase 4 writes
 these rows atomically with booking state; Phase 5 claims them using `FOR UPDATE SKIP
 LOCKED` and performs delivery.
+
+## Phase 5 notification persistence contract
+
+`CreateNotificationDeliverySchema1789370000000` is additive on Phase 4. It widens the
+outbox lifecycle with the terminal `FAILED` state plus `last_error_code` and
+`failed_at`, and creates `email_deliveries`. Every Phase 4 row shape stays valid.
+
+`last_error_code` holds a stable classifier code, never provider text: it survives on
+a `PENDING` row so an operator can see why a retry is scheduled, is cleared by
+success, and is required by the terminal state. A `FAILED` event keeps no lease, so a
+terminal failure cannot look like work someone still owns.
+
+An `email_deliveries` row is the one logical delivery for an outbox event, a recipient
+snapshot, and a template. The worker locks or creates it before calling the provider,
+so a duplicate job, a recovered lease, and a later retry all resolve to the same row;
+`attempts` is cumulative across them and a redrive preserves it. The row is `PENDING`
+with no result and no provider message id, `SENT` with an acceptance time and no error
+code, or `FAILED` with a failure time and a code. Rendered bodies and provider error
+strings are deliberately absent: neither is delivery evidence and both carry content.
+
+The restrictive foreign key means delivery evidence cannot be orphaned by removing the
+event that caused it. The migration's `down` refuses to run once any delivery or
+terminal failure exists, because reverting would destroy the only record of what was
+or was not sent; after that point a deployment rolls the application back to a
+schema-compatible version or fixes forward.
 
 ## Connection and concurrency bounds
 

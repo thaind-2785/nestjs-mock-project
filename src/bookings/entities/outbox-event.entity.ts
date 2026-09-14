@@ -7,7 +7,7 @@ import { OutboxEventStatus } from './booking.enums';
 @Index('idx_outbox_events_claim', ['status', 'availableAt', 'lockExpiresAt'])
 @Check(
   'chk_outbox_events_lease_state',
-  "(`status` = 'PENDING' AND `locked_at` IS NULL AND `lock_expires_at` IS NULL AND `locked_by` IS NULL AND `processed_at` IS NULL) OR (`status` = 'PROCESSING' AND `locked_at` IS NOT NULL AND `lock_expires_at` IS NOT NULL AND `locked_by` IS NOT NULL AND `processed_at` IS NULL) OR (`status` = 'PROCESSED' AND `locked_at` IS NULL AND `lock_expires_at` IS NULL AND `locked_by` IS NULL AND `processed_at` IS NOT NULL)",
+  "(`status` = 'PENDING' AND `locked_at` IS NULL AND `lock_expires_at` IS NULL AND `locked_by` IS NULL AND `processed_at` IS NULL AND `failed_at` IS NULL) OR (`status` = 'PROCESSING' AND `locked_at` IS NOT NULL AND `lock_expires_at` IS NOT NULL AND `locked_by` IS NOT NULL AND `processed_at` IS NULL AND `failed_at` IS NULL) OR (`status` = 'PROCESSED' AND `locked_at` IS NULL AND `lock_expires_at` IS NULL AND `locked_by` IS NULL AND `processed_at` IS NOT NULL AND `failed_at` IS NULL AND `last_error_code` IS NULL) OR (`status` = 'FAILED' AND `locked_at` IS NULL AND `lock_expires_at` IS NULL AND `locked_by` IS NULL AND `processed_at` IS NULL AND `failed_at` IS NOT NULL AND `last_error_code` IS NOT NULL)",
 )
 export class OutboxEvent extends MutableEntity {
   @PrimaryColumn({ type: 'char', length: 36 })
@@ -56,4 +56,20 @@ export class OutboxEvent extends MutableEntity {
 
   @Column({ type: 'smallint', unsigned: true, default: 0 })
   attempts!: number;
+
+  /**
+   * The classifier's stable code for the most recent failed attempt, never raw
+   * provider text. It survives on `PENDING` so an operator can see why a retry is
+   * scheduled, is cleared by success, and is required by the terminal state.
+   */
+  @Column({
+    name: 'last_error_code',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  lastErrorCode!: string | null;
+
+  @Column({ name: 'failed_at', type: 'datetime', precision: 6, nullable: true })
+  failedAt!: Date | null;
 }

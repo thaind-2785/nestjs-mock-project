@@ -3,20 +3,20 @@ import { MutableEntity } from '../../database/entities/base.entity';
 import { EmailDeliveryLocale, EmailDeliveryStatus } from './notification.enums';
 
 /**
- * One logical delivery per outbox event, recipient snapshot, and template.
+ * One logical delivery per outbox event and template.
  *
- * The unique tuple is what makes a retry a retry rather than a second message: the
+ * The unique key is what makes a retry a retry rather than a second message: the
  * worker locks or creates this row before it calls the provider, so a duplicate job,
  * a recovered lease, or a later attempt all resolve to the same record. The recipient
- * is stored because delivery evidence needs it; the rendered body and the provider's
- * error text are not stored, because neither is evidence and both carry content.
+ * is deliberately outside that key. It is a snapshot taken on the first attempt, and
+ * keeping it out means a retry that re-resolved a changed owner address collides here
+ * instead of quietly becoming a second message. The rendered body and the provider's
+ * error text are not stored: neither is evidence and both carry content.
  */
 @Entity({ name: 'email_deliveries' })
-@Index(
-  'uq_email_deliveries_logical',
-  ['outboxEventId', 'recipient', 'templateKey'],
-  { unique: true },
-)
+@Index('uq_email_deliveries_logical', ['outboxEventId', 'templateKey'], {
+  unique: true,
+})
 @Index('idx_email_deliveries_status_created', ['status', 'createdAt', 'id'])
 @Check(
   'chk_email_deliveries_state',

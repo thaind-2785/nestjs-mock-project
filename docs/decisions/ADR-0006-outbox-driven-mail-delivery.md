@@ -58,9 +58,10 @@ successful no-op instead of a second message.
 denied.** No transaction spans SMTP and MySQL, so a crash after the provider accepts
 a message but before the result is recorded will retry it. What the design does
 provide is one logical delivery record — unique on
-`(outbox_event_id, recipient, template_key)` — and a `Message-ID` derived
-deterministically from the outbox event, which gives a receiving server grounds to
-deduplicate. Claiming exactly-once here would be false.
+`(outbox_event_id, template_key)`, with the recipient held as a snapshot outside that
+key so a retry cannot become a second message by re-resolving a changed address — and
+a `Message-ID` derived deterministically from the outbox event, which gives a
+receiving server grounds to deduplicate. Claiming exactly-once here would be false.
 
 **Bounds are validated against each other, not merely individually.** The claim lease
 must exceed one bounded send plus a finalize margin, or a send that used its whole

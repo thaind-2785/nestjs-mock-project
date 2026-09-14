@@ -49,7 +49,7 @@ export class CreateNotificationDeliverySchema1789370000000 implements MigrationI
         created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
         updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
         PRIMARY KEY (id),
-        UNIQUE KEY uq_email_deliveries_logical (outbox_event_id, recipient, template_key),
+        UNIQUE KEY uq_email_deliveries_logical (outbox_event_id, template_key),
         KEY idx_email_deliveries_status_created (status, created_at, id),
         CONSTRAINT fk_email_deliveries_outbox_event FOREIGN KEY (outbox_event_id) REFERENCES outbox_events(id) ON DELETE RESTRICT,
         CONSTRAINT chk_email_deliveries_state CHECK (

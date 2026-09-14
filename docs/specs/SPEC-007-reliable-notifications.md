@@ -29,8 +29,8 @@ In scope:
   worker process; booking HTTP requests continue to write MySQL only.
 - Claim outbox rows in bounded batches with expiring leases and
   `SELECT ... FOR UPDATE SKIP LOCKED`, including stale-lease recovery.
-- Persist one delivery record per outbox event, recipient snapshot, and template
-  key; track attempts, provider acceptance, and terminal failure.
+- Persist one delivery record per outbox event and template key, carrying the
+  recipient snapshot; track attempts, provider acceptance, and terminal failure.
 - Render safe English and Vietnamese text/HTML templates from the versioned Phase 4
   payload contract.
 - Send through one `EmailSender` port with Mailpit SMTP and Gmail SMTP OAuth2
@@ -154,9 +154,11 @@ One additive Phase 5 migration:
   `outbox_event_id` foreign key, recipient snapshot, ASCII template key, `en|vi`
   locale, `PENDING|SENT|FAILED` status, cumulative attempts, nullable provider
   message ID and stable error code, sent/failed timestamps, and audit timestamps.
-- Enforces unique `(outbox_event_id, recipient, template_key)` and indexes delivery
-  status/time for operations. State-shape checks reject contradictory sent/failed
-  fields.
+- Enforces unique `(outbox_event_id, template_key)` and indexes delivery status/time
+  for operations. The recipient is deliberately outside that key: including it would
+  let a retry that re-resolved a changed owner address insert a second row, which is
+  the duplicate this record exists to prevent. State-shape checks reject
+  contradictory sent/failed fields.
 
 The event payload and rendered body are not duplicated into `email_deliveries`.
 Outbox payloads and delivery rows are retained through Phase 5; retention/cleanup is

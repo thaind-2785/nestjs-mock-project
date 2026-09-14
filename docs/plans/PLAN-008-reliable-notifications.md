@@ -3,7 +3,7 @@
 - Spec: [`SPEC-007`](../specs/SPEC-007-reliable-notifications.md)
 - Status: In progress (approved 2026-09-14)
 - Owner: Project owner
-- Reviewer (must be independent): To be assigned before Phase 5 handoff
+- Reviewer (must be independent): Independent agent review, `REVIEW-030` (slices `P5-T01`, `P5-T02`)
 
 ## Constraints and risks
 
@@ -284,5 +284,12 @@ booking/outbox/delivery data to make a retry pass.
   `test/fixtures/application-migrations.ts`. Adding two columns to the outbox entity
   broke six suites that still created the Phase 4 table; a shared ordered list is the
   fix, and a new phase appends to it once.
+- 2026-09-14 (`REVIEW-030`): the independent review returned one High and two Medium
+  findings, all fixed. Cross-field environment bounds now run after defaults are
+  resolved, because Joi does not validate a value it defaulted and `@nestjs/config`
+  writes defaults back into `process.env`; the delivery unique key narrowed to
+  `(outbox_event_id, template_key)` so the database enforces the one-delivery
+  guarantee the documents claimed; and a rejecting context close now reports its drain
+  result instead of an unhandled rejection. `R30-08` is accepted with rationale.
 - Metric backend remains an implementation detail to record here and in `ADR-0006`
   when selected.

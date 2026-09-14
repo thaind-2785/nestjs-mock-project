@@ -210,11 +210,10 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(100)
     .max(30_000)
     .default(10_000),
-  // A safeguard must outlive the bounded storage call it protects, or the cleanup
-  // runner could delete an object whose upload is still in flight.
+  // Bounded against ATTACHMENT_STORAGE_TIMEOUT_MS in checkCrossFieldBounds.
   ATTACHMENT_CLEANUP_GRACE_MS: Joi.number()
     .integer()
-    .greater(Joi.ref('ATTACHMENT_STORAGE_TIMEOUT_MS'))
+    .min(1_000)
     .max(900_000)
     .default(60_000),
   ROOM_IMAGE_MAX_BYTES: Joi.number()
@@ -408,13 +407,10 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(100)
     .max(60_000)
     .default(1_000),
+  // Bounded against MAIL_SEND_TIMEOUT_MS in checkCrossFieldBounds.
   NOTIFICATION_CLAIM_LEASE_MS: Joi.number()
     .integer()
-    .min(
-      Joi.ref('MAIL_SEND_TIMEOUT_MS', {
-        adjust: (value: number) => value + notificationLeaseSafetyMarginMs,
-      }),
-    )
+    .min(1_000)
     .max(900_000)
     .default(120_000),
   NOTIFICATION_MAX_ATTEMPTS: Joi.number().integer().min(1).max(20).default(5),
@@ -423,9 +419,10 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(1_000)
     .max(600_000)
     .default(30_000),
+  // Bounded against NOTIFICATION_BACKOFF_INITIAL_MS in checkCrossFieldBounds.
   NOTIFICATION_BACKOFF_MAX_MS: Joi.number()
     .integer()
-    .min(Joi.ref('NOTIFICATION_BACKOFF_INITIAL_MS'))
+    .min(1_000)
     .max(86_400_000)
     .default(3_600_000),
   NOTIFICATION_WORKER_CONCURRENCY: Joi.number()
@@ -433,11 +430,10 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(1)
     .max(50)
     .default(5),
-  // A drain shorter than one bounded send would abandon a message the provider may
-  // already have accepted, which is the one ambiguity this design works to keep rare.
+  // Bounded against MAIL_SEND_TIMEOUT_MS in checkCrossFieldBounds.
   NOTIFICATION_SHUTDOWN_DRAIN_MS: Joi.number()
     .integer()
-    .min(Joi.ref('MAIL_SEND_TIMEOUT_MS'))
+    .min(1_000)
     .max(120_000)
     .default(30_000),
 }).unknown(true);
@@ -473,12 +469,66 @@ export function validateEnvironment(
     );
   }
 
-  return {
+  const environment: EnvironmentVariables = {
     ...validationResult.value,
     SWAGGER_ENABLED:
       validationResult.value.SWAGGER_ENABLED ??
       validationResult.value.NODE_ENV !== 'production',
   };
+
+  const unboundedFields = checkCrossFieldBounds(environment);
+  if (unboundedFields.length > 0) {
+    throw new Error(
+      `Environment validation failed for: ${unboundedFields.sort().join(', ')}`,
+    );
+  }
+
+  return environment;
+}
+
+/**
+ * Relationships between variables are checked here rather than as Joi refs because
+ * Joi does not apply a rule to a value it defaulted. A bound written as a ref
+ * therefore holds only while an operator sets the variable explicitly and silently
+ * lapses when they rely on the documented default - and because `@nestjs/config`
+ * writes defaults back into `process.env`, a later validation pass would then reject
+ * the value the first pass produced, failing every module that validates again.
+ * Checking after defaults are resolved makes validation idempotent and makes a bound
+ * mean the same thing however the value arrived.
+ */
+function checkCrossFieldBounds(environment: EnvironmentVariables): string[] {
+  const unbounded: string[] = [];
+  // A safeguard must outlive the bounded storage call it protects, or the cleanup
+  // runner could delete an object whose upload is still in flight.
+  if (
+    environment.ATTACHMENT_CLEANUP_GRACE_MS <=
+    environment.ATTACHMENT_STORAGE_TIMEOUT_MS
+  ) {
+    unbounded.push('ATTACHMENT_CLEANUP_GRACE_MS');
+  }
+  // A claim lease must outlive one bounded send plus the short transaction that
+  // records its result.
+  if (
+    environment.NOTIFICATION_CLAIM_LEASE_MS <
+    environment.MAIL_SEND_TIMEOUT_MS + notificationLeaseSafetyMarginMs
+  ) {
+    unbounded.push('NOTIFICATION_CLAIM_LEASE_MS');
+  }
+  // A drain shorter than one bounded send would abandon a message the provider may
+  // already have accepted, which is the one ambiguity this design works to keep rare.
+  if (
+    environment.NOTIFICATION_SHUTDOWN_DRAIN_MS <
+    environment.MAIL_SEND_TIMEOUT_MS
+  ) {
+    unbounded.push('NOTIFICATION_SHUTDOWN_DRAIN_MS');
+  }
+  if (
+    environment.NOTIFICATION_BACKOFF_MAX_MS <
+    environment.NOTIFICATION_BACKOFF_INITIAL_MS
+  ) {
+    unbounded.push('NOTIFICATION_BACKOFF_MAX_MS');
+  }
+  return unbounded;
 }
 
 function hasUnsafeRelativeUriCharacter(value: string): boolean {
@@ -492,11 +542,28 @@ function hasUnsafeRelativeUriCharacter(value: string): boolean {
 }
 
 /**
- * A display name or address that carries a control character can inject a second
- * header - a second recipient, a different sender - into the composed message.
- * Angle brackets are rejected as well so the configured name cannot close the
- * address of the sender it is displayed beside.
+ * A control character in a header value can end the header and start another one - a
+ * second recipient, a different sender. The RFC 5322 specials are rejected for a
+ * narrower reason: an unquoted display name containing one of them is not one display
+ * name. `Ops, security@evil.test` composed beside an address reads as a two-address
+ * list rather than a name, so the set below is exactly what must not appear
+ * unquoted, and nothing broader - ordinary names keep their periods and apostrophes.
  */
+const headerUnsafeCharacters = new Set([
+  '<',
+  '>',
+  '(',
+  ')',
+  '[',
+  ']',
+  ':',
+  ';',
+  '@',
+  '\\',
+  ',',
+  '"',
+]);
+
 function validateHeaderSafeText(value: string, helpers: Joi.CustomHelpers) {
   const unsafe = [...value].some((character) => {
     const codePoint = character.codePointAt(0);
@@ -504,8 +571,7 @@ function validateHeaderSafeText(value: string, helpers: Joi.CustomHelpers) {
       codePoint === undefined ||
       codePoint <= 31 ||
       codePoint === 127 ||
-      character === '<' ||
-      character === '>'
+      headerUnsafeCharacters.has(character)
     );
   });
   return unsafe ? helpers.error('string.headerSafe') : value;

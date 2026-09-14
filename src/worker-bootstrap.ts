@@ -42,16 +42,33 @@ export async function bootstrapNotificationWorker(
 
   let stopping = false;
   for (const signal of workerShutdownSignals) {
+    // `once` leaves the default disposition in place after it fires, so a repeat of
+    // the same signal force-quits a drain in progress. That is the conventional
+    // meaning of a second SIGTERM and is deliberate. The guard below covers the other
+    // case: SIGINT arriving after SIGTERM must not start a second drain, because the
+    // first already owns the context and is already bounded.
     signals.once(signal, () => {
-      // A second signal must not start a second drain: the first one owns the
-      // context and is already bounded.
       if (stopping) return;
       stopping = true;
       void stopNotificationWorker(context, {
         drainMs: configuration.worker.shutdownDrainMs,
         logger,
         signal,
-      }).then((drained) => options.onStopped?.(drained));
+      })
+        .then((drained) => options.onStopped?.(drained))
+        .catch((error: unknown) => {
+          // A close that rejects must still produce the stopped signal this module
+          // exists to give a supervisor. Without this the process would report an
+          // unhandled rejection and never set its exit code - and every provider
+          // the later slices add (BullMQ, Redis, SMTP) closes over a network.
+          logger.error({
+            event: 'notification_worker_stop_failed',
+            signal,
+            reason:
+              error instanceof Error ? error.message : 'WORKER_STOP_FAILED',
+          });
+          options.onStopped?.(false);
+        });
     });
   }
 

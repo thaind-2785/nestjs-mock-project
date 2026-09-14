@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import mysql from 'mysql2/promise';
-import { DataSource } from 'typeorm';
+import { DataSource, IsNull } from 'typeorm';
 import { OutboxEventStatus } from '../src/bookings/entities/booking.enums';
 import { OutboxEvent } from '../src/bookings/entities/outbox-event.entity';
 import { createDatabaseConfiguration } from '../src/config/database.config';
@@ -85,7 +85,6 @@ describe('Phase 5 notification delivery persistence', () => {
     expect(await tableNames()).toEqual(['email_deliveries']);
     expect(await indexColumns('uq_email_deliveries_logical')).toEqual([
       'outbox_event_id',
-      'recipient',
       'template_key',
     ]);
     expect(await indexColumns('idx_email_deliveries_status_created')).toEqual([
@@ -115,27 +114,30 @@ describe('Phase 5 notification delivery persistence', () => {
     });
   });
 
-  it('keeps every Phase 4 outbox shape valid after the additive migration', async () => {
+  it('carries every Phase 4 outbox shape across the additive migration', async () => {
+    // The legacy rows are written against the pre-migration table through raw SQL,
+    // because the entity already carries columns that table does not have. Inserting
+    // them afterwards would only prove new rows are accepted, not that ALTER TABLE
+    // and the widened CHECK survive data written before Phase 5 existed.
+    await dataSource.undoLastMigration();
+    await dataSource.query(
+      `INSERT INTO outbox_events
+         (id, event_type, payload, available_at, status, idempotency_key, locked_at, lock_expires_at, locked_by, processed_at, attempts)
+       VALUES
+         (UUID(), 'booking.confirmed', '{"schemaVersion":1}', NOW(6), 'PENDING', 'booking.confirmed:A:2', NULL, NULL, NULL, NULL, 0),
+         (UUID(), 'booking.rejected', '{"schemaVersion":1}', NOW(6), 'PROCESSING', 'booking.rejected:B:2', NOW(6), NOW(6) + INTERVAL 120 SECOND, 'claim-token', NULL, 1),
+         (UUID(), 'booking.changed', '{"schemaVersion":1}', NOW(6), 'PROCESSED', 'booking.changed:C:3', NULL, NULL, NULL, NOW(6), 1)`,
+    );
+
+    await dataSource.runMigrations();
+
     const repository = dataSource.getRepository(OutboxEvent);
-    const lockedAt = new Date();
-
-    await repository.insert(pendingEvent('booking.confirmed:A:2'));
-    await repository.insert({
-      ...pendingEvent('booking.rejected:B:2'),
-      status: OutboxEventStatus.Processing,
-      lockedAt,
-      lockExpiresAt: new Date(lockedAt.getTime() + 120_000),
-      lockedBy: 'claim-token',
-      attempts: 1,
-    });
-    await repository.insert({
-      ...pendingEvent('booking.changed:C:3'),
-      status: OutboxEventStatus.Processed,
-      processedAt: lockedAt,
-      attempts: 1,
-    });
-
     expect(await repository.count()).toBe(3);
+    // The added columns are absent evidence on rows that predate them, which is the
+    // only shape the widened check permits for those states.
+    expect(
+      await repository.countBy({ lastErrorCode: IsNull(), failedAt: IsNull() }),
+    ).toBe(3);
   });
 
   it('accepts a terminal outbox failure and refuses every contradictory shape', async () => {
@@ -159,7 +161,7 @@ describe('Phase 5 notification delivery persistence', () => {
         failedAt,
         lastErrorCode: null,
       }),
-    ).rejects.toBeDefined();
+    ).rejects.toThrow(/chk_outbox_events_lease_state/);
     await expect(
       repository.insert({
         ...pendingEvent('booking.confirmed:F:2'),
@@ -170,7 +172,7 @@ describe('Phase 5 notification delivery persistence', () => {
         lockedAt: failedAt,
         lockExpiresAt: failedAt,
       }),
-    ).rejects.toBeDefined();
+    ).rejects.toThrow(/chk_outbox_events_lease_state/);
     // Success must clear the failure evidence rather than accumulate both.
     await expect(
       repository.insert({
@@ -179,19 +181,19 @@ describe('Phase 5 notification delivery persistence', () => {
         processedAt: failedAt,
         lastErrorCode: 'MAIL_PROVIDER_UNAVAILABLE',
       }),
-    ).rejects.toBeDefined();
+    ).rejects.toThrow(/chk_outbox_events_lease_state/);
     await expect(
       repository.insert({
         ...pendingEvent('booking.confirmed:H:2'),
         status: OutboxEventStatus.Pending,
         failedAt,
       }),
-    ).rejects.toBeDefined();
+    ).rejects.toThrow(/chk_outbox_events_lease_state/);
 
     expect(await repository.count()).toBe(1);
   });
 
-  it('keeps one logical delivery per event, recipient, and template', async () => {
+  it('keeps one logical delivery per event and template', async () => {
     const event = await insertPendingEvent('booking.confirmed:I:2');
     const deliveries = dataSource.getRepository(EmailDelivery);
     // A fresh literal per insert: TypeORM writes the generated id back into the
@@ -211,6 +213,11 @@ describe('Phase 5 notification delivery persistence', () => {
     await expect(deliveries.insert(delivery())).rejects.toThrow(
       /uq_email_deliveries_logical/,
     );
+    // The recipient sits outside the key on purpose: a retry that re-resolved a
+    // changed owner address must collide here rather than become a second message.
+    await expect(
+      deliveries.insert({ ...delivery(), recipient: 'owner-new@hotel.test' }),
+    ).rejects.toThrow(/uq_email_deliveries_logical/);
     await deliveries.insert({
       ...delivery(),
       templateKey: 'booking.changed.v1',
@@ -220,12 +227,18 @@ describe('Phase 5 notification delivery persistence', () => {
   });
 
   it('records provider acceptance and terminal failure in checked shapes', async () => {
-    const event = await insertPendingEvent('booking.confirmed:J:2');
     const deliveries = dataSource.getRepository(EmailDelivery);
     const now = new Date();
+    // One event per state: three states of one event would now be three deliveries
+    // of one event, which the logical key forbids.
+    const [pendingEvent_, sentEvent, failedEvent] = await Promise.all([
+      insertPendingEvent('booking.confirmed:J1:2'),
+      insertPendingEvent('booking.confirmed:J2:2'),
+      insertPendingEvent('booking.confirmed:J3:2'),
+    ]);
 
     const pending = await deliveries.save({
-      outboxEventId: event.id,
+      outboxEventId: pendingEvent_.id,
       recipient: 'pending@hotel.test',
       templateKey: 'booking.confirmed.v1',
       locale: EmailDeliveryLocale.Vietnamese,
@@ -234,7 +247,7 @@ describe('Phase 5 notification delivery persistence', () => {
       attempts: 1,
     });
     await deliveries.insert({
-      outboxEventId: event.id,
+      outboxEventId: sentEvent.id,
       recipient: 'sent@hotel.test',
       templateKey: 'booking.confirmed.v1',
       locale: EmailDeliveryLocale.English,
@@ -244,7 +257,7 @@ describe('Phase 5 notification delivery persistence', () => {
       attempts: 2,
     });
     await deliveries.insert({
-      outboxEventId: event.id,
+      outboxEventId: failedEvent.id,
       recipient: 'failed@hotel.test',
       templateKey: 'booking.confirmed.v1',
       locale: EmailDeliveryLocale.English,
@@ -255,7 +268,7 @@ describe('Phase 5 notification delivery persistence', () => {
     });
 
     expect(pending.status).toBe(EmailDeliveryStatus.Pending);
-    for (const contradiction of [
+    const contradictions = [
       // Accepted by the provider with no acceptance time.
       { status: EmailDeliveryStatus.Sent, sentAt: null },
       // Sent and failed at once.
@@ -267,16 +280,20 @@ describe('Phase 5 notification delivery persistence', () => {
       },
       // Terminal without a reason.
       { status: EmailDeliveryStatus.Failed, failedAt: now },
-    ]) {
+    ];
+    for (const [index, contradiction] of contradictions.entries()) {
+      // Its own event too, so the state check is what rejects the row and not the
+      // logical key of the row before it.
+      const event = await insertPendingEvent(`booking.confirmed:K${index}:2`);
       await expect(
         deliveries.insert({
           outboxEventId: event.id,
-          recipient: `contradiction-${Math.random()}@hotel.test`,
+          recipient: 'contradiction@hotel.test',
           templateKey: 'booking.confirmed.v1',
           locale: EmailDeliveryLocale.English,
           ...contradiction,
         }),
-      ).rejects.toBeDefined();
+      ).rejects.toThrow(/chk_email_deliveries_state/);
     }
 
     expect(await deliveries.count()).toBe(3);
@@ -293,7 +310,7 @@ describe('Phase 5 notification delivery persistence', () => {
         templateKey: 'booking.confirmed.v1',
         locale: EmailDeliveryLocale.English,
       }),
-    ).rejects.toBeDefined();
+    ).rejects.toThrow(/fk_email_deliveries_outbox_event/);
 
     await deliveries.insert({
       outboxEventId: event.id,
@@ -304,7 +321,7 @@ describe('Phase 5 notification delivery persistence', () => {
 
     await expect(
       dataSource.getRepository(OutboxEvent).delete(event.id),
-    ).rejects.toBeDefined();
+    ).rejects.toThrow(/fk_email_deliveries_outbox_event/);
   });
 
   it('refuses a revert that would discard recorded delivery evidence', async () => {
@@ -314,6 +331,23 @@ describe('Phase 5 notification delivery persistence', () => {
       recipient: 'evidence@hotel.test',
       templateKey: 'booking.confirmed.v1',
       locale: EmailDeliveryLocale.English,
+    });
+
+    await expect(dataSource.undoLastMigration()).rejects.toThrow(
+      /NOTIFICATION_DELIVERY_REVERT_BLOCKED/,
+    );
+    expect(await tableNames()).toEqual(['email_deliveries']);
+  });
+
+  it('refuses a revert that would discard a terminal outbox failure', async () => {
+    // The guard has two branches and a delivery row is only one of them: an event
+    // that failed permanently is evidence even when no delivery was ever created.
+    await dataSource.getRepository(OutboxEvent).insert({
+      ...pendingEvent('booking.confirmed:M:2'),
+      status: OutboxEventStatus.Failed,
+      failedAt: new Date(),
+      lastErrorCode: 'MAIL_RECIPIENT_INVALID',
+      attempts: 5,
     });
 
     await expect(dataSource.undoLastMigration()).rejects.toThrow(

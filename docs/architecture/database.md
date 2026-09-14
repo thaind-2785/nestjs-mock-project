@@ -272,7 +272,7 @@ erDiagram
 | `reviews`                 | unique `booking_id`; check `rating BETWEEN 1 AND 5`                                                                                                                                                                             |
 | `payment_provider_events` | unique `(provider, provider_event_id)`; index `(payment_id, created_at)`                                                                                                                                                        |
 | `outbox_events`           | unique `idempotency_key`; claim index `(status, available_at, lock_expires_at)`; lease, processed-time, and terminal failure shape is checked                                                                                   |
-| `email_deliveries`        | unique `(outbox_event_id, recipient, template_key)`; operations index `(status, created_at, id)`; restrictive FK to `outbox_events`; sent/failed shape is checked                                                               |
+| `email_deliveries`        | unique `(outbox_event_id, template_key)`; operations index `(status, created_at, id)`; restrictive FK to `outbox_events`; sent/failed shape is checked                                                                          |
 | `idempotency_keys`        | unique `(actor_user_id, operation, idempotency_key)`; index `expires_at`; pending/completed response shape is checked                                                                                                           |
 | `schedule_runs`           | unique `(job_key, period_key)` for cron idempotency                                                                                                                                                                             |
 
@@ -315,9 +315,12 @@ a `PENDING` row so an operator can see why a retry is scheduled, is cleared by
 success, and is required by the terminal state. A `FAILED` event keeps no lease, so a
 terminal failure cannot look like work someone still owns.
 
-An `email_deliveries` row is the one logical delivery for an outbox event, a recipient
-snapshot, and a template. The worker locks or creates it before calling the provider,
-so a duplicate job, a recovered lease, and a later retry all resolve to the same row;
+An `email_deliveries` row is the one logical delivery for an outbox event and a
+template. The worker locks or creates it before calling the provider, so a duplicate
+job, a recovered lease, and a later retry all resolve to the same row. The recipient
+is a snapshot held outside the unique key on purpose: inside it, a retry that
+re-resolved a changed owner address would insert a second row and send a second
+message, which is the duplicate the record exists to prevent;
 `attempts` is cumulative across them and a redrive preserves it. The row is `PENDING`
 with no result and no provider message id, `SENT` with an acceptance time and no error
 code, or `FAILED` with a failure time and a code. Rendered bodies and provider error

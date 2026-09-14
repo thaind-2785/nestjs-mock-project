@@ -119,6 +119,29 @@ describe('createNotificationsConfiguration', () => {
     ).toBe(20_000);
   });
 
+  it('applies a bound to a defaulted value, not only to an explicit one', () => {
+    // Joi never runs a rule against a value it defaulted, so a bound written as a ref
+    // lapses exactly when an operator trusts the documented default - here leaving a
+    // drain shorter than one bounded send.
+    expect(() =>
+      validateEnvironment({ MAIL_SEND_TIMEOUT_MS: '45000' }),
+    ).toThrow(/NOTIFICATION_SHUTDOWN_DRAIN_MS/);
+  });
+
+  it('accepts its own resolved values on a second pass', () => {
+    // `@nestjs/config` writes resolved defaults back into `process.env`, and every
+    // `registerAs` factory validates again. A rule that rejects what the first pass
+    // produced takes down the API and the worker at dependency-injection time.
+    const resolved = validateEnvironment({ MAIL_SEND_TIMEOUT_MS: '20000' });
+    const materialized = Object.fromEntries(
+      Object.entries(resolved)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]) => [key, String(value)]),
+    );
+
+    expect(() => validateEnvironment(materialized)).not.toThrow();
+  });
+
   it('keeps the shutdown drain and backoff ceiling above the values they bound', () => {
     expect(() =>
       validateEnvironment({ NOTIFICATION_SHUTDOWN_DRAIN_MS: '2000' }),

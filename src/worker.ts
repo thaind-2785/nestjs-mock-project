@@ -17,10 +17,16 @@ void bootstrapNotificationWorker({
     process.stdout.write('', () => process.exit(drained ? 0 : 1));
   },
 }).catch((error: unknown) => {
+  // Reached when the context resolves and startup then fails. A configuration or DI
+  // error is raised by Nest before this promise exists and is reported by its own
+  // exception handler, so this is not the only way a start can fail.
   new Logger('NotificationWorker').error({
     event: 'notification_worker_start_failed',
     // Configuration failures name the variables at fault, never their values.
     reason: error instanceof Error ? error.message : 'WORKER_START_FAILED',
   });
+  // Exiting explicitly: the heartbeat interval may already be holding the event loop
+  // open, so an exit code alone would leave a failed worker running forever.
   process.exitCode = 1;
+  process.stdout.write('', () => process.exit(1));
 });

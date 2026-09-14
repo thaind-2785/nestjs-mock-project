@@ -18,8 +18,13 @@ class FakeSignals implements WorkerSignalTarget {
     return this;
   }
 
+  // Faithful to `process.once`: the listener is removed as it fires, so a repeated
+  // signal finds no handler. A fake that kept it would let a test claim a guard the
+  // real runtime never reaches.
   emit(signal: WorkerShutdownSignal): void {
-    this.listeners.get(signal)?.();
+    const listener = this.listeners.get(signal);
+    this.listeners.delete(signal);
+    listener?.();
   }
 
   get registered(): WorkerShutdownSignal[] {
@@ -130,7 +135,34 @@ describe('bootstrapNotificationWorker', () => {
     );
   });
 
-  it('drains once when a second signal arrives', async () => {
+  it('reports a stop that failed rather than leaving an unhandled rejection', async () => {
+    const logger = { log: jest.fn(), error: jest.fn() };
+    const signals = new FakeSignals();
+    const { context } = createContextDouble(() =>
+      Promise.reject(new Error('CLOSE_FAILED')),
+    );
+    const { stopped, onStopped } = createStopSignal();
+
+    await bootstrapNotificationWorker({
+      createContext: () => Promise.resolve(context),
+      logger,
+      signals,
+      onStopped,
+    });
+    signals.emit('SIGTERM');
+
+    // A supervisor still gets the drained/not-drained answer, and the process still
+    // sets an exit code, when a provider's close rejects.
+    await expect(stopped).resolves.toBe(false);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'notification_worker_stop_failed',
+        signal: 'SIGTERM',
+      }),
+    );
+  });
+
+  it('drains once when a different signal arrives during the drain', async () => {
     const logger = { log: jest.fn(), error: jest.fn() };
     const signals = new FakeSignals();
     const { context, closed } = createContextDouble(() => Promise.resolve());

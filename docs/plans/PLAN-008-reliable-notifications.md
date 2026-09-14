@@ -44,15 +44,15 @@
 
 ## Vertical slices
 
-| Slice    | Observable outcome                                                 | Migration                   | Primary tests                                 | Status  |
-| -------- | ------------------------------------------------------------------ | --------------------------- | --------------------------------------------- | ------- |
-| `P5-T01` | Delivery decisions, configuration, and worker entrypoint are fixed | None                        | Config and application-context unit tests     | Pending |
-| `P5-T02` | Outbox failure and email-delivery state persist safely             | Phase 5 notification schema | Real-MySQL migration/constraint integration   | Pending |
-| `P5-T03` | Four versioned events render safe bilingual messages               | None                        | Parser/template/escaping unit and integration | Pending |
-| `P5-T04` | MySQL events reach BullMQ with lease/crash recovery                | Use P5-T02 schema           | Real MySQL/Redis concurrency integration      | Pending |
-| `P5-T05` | Worker sends through Mailpit/Gmail ports with bounded retries      | Use P5-T02 schema           | SMTP contract and real-Mailpit integration    | Pending |
-| `P5-T06` | Operators can observe, redrive, and shut down delivery safely      | None unless review requires | CLI, metrics/log, shutdown integration        | Pending |
-| `P5-T07` | Booking-to-email journey and Phase 5 handoff are complete          | Revert/reapply proof        | HTTP/worker/Mailpit E2E and full gate         | Pending |
+| Slice    | Observable outcome                                                 | Migration                   | Primary tests                                 | Status   |
+| -------- | ------------------------------------------------------------------ | --------------------------- | --------------------------------------------- | -------- |
+| `P5-T01` | Delivery decisions, configuration, and worker entrypoint are fixed | None                        | Config and application-context unit tests     | Complete |
+| `P5-T02` | Outbox failure and email-delivery state persist safely             | Phase 5 notification schema | Real-MySQL migration/constraint integration   | Pending  |
+| `P5-T03` | Four versioned events render safe bilingual messages               | None                        | Parser/template/escaping unit and integration | Pending  |
+| `P5-T04` | MySQL events reach BullMQ with lease/crash recovery                | Use P5-T02 schema           | Real MySQL/Redis concurrency integration      | Pending  |
+| `P5-T05` | Worker sends through Mailpit/Gmail ports with bounded retries      | Use P5-T02 schema           | SMTP contract and real-Mailpit integration    | Pending  |
+| `P5-T06` | Operators can observe, redrive, and shut down delivery safely      | None unless review requires | CLI, metrics/log, shutdown integration        | Pending  |
+| `P5-T07` | Booking-to-email journey and Phase 5 handoff are complete          | Revert/reapply proof        | HTTP/worker/Mailpit E2E and full gate         | Pending  |
 
 ### P5-T01 — Decision, configuration, and worker foundation
 
@@ -71,6 +71,10 @@
   mode permits host/port overrides only outside production and has no auth/TLS. Do
   not instantiate an SMTP transport or consume a queue merely by importing the API
   `AppModule`.
+- **Status:** Complete (2026-09-14). `ADR-0006` accepted; `MAIL_*`/`NOTIFICATION_*`
+  validated with cross-field bounds; `WorkerModule`, `NotificationsModule`, and the
+  `start:worker` entrypoint added and registered in the Harness; three mutations
+  (lease margin, Gmail endpoint override, second-signal guard) confirmed failing.
 
 ### P5-T02 — Delivery persistence and migration
 
@@ -250,5 +254,19 @@ booking/outbox/delivery data to make a retry pass.
   BullMQ jobs have one attempt, provider delivery is at-least-once with one logical
   DB record, the global default locale is `en`, and terminal failures extend the
   outbox lifecycle with `FAILED`.
-- Dependency versions, exact queue prefix, migration timestamp, and metric backend
-  remain implementation details to record here and in `ADR-0006` when selected.
+- 2026-09-14 (`P5-T01`): dependencies pinned exactly at `bullmq` 5.81.5,
+  `@nestjs/bullmq` 11.0.5, and `nodemailer` 10.0.9. BullMQ 6 is supported by the Nest
+  integration, but its newest patch was published the same day and its pluggable
+  backends are unused here, while 5.x still ships releases; `@nestjs/bullmq` 11.0.5
+  is the line whose peer range matches this repository's NestJS 11. Nodemailer 10
+  carries first-party types, so `@types/nodemailer` is not installed. `npm audit`
+  root advisories are unchanged by the three additions.
+- 2026-09-14 (`P5-T01`): the queue is `email-delivery` under the configured
+  `NOTIFICATION_QUEUE_PREFIX`, required in production for the limiter's reason.
+  Production refuses `MAILPIT`, and `MAIL_SMTP_HOST`/`MAIL_SMTP_PORT` are refused in
+  Gmail mode so no environment change can redirect authorized credentials.
+- 2026-09-14 (`P5-T01`): `WorkerHeartbeat` holds the process open until `P5-T04`
+  installs the poll loop, which replaces it. Without an owned handle the worker
+  exited before a signal could reach it; the lesson is recorded in the error log.
+- Migration timestamp and metric backend remain implementation details to record
+  here and in `ADR-0006` when selected.

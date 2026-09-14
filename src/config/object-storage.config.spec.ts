@@ -29,6 +29,12 @@ describe('createObjectStorageConfiguration', () => {
       JWT_ACCESS_SECRET: 'production_jwt_secret_at_least_32_chars',
       RATE_LIMIT_REDIS_KEY_PREFIX: 'hotel:production-rate',
       HOTEL_TIMEZONE: 'Asia/Ho_Chi_Minh',
+      MAIL_FROM_ADDRESS: 'bookings@hotel.example.com',
+      MAIL_GMAIL_USER: 'mailer@hotel.example.com',
+      MAIL_GMAIL_CLIENT_ID: 'google-production-mail-client',
+      MAIL_GMAIL_CLIENT_SECRET: 'google-production-mail-secret',
+      MAIL_GMAIL_REFRESH_TOKEN: 'google-production-refresh-token',
+      NOTIFICATION_QUEUE_PREFIX: 'hotel:production-notifications',
     });
 
     expect(createObjectStorageConfiguration(environment)).toEqual({

@@ -4,6 +4,22 @@ export const nodeEnvironments = ['development', 'test', 'production'] as const;
 
 export type NodeEnvironment = (typeof nodeEnvironments)[number];
 
+export const mailProviders = ['MAILPIT', 'GMAIL_SMTP'] as const;
+
+export type MailProvider = (typeof mailProviders)[number];
+
+export const mailLocales = ['en', 'vi'] as const;
+
+export type MailLocale = (typeof mailLocales)[number];
+
+/**
+ * A claim lease must outlive the bounded provider call it protects plus the short
+ * transaction that records the result. Without the margin a send that uses its whole
+ * timeout would finalize against an expired lease another dispatcher has recovered,
+ * and the same event would be delivered twice on purpose rather than by accident.
+ */
+export const notificationLeaseSafetyMarginMs = 5_000;
+
 // Renamed variables fail closed with their replacement rather than being ignored,
 // so a stale deployment cannot silently fall back to a default.
 const obsoleteVariableReplacements: Readonly<Record<string, string>> = {
@@ -67,6 +83,26 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   AUTH_RATE_LIMIT_MAX: number;
   AUTH_RATE_LIMIT_WINDOW_SECONDS: number;
   AUTH_REDIS_KEY_PREFIX: string;
+  MAIL_PROVIDER: MailProvider;
+  MAIL_FROM_NAME: string;
+  MAIL_FROM_ADDRESS: string;
+  MAIL_DEFAULT_LOCALE: MailLocale;
+  MAIL_SEND_TIMEOUT_MS: number;
+  MAIL_SMTP_HOST?: string;
+  MAIL_SMTP_PORT?: number;
+  MAIL_GMAIL_USER?: string;
+  MAIL_GMAIL_CLIENT_ID?: string;
+  MAIL_GMAIL_CLIENT_SECRET?: string;
+  MAIL_GMAIL_REFRESH_TOKEN?: string;
+  NOTIFICATION_QUEUE_PREFIX: string;
+  NOTIFICATION_CLAIM_BATCH_SIZE: number;
+  NOTIFICATION_POLL_INTERVAL_MS: number;
+  NOTIFICATION_CLAIM_LEASE_MS: number;
+  NOTIFICATION_MAX_ATTEMPTS: number;
+  NOTIFICATION_BACKOFF_INITIAL_MS: number;
+  NOTIFICATION_BACKOFF_MAX_MS: number;
+  NOTIFICATION_WORKER_CONCURRENCY: number;
+  NOTIFICATION_SHUTDOWN_DRAIN_MS: number;
 }
 
 const environmentSchema = Joi.object<EnvironmentVariables>({
@@ -280,6 +316,130 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
   AUTH_REDIS_KEY_PREFIX: Joi.string()
     .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
     .default('hotel:auth'),
+  // Mailpit accepts and discards every message it is given. Selecting it in
+  // production would swallow booking mail silently instead of failing, so the
+  // deployed environment can only select the real transport.
+  MAIL_PROVIDER: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().valid('GMAIL_SMTP').default('GMAIL_SMTP'),
+    otherwise: Joi.string()
+      .valid(...mailProviders)
+      .default('MAILPIT'),
+  }),
+  MAIL_FROM_NAME: Joi.string()
+    .trim()
+    .min(1)
+    .max(78)
+    .custom(validateHeaderSafeText)
+    .default('Hotel Management'),
+  MAIL_FROM_ADDRESS: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.string()
+      .email({ tlds: { allow: false } })
+      .max(254)
+      .required(),
+    otherwise: Joi.string()
+      .email({ tlds: { allow: false } })
+      .max(254)
+      .default('bookings@hotel.local'),
+  }),
+  MAIL_DEFAULT_LOCALE: Joi.string()
+    .valid(...mailLocales)
+    .default('en'),
+  MAIL_SEND_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(1_000)
+    .max(60_000)
+    .default(15_000),
+  // Gmail host, port, and TLS are implementation constants. Accepting an override
+  // here would let ordinary environment drift point the worker at any SMTP server
+  // while it still believes it holds authorized Gmail credentials.
+  MAIL_SMTP_HOST: Joi.alternatives().conditional('MAIL_PROVIDER', {
+    is: 'MAILPIT',
+    then: Joi.string().hostname().default('127.0.0.1'),
+    otherwise: Joi.forbidden(),
+  }),
+  MAIL_SMTP_PORT: Joi.alternatives().conditional('MAIL_PROVIDER', {
+    is: 'MAILPIT',
+    then: Joi.number().integer().min(1).max(65_535).default(1_025),
+    otherwise: Joi.forbidden(),
+  }),
+  MAIL_GMAIL_USER: Joi.string()
+    .email({ tlds: { allow: false } })
+    .max(254)
+    .when('MAIL_PROVIDER', {
+      is: 'GMAIL_SMTP',
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
+  MAIL_GMAIL_CLIENT_ID: Joi.string().trim().min(3).when('MAIL_PROVIDER', {
+    is: 'GMAIL_SMTP',
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  MAIL_GMAIL_CLIENT_SECRET: Joi.string().min(8).when('MAIL_PROVIDER', {
+    is: 'GMAIL_SMTP',
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  MAIL_GMAIL_REFRESH_TOKEN: Joi.string().min(8).when('MAIL_PROVIDER', {
+    is: 'GMAIL_SMTP',
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  // Required in production for the same reason as the limiter namespace: two
+  // deployments sharing one Redis instance must not consume each other's jobs.
+  NOTIFICATION_QUEUE_PREFIX: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.string()
+      .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
+      .required(),
+    otherwise: Joi.string()
+      .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
+      .default('hotel:notifications'),
+  }),
+  NOTIFICATION_CLAIM_BATCH_SIZE: Joi.number()
+    .integer()
+    .min(1)
+    .max(500)
+    .default(50),
+  NOTIFICATION_POLL_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(60_000)
+    .default(1_000),
+  NOTIFICATION_CLAIM_LEASE_MS: Joi.number()
+    .integer()
+    .min(
+      Joi.ref('MAIL_SEND_TIMEOUT_MS', {
+        adjust: (value: number) => value + notificationLeaseSafetyMarginMs,
+      }),
+    )
+    .max(900_000)
+    .default(120_000),
+  NOTIFICATION_MAX_ATTEMPTS: Joi.number().integer().min(1).max(20).default(5),
+  NOTIFICATION_BACKOFF_INITIAL_MS: Joi.number()
+    .integer()
+    .min(1_000)
+    .max(600_000)
+    .default(30_000),
+  NOTIFICATION_BACKOFF_MAX_MS: Joi.number()
+    .integer()
+    .min(Joi.ref('NOTIFICATION_BACKOFF_INITIAL_MS'))
+    .max(86_400_000)
+    .default(3_600_000),
+  NOTIFICATION_WORKER_CONCURRENCY: Joi.number()
+    .integer()
+    .min(1)
+    .max(50)
+    .default(5),
+  // A drain shorter than one bounded send would abandon a message the provider may
+  // already have accepted, which is the one ambiguity this design works to keep rare.
+  NOTIFICATION_SHUTDOWN_DRAIN_MS: Joi.number()
+    .integer()
+    .min(Joi.ref('MAIL_SEND_TIMEOUT_MS'))
+    .max(120_000)
+    .default(30_000),
 }).unknown(true);
 
 export function validateEnvironment(
@@ -329,6 +489,26 @@ function hasUnsafeRelativeUriCharacter(value: string): boolean {
       return codePoint === undefined || codePoint <= 31 || codePoint === 127;
     })
   );
+}
+
+/**
+ * A display name or address that carries a control character can inject a second
+ * header - a second recipient, a different sender - into the composed message.
+ * Angle brackets are rejected as well so the configured name cannot close the
+ * address of the sender it is displayed beside.
+ */
+function validateHeaderSafeText(value: string, helpers: Joi.CustomHelpers) {
+  const unsafe = [...value].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return (
+      codePoint === undefined ||
+      codePoint <= 31 ||
+      codePoint === 127 ||
+      character === '<' ||
+      character === '>'
+    );
+  });
+  return unsafe ? helpers.error('string.headerSafe') : value;
 }
 
 function validateTimeZone(value: string, helpers: Joi.CustomHelpers) {

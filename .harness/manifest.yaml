@@ -89,6 +89,14 @@ entry_commands:
     side_effect: local_process
     environments: [local]
     forward_env: [NODE_ENV, PORT]
+  notification_worker:
+    command: npm run start:worker
+    npm_script: start:worker
+    permission: mutate_local_runtime
+    tool_ref: npm
+    side_effect: local_process
+    environments: [local]
+    forward_env: [NODE_ENV, MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER]
   build:
     command: npm run build
     npm_script: build

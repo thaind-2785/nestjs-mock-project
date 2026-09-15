@@ -61,7 +61,7 @@ test('declares persistent volumes and disables external update checks', () => {
 });
 
 test('starts every readiness dependency before the CI verification gate', () => {
-  assert.deepEqual(ciReadinessServices, ['mysql', 'redis', 'minio']);
+  assert.deepEqual(ciReadinessServices, ['mysql', 'redis', 'minio', 'mailpit']);
   for (const service of ciReadinessServices) {
     assert.ok(compose.services[service].healthcheck?.test);
   }

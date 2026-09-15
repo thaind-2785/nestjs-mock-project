@@ -3,7 +3,9 @@
 - Spec: [`SPEC-007`](../specs/SPEC-007-reliable-notifications.md)
 - Status: In progress (approved 2026-09-14)
 - Owner: Project owner
-- Reviewer (must be independent): Independent agent review, `REVIEW-030` (slices `P5-T01`, `P5-T02`)
+- Reviewer (must be independent): Independent agent reviews `REVIEW-030` (slices
+  `P5-T01`, `P5-T02`), `REVIEW-031` (slice `P5-T03`), `REVIEW-032` (slice `P5-T04`),
+  and `REVIEW-033` (slice `P5-T05`)
 
 ## Constraints and risks
 
@@ -48,9 +50,9 @@
 | -------- | ------------------------------------------------------------------ | --------------------------- | --------------------------------------------- | -------- |
 | `P5-T01` | Delivery decisions, configuration, and worker entrypoint are fixed | None                        | Config and application-context unit tests     | Complete |
 | `P5-T02` | Outbox failure and email-delivery state persist safely             | Phase 5 notification schema | Real-MySQL migration/constraint integration   | Complete |
-| `P5-T03` | Four versioned events render safe bilingual messages               | None                        | Parser/template/escaping unit and integration | Pending  |
-| `P5-T04` | MySQL events reach BullMQ with lease/crash recovery                | Use P5-T02 schema           | Real MySQL/Redis concurrency integration      | Pending  |
-| `P5-T05` | Worker sends through Mailpit/Gmail ports with bounded retries      | Use P5-T02 schema           | SMTP contract and real-Mailpit integration    | Pending  |
+| `P5-T03` | Four versioned events render safe bilingual messages               | None                        | Parser/template/escaping unit and integration | Complete |
+| `P5-T04` | MySQL events reach BullMQ with lease/crash recovery                | Use P5-T02 schema           | Real MySQL/Redis concurrency integration      | Complete |
+| `P5-T05` | Worker sends through Mailpit/Gmail ports with bounded retries      | Use P5-T02 schema           | SMTP contract and real-Mailpit integration    | Complete |
 | `P5-T06` | Operators can observe, redrive, and shut down delivery safely      | None unless review requires | CLI, metrics/log, shutdown integration        | Pending  |
 | `P5-T07` | Booking-to-email journey and Phase 5 handoff are complete          | Revert/reapply proof        | HTTP/worker/Mailpit E2E and full gate         | Pending  |
 
@@ -104,8 +106,8 @@
   template, and the first attempt snapshots the current owner email without widening
   the event payload.
 - **Scope:** Notification event discriminated types/parser, event-template registry,
-  owner lookup projection, renderer, `en`/`vi` template catalogs, deterministic
-  subject/Message-ID/header builder, and delivery preparation service.
+  owner and previous-room lookup projections, renderer, `en`/`vi` template catalogs,
+  deterministic subject/Message-ID/header builder, and delivery preparation service.
 - **Migration:** Use P5-T02.
 - **Checks:** Supported/unknown version and event matrix; required scalar/date/money/
   reason/change validation; owner absent/inactive/email-change cases; locale parity;
@@ -113,7 +115,14 @@
   correlation headers.
 - **Notes:** Retry reads the existing delivery recipient/template/locale snapshot. An
   inactive owner is still notified. Subjects contain the booking public ID but no
-  reason. Keep template rendering pure and provider-independent.
+  reason. Keep template rendering pure and provider-independent: values the payload
+  cannot carry, such as the previous room's number, are resolved by the caller and
+  passed in as context.
+- **Status:** Complete (2026-09-15). The fail-closed parser accepts exactly the four
+  versioned Phase 4 payloads; the one-to-one registry renders parity-checked `en` and
+  `vi` text/HTML catalogs with context-specific escaping and deterministic headers.
+  Transactional preparation snapshots the first normalized owner email plus locale,
+  reuses both on retry, notifies inactive owners, and refuses absent/invalid owners.
 
 ### P5-T04 — Transactional outbox relay to BullMQ
 
@@ -130,6 +139,12 @@
 - **Notes:** Use `<outbox UUID>-<attempt>` as BullMQ job ID and BullMQ `attempts: 1`.
   The job carries only event ID, token, and attempt. Update/release a row only when
   its current claim token still matches.
+- **Status:** Complete (2026-09-15). The claim runs two index-ordered
+  `FOR UPDATE SKIP LOCKED` statements at READ COMMITTED, recovering abandoned leases
+  before taking new arrivals; the database issues every lease and computes every
+  retry time; a refused handoff returns the claim and its attempt. `WorkerHeartbeat`
+  is deleted - the poll loop is what holds the worker open. `REVIEW-032` returned one
+  High and four Medium findings, all fixed and pinned by mutations.
 
 ### P5-T05 — SMTP adapters and delivery worker
 
@@ -148,6 +163,12 @@
   the lease before the provider call and validate that provider timeout plus finalize
   margin is below the lease. Success/failure finalization locks the matching claim and
   delivery for a short transaction.
+- **Status:** Complete (2026-09-15). Mail leaves through one `EmailSender` port; the
+  worker runs two short transactions with the provider call between them and writes
+  the outbox row before the delivery, so a claim lost mid-send records nothing at
+  all. Mailpit receives real messages in the integration suite and Gmail is proven by
+  contract without a network call. `REVIEW-033` returned a Blocker and two High
+  findings, all fixed and pinned by mutations.
 
 ### P5-T06 — Operations, redrive, and runbook
 
@@ -291,5 +312,42 @@ booking/outbox/delivery data to make a retry pass.
   `(outbox_event_id, template_key)` so the database enforces the one-delivery
   guarantee the documents claimed; and a rejecting context close now reports its drain
   result instead of an unhandled rejection. `R30-08` is accepted with rationale.
+- 2026-09-15 (`P5-T03`): notification payloads are strict, exact-key
+  `schemaVersion: 1` discriminated events rather than best-effort objects. Template
+  keys are selected only by a closed registry, and locale/key/placeholder parity is
+  checked before rendering. The first preparation transaction writes the normalized
+  recipient/default-locale snapshot; retries read that row without resolving the
+  owner again, while inactive status remains deliberately outside the lookup filter.
+- 2026-09-15 (`REVIEW-031`): the change email printed internal room ids to the
+  recipient. Preparation now resolves the previous room number by primary key inside
+  the caller's transaction and passes it as render context, so the templates name
+  rooms and never publish an internal key; a missing room fails with
+  `NOTIFICATION_ROOM_NOT_FOUND`. Two notes carry forward: `P5-T05` must classify
+  `NOTIFICATION_DELIVERY_NOT_PENDING` as a successful no-op rather than a permanent
+  failure, and money display (`R31-02`) was settled by the owner the same day:
+  recipients see a grouped VND amount, and a currency with decimals fails rendering
+  instead of emailing a figure wrong by two decimal places.
+- 2026-09-15 (`P5-T04`): `attempts` is the delivery budget, so a queue handoff that
+  never reached a worker returns it; a recovered lease still spends one, because the
+  worker that stopped reporting may already have reached SMTP.
+- 2026-09-15 (`P5-T04`): the claim orders only by `available_at` in SQL and breaks
+  ties in memory. A locking read that must sort reads - and locks - every eligible
+  row before `LIMIT` applies, which let one dispatcher lock the whole backlog.
+- 2026-09-15 (`P5-T04`): every lease and every retry time is computed by MySQL. The
+  relay is designed for several worker hosts, and a host clock ahead by more than one
+  lease would otherwise treat a live claim as abandoned and send the same mail twice.
+- 2026-09-15 (`P5-T05`): the result transaction writes the outbox row first and the
+  delivery only if that held the claim. A worker whose lease expired mid-send would
+  otherwise resolve a delivery for work another worker owns, which produced both a
+  delivered message whose event was never finalized and an event marked `PROCESSED`
+  beside a delivery marked `FAILED`.
+- 2026-09-15 (`P5-T05`): a 4xx is retryable whatever phase it came from. Gmail
+  answers `454` when it throttles logins, and treating that as a credential problem
+  would durably fail a whole backlog for a condition that clears in minutes.
+- 2026-09-15 (`P5-T05`): `MAIL_SEND_TIMEOUT_MS` bounds the whole send, not each phase
+  of it. Nodemailer's socket timeout resets on every byte, so the lease arithmetic
+  the schema validates was measuring something the adapter did not enforce.
+- 2026-09-15 (`P5-T05`): Mailpit joins the CI readiness services. A gate without it
+  would have reported a green mail path it never exercised.
 - Metric backend remains an implementation detail to record here and in `ADR-0006`
   when selected.

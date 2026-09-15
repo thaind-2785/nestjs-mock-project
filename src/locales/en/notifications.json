@@ -1,0 +1,22 @@
+{
+  "booking.confirmed.v1": {
+    "subject": "Booking {{bookingId}} confirmed",
+    "text": "Your booking {{bookingId}} has been confirmed.\n\nRoom: {{roomNumber}}\nStay: {{checkIn}} to {{checkOut}}\nStatus: {{status}}\nPrice: {{priceAmount}} {{currency}}",
+    "html": "<p>Your booking <strong>{{bookingId}}</strong> has been confirmed.</p><dl><dt>Room</dt><dd>{{roomNumber}}</dd><dt>Stay</dt><dd>{{checkIn}} to {{checkOut}}</dd><dt>Status</dt><dd>{{status}}</dd><dt>Price</dt><dd>{{priceAmount}} {{currency}}</dd></dl>"
+  },
+  "booking.rejected.v1": {
+    "subject": "Booking {{bookingId}} rejected",
+    "text": "Your booking {{bookingId}} was rejected.\n\nRoom: {{roomNumber}}\nStay: {{checkIn}} to {{checkOut}}\nStatus: {{status}}\nReason: {{reason}}",
+    "html": "<p>Your booking <strong>{{bookingId}}</strong> was rejected.</p><dl><dt>Room</dt><dd>{{roomNumber}}</dd><dt>Stay</dt><dd>{{checkIn}} to {{checkOut}}</dd><dt>Status</dt><dd>{{status}}</dd><dt>Reason</dt><dd>{{reason}}</dd></dl>"
+  },
+  "booking.changed.v1": {
+    "subject": "Booking {{bookingId}} updated",
+    "text": "Your booking {{bookingId}} was updated.\n\nPrevious room: {{beforeRoom}}\nPrevious stay: {{beforeCheckIn}} to {{beforeCheckOut}}\nNew room: {{roomNumber}}\nNew stay: {{afterCheckIn}} to {{afterCheckOut}}\nStatus: {{status}}\nPrice: {{priceAmount}} {{currency}}\nReason: {{reason}}",
+    "html": "<p>Your booking <strong>{{bookingId}}</strong> was updated.</p><dl><dt>Previous room</dt><dd>{{beforeRoom}}</dd><dt>Previous stay</dt><dd>{{beforeCheckIn}} to {{beforeCheckOut}}</dd><dt>New room</dt><dd>{{roomNumber}}</dd><dt>New stay</dt><dd>{{afterCheckIn}} to {{afterCheckOut}}</dd><dt>Status</dt><dd>{{status}}</dd><dt>Price</dt><dd>{{priceAmount}} {{currency}}</dd><dt>Reason</dt><dd>{{reason}}</dd></dl>"
+  },
+  "booking.cancelled-by-admin.v1": {
+    "subject": "Booking {{bookingId}} cancelled",
+    "text": "Your booking {{bookingId}} was cancelled by an administrator.\n\nRoom: {{roomNumber}}\nStay: {{checkIn}} to {{checkOut}}\nStatus: {{status}}\nReason: {{reason}}",
+    "html": "<p>Your booking <strong>{{bookingId}}</strong> was cancelled by an administrator.</p><dl><dt>Room</dt><dd>{{roomNumber}}</dd><dt>Stay</dt><dd>{{checkIn}} to {{checkOut}}</dd><dt>Status</dt><dd>{{status}}</dd><dt>Reason</dt><dd>{{reason}}</dd></dl>"
+  }
+}

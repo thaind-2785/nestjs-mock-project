@@ -256,6 +256,50 @@ describe('Phase 5 delivery through Mailpit', () => {
     );
   });
 
+  it('fails an unreadable payload that never produced a delivery row', async () => {
+    const owner = await insertOwner('unreadable@hotel.test');
+    const eventId = await insertEvent(owner);
+    // A version this worker does not support: the parser refuses before preparation,
+    // so there is no delivery row to address and no lock to take on one.
+    await dataSource.query(
+      `UPDATE outbox_events SET payload = JSON_SET(payload, '$.schemaVersion', 2) WHERE id = ?`,
+      [eventId],
+    );
+
+    await expect(worker.process(await dispatchOne())).resolves.toBe('failed');
+
+    const event = await readEvent(eventId);
+    expect(event.status).toBe(OutboxEventStatus.Failed);
+    expect(event.lastErrorCode).toBe('NOTIFICATION_EVENT_VERSION_UNSUPPORTED');
+    expect(await deliveryCount(eventId)).toBe(0);
+    expect(await mailpitMessages()).toHaveLength(0);
+  });
+
+  it('marks the existing delivery failed when its stored recipient is unusable', async () => {
+    const owner = await insertOwner('corrupted@hotel.test');
+    const eventId = await insertEvent(owner);
+    const job = await dispatchOne();
+    // The snapshot was taken by an earlier attempt and is no longer usable: the
+    // delivery row exists and is pending, which is the only way a permanent failure
+    // meets a record it has to resolve.
+    await dataSource.getRepository(EmailDelivery).insert({
+      outboxEventId: eventId,
+      recipient: 'not-an-address',
+      templateKey: 'booking.confirmed.v1',
+      locale: EmailDeliveryLocale.English,
+    });
+
+    await expect(worker.process(job)).resolves.toBe('failed');
+
+    // This is the permanent failure that happens with a delivery row already in
+    // place, so the record has to carry the verdict rather than stay pending forever.
+    const delivery = await readDelivery(eventId);
+    expect(delivery.status).toBe(EmailDeliveryStatus.Failed);
+    expect(delivery.lastErrorCode).toBe('MAIL_RECIPIENT_INVALID');
+    expect((await readEvent(eventId)).status).toBe(OutboxEventStatus.Failed);
+    expect(await mailpitMessages()).toHaveLength(0);
+  });
+
   it('fails permanently when the owner cannot be resolved', async () => {
     const eventId = await insertEvent('99999999');
 

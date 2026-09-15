@@ -223,20 +223,19 @@ export class DeliveryWorkerService
     errorCode: string,
   ): Promise<void> {
     const dataSource = await this.database.ensureInitialized();
-    await dataSource.transaction(async (manager) => {
-      const delivery: Array<{ id: string }> = await manager.query(
-        `SELECT id FROM email_deliveries WHERE outbox_event_id = ? FOR UPDATE`,
-        [data.outboxEventId],
-      );
-      await this.results.markFailed(manager, {
+    // No delivery read first: locking `email_deliveries` before `outbox_events` is
+    // the opposite order from every other path here, and MySQL answers the crossing
+    // with a deadlock. The repository addresses the delivery by event when no id is
+    // given, which is also the only thing available when a payload never parsed far
+    // enough to create one.
+    await dataSource.transaction((manager) =>
+      this.results.markFailed(manager, {
         outboxEventId: data.outboxEventId,
         claimToken: data.claimToken,
         attempt: data.attempt,
-        // A payload that could not be parsed never produced a delivery row.
-        deliveryId: delivery[0]?.id ?? '0',
         errorCode,
-      });
-    });
+      }),
+    );
   }
 
   private async recordProviderFailure(

@@ -101,13 +101,18 @@ export class DeliveryPreparationService {
           templateKey,
           locale,
           status: EmailDeliveryStatus.Pending,
-          attempts: 0,
+          // Counted here because preparing is what precedes an attempt; the record
+          // is meant to say how many times this message was offered to a provider.
+          attempts: 1,
           providerMessageId: null,
           lastErrorCode: null,
           sentAt: null,
           failedAt: null,
         }),
       );
+    } else if (delivery.status === EmailDeliveryStatus.Pending) {
+      await deliveries.increment({ id: delivery.id }, 'attempts', 1);
+      delivery.attempts += 1;
     }
 
     if (delivery.status !== EmailDeliveryStatus.Pending) {

@@ -116,7 +116,9 @@ describe('Phase 5 notification preparation', () => {
         templateKey: 'booking.confirmed.v1',
         locale: EmailDeliveryLocale.English,
         status: EmailDeliveryStatus.Pending,
-        attempts: 0,
+        // Preparing is what precedes an attempt, so the first preparation records
+        // one: the row is meant to say how many times this message was offered.
+        attempts: 1,
       },
     ]);
   });

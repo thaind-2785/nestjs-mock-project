@@ -11,24 +11,26 @@ import { DatabaseModule } from '../database/database.module';
 import { EmailDelivery } from './entities/email-delivery.entity';
 import { DeliveryPreparationService } from './delivery-preparation.service';
 import { EmailTemplateService } from './email-template.service';
+import { DeliveryResultRepository } from './delivery-result.repository';
+import { DeliveryWorkerService } from './delivery-worker.service';
+import { EMAIL_SENDER } from './email-sender';
 import {
   NOTIFICATION_QUEUE,
   NOTIFICATION_QUEUE_CLIENT,
+  NOTIFICATION_WORKER_CLIENT,
 } from './notification.tokens';
+import { SmtpEmailSender } from './smtp-email-sender';
 import { OutboxClaimRepository } from './outbox-claim.repository';
 import { OutboxDispatcherService } from './outbox-dispatcher.service';
 
 /**
- * The notification boundary owns validated delivery configuration, the P5-T03
- * provider-independent preparation path, and the P5-T04 outbox relay. The SMTP
- * adapters (`P5-T05`) are registered here as that slice lands, so the worker context
- * keeps importing one module rather than growing a second wiring path.
+ * The whole notification boundary: validated configuration, the provider-independent
+ * preparation path, the outbox relay, and the SMTP adapter behind one port.
  *
- * Importing this module starts the relay polling, which is also what holds the
- * worker process open.
- *
- * It is deliberately absent from `AppModule`: importing the API must never create an
- * SMTP transport or start consuming a queue.
+ * Importing this module starts the relay polling and the delivery consumer, which is
+ * also what holds the worker process open. It is deliberately absent from
+ * `AppModule`: importing the API must never create an SMTP transport or consume a
+ * queue.
  */
 @Module({
   imports: [
@@ -44,6 +46,9 @@ import { OutboxDispatcherService } from './outbox-dispatcher.service';
     DeliveryPreparationService,
     OutboxClaimRepository,
     OutboxDispatcherService,
+    DeliveryResultRepository,
+    DeliveryWorkerService,
+    { provide: EMAIL_SENDER, useClass: SmtpEmailSender },
     {
       provide: NOTIFICATION_QUEUE_CLIENT,
       inject: [notificationsConfig.KEY],
@@ -68,6 +73,24 @@ import { OutboxDispatcherService } from './outbox-dispatcher.service';
       },
     },
     {
+      // The consumer needs a connection of its own: BullMQ workers hold a blocking
+      // command open, which would stall every producer command sharing the socket.
+      provide: NOTIFICATION_WORKER_CLIENT,
+      inject: [notificationsConfig.KEY],
+      useFactory: (configuration: ConfigType<typeof notificationsConfig>) => {
+        const { connection } = configuration.queue;
+        const client = new Redis({
+          host: connection.host,
+          port: connection.port,
+          lazyConnect: true,
+          maxRetriesPerRequest: null,
+          connectTimeout: connection.timeoutMs,
+        });
+        reportRedisClientErrors(client, 'notification-worker');
+        return client;
+      },
+    },
+    {
       provide: NOTIFICATION_QUEUE,
       inject: [notificationsConfig.KEY, NOTIFICATION_QUEUE_CLIENT],
       useFactory: (
@@ -87,6 +110,9 @@ import { OutboxDispatcherService } from './outbox-dispatcher.service';
     DeliveryPreparationService,
     OutboxClaimRepository,
     OutboxDispatcherService,
+    DeliveryResultRepository,
+    DeliveryWorkerService,
+    EMAIL_SENDER,
   ],
 })
 export class NotificationsModule {}

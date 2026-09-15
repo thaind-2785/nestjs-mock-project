@@ -34,8 +34,9 @@ npm run start:worker
 ```
 
 `SIGTERM` drains it within `NOTIFICATION_SHUTDOWN_DRAIN_MS` and logs whether the drain
-completed. Until the outbox relay lands it consumes nothing: it validates the delivery
-configuration, reports the resolved transport, and holds the process open.
+completed. The worker claims booking notification events from the outbox, relays them
+through BullMQ, and delivers each one through SMTP - Mailpit locally, Gmail when
+deployed. The API never does either: it only commits the intent.
 
 Start environment values from `.env.example`; never commit credentials. `NODE_ENV`
 accepts `development`, `test`, or `production` and defaults to `development`. `PORT`

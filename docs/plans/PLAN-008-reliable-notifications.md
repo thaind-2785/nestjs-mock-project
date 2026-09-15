@@ -4,8 +4,8 @@
 - Status: In progress (approved 2026-09-14)
 - Owner: Project owner
 - Reviewer (must be independent): Independent agent reviews `REVIEW-030` (slices
-  `P5-T01`, `P5-T02`), `REVIEW-031` (slice `P5-T03`), and `REVIEW-032` (slice
-  `P5-T04`)
+  `P5-T01`, `P5-T02`), `REVIEW-031` (slice `P5-T03`), `REVIEW-032` (slice `P5-T04`),
+  and `REVIEW-033` (slice `P5-T05`)
 
 ## Constraints and risks
 
@@ -52,7 +52,7 @@
 | `P5-T02` | Outbox failure and email-delivery state persist safely             | Phase 5 notification schema | Real-MySQL migration/constraint integration   | Complete |
 | `P5-T03` | Four versioned events render safe bilingual messages               | None                        | Parser/template/escaping unit and integration | Complete |
 | `P5-T04` | MySQL events reach BullMQ with lease/crash recovery                | Use P5-T02 schema           | Real MySQL/Redis concurrency integration      | Complete |
-| `P5-T05` | Worker sends through Mailpit/Gmail ports with bounded retries      | Use P5-T02 schema           | SMTP contract and real-Mailpit integration    | Pending  |
+| `P5-T05` | Worker sends through Mailpit/Gmail ports with bounded retries      | Use P5-T02 schema           | SMTP contract and real-Mailpit integration    | Complete |
 | `P5-T06` | Operators can observe, redrive, and shut down delivery safely      | None unless review requires | CLI, metrics/log, shutdown integration        | Pending  |
 | `P5-T07` | Booking-to-email journey and Phase 5 handoff are complete          | Revert/reapply proof        | HTTP/worker/Mailpit E2E and full gate         | Pending  |
 
@@ -163,6 +163,12 @@
   the lease before the provider call and validate that provider timeout plus finalize
   margin is below the lease. Success/failure finalization locks the matching claim and
   delivery for a short transaction.
+- **Status:** Complete (2026-09-15). Mail leaves through one `EmailSender` port; the
+  worker runs two short transactions with the provider call between them and writes
+  the outbox row before the delivery, so a claim lost mid-send records nothing at
+  all. Mailpit receives real messages in the integration suite and Gmail is proven by
+  contract without a network call. `REVIEW-033` returned a Blocker and two High
+  findings, all fixed and pinned by mutations.
 
 ### P5-T06 — Operations, redrive, and runbook
 
@@ -330,5 +336,18 @@ booking/outbox/delivery data to make a retry pass.
 - 2026-09-15 (`P5-T04`): every lease and every retry time is computed by MySQL. The
   relay is designed for several worker hosts, and a host clock ahead by more than one
   lease would otherwise treat a live claim as abandoned and send the same mail twice.
+- 2026-09-15 (`P5-T05`): the result transaction writes the outbox row first and the
+  delivery only if that held the claim. A worker whose lease expired mid-send would
+  otherwise resolve a delivery for work another worker owns, which produced both a
+  delivered message whose event was never finalized and an event marked `PROCESSED`
+  beside a delivery marked `FAILED`.
+- 2026-09-15 (`P5-T05`): a 4xx is retryable whatever phase it came from. Gmail
+  answers `454` when it throttles logins, and treating that as a credential problem
+  would durably fail a whole backlog for a condition that clears in minutes.
+- 2026-09-15 (`P5-T05`): `MAIL_SEND_TIMEOUT_MS` bounds the whole send, not each phase
+  of it. Nodemailer's socket timeout resets on every byte, so the lease arithmetic
+  the schema validates was measuring something the adapter did not enforce.
+- 2026-09-15 (`P5-T05`): Mailpit joins the CI readiness services. A gate without it
+  would have reported a green mail path it never exercised.
 - Metric backend remains an implementation detail to record here and in `ADR-0006`
   when selected.

@@ -334,13 +334,18 @@ curl -fsS -X POST "$API/admin/bookings/$BOOKING_ID/cancel" \
 An edit never reprices the booking: the per-night snapshot taken at creation is
 preserved by design, and repricing needs a separately accepted contract.
 
-**Phase 4 enqueues notifications but delivers none.** Every transition writes an
-`outbox_events` row in the same transaction as the booking change, and those rows
-stay `PENDING` until Phase 5 ships a worker. Activating the booking feature in
-production therefore requires either pairing it with Phase 5 delivery, or recording
-explicit acceptance of delayed mail plus a backlog-age and backlog-count monitor and
-an idempotent later-drain procedure. Owners are not notified of an approval,
-rejection, edit, or cancellation until that worker runs.
+**Every transition writes its notification intent in the same transaction as the
+booking change, and the notification worker delivers it.** A `2xx` from a booking
+mutation means the state and the intent are committed - never that mail has reached
+anyone. Start the worker beside the API (`npm run start:worker`) and the owner
+receives the approval, rejection, edit, or admin cancellation; with the worker
+stopped, the events wait in `outbox_events` and drain when it returns.
+
+To watch one journey locally: run `npm run compose:smoke` and `npm run migration:run`,
+start the API and the worker, create a room and an availability window through the
+admin API, request a booking as the owner, approve it as an administrator, and open
+Mailpit at <http://localhost:8025>. The worker logs `notification_batch_dispatched`
+and then `notification_delivery_finished` with an outcome of `sent`.
 
 Redis limiter failure denies booking creation but must never break read endpoints,
 and MySQL overload uses the existing bounded `503`. Neither failure may fall back to

@@ -26,6 +26,17 @@ npm run harness:check
 npm run start:dev
 ```
 
+Notification delivery runs as a second process with its own Nest application context
+and no HTTP listener, so the API and the worker fail, restart, and scale apart:
+
+```bash
+npm run start:worker
+```
+
+`SIGTERM` drains it within `NOTIFICATION_SHUTDOWN_DRAIN_MS` and logs whether the drain
+completed. Until the outbox relay lands it consumes nothing: it validates the delivery
+configuration, reports the resolved transport, and holds the process open.
+
 Start environment values from `.env.example`; never commit credentials. `NODE_ENV`
 accepts `development`, `test`, or `production` and defaults to `development`. `PORT`
 accepts integers from `1` through `65535` and defaults to `3000`. Invalid values stop

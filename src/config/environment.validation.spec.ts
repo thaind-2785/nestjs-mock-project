@@ -12,6 +12,22 @@ const productionAuthEnvironment = {
   HOTEL_TIMEZONE: 'Asia/Ho_Chi_Minh',
 };
 
+const productionMailEnvironment = {
+  MAIL_FROM_ADDRESS: 'bookings@hotel.example.com',
+  MAIL_GMAIL_USER: 'mailer@hotel.example.com',
+  MAIL_GMAIL_CLIENT_ID: 'google-production-mail-client',
+  MAIL_GMAIL_CLIENT_SECRET: 'google-production-mail-secret',
+  MAIL_GMAIL_REFRESH_TOKEN: 'google-production-refresh-token',
+  // Production names its own queue namespace for the limiter's reason: two
+  // deployments sharing one Redis must not consume each other's delivery jobs.
+  NOTIFICATION_QUEUE_PREFIX: 'hotel:production-notifications',
+};
+
+const productionRequiredEnvironment = {
+  ...productionAuthEnvironment,
+  ...productionMailEnvironment,
+};
+
 describe('validateEnvironment', () => {
   it('applies safe application defaults', () => {
     const environment = validateEnvironment({});
@@ -51,6 +67,15 @@ describe('validateEnvironment', () => {
     expect(environment.AUTH_SUCCESS_REDIRECT_URI).toBe('/api/docs');
     expect(environment.AUTH_ACCESS_TTL_SECONDS).toBe(900);
     expect(environment.AUTH_REFRESH_TTL_SECONDS).toBe(2_592_000);
+    expect(environment.MAIL_PROVIDER).toBe('MAILPIT');
+    expect(environment.MAIL_FROM_ADDRESS).toBe('bookings@hotel.local');
+    expect(environment.MAIL_DEFAULT_LOCALE).toBe('en');
+    expect(environment.MAIL_SEND_TIMEOUT_MS).toBe(15_000);
+    expect(environment.MAIL_SMTP_HOST).toBe('127.0.0.1');
+    expect(environment.MAIL_SMTP_PORT).toBe(1025);
+    expect(environment.NOTIFICATION_QUEUE_PREFIX).toBe('hotel:notifications');
+    expect(environment.NOTIFICATION_CLAIM_LEASE_MS).toBe(120_000);
+    expect(environment.NOTIFICATION_MAX_ATTEMPTS).toBe(5);
   });
 
   it('accepts supported environments and converts the port to a number', () => {
@@ -101,7 +126,7 @@ describe('validateEnvironment', () => {
       MYSQL_PASSWORD: 'production-password',
       OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
       OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
-      ...productionAuthEnvironment,
+      ...productionRequiredEnvironment,
     });
 
     expect(environment.SWAGGER_ENABLED).toBe(false);
@@ -116,7 +141,7 @@ describe('validateEnvironment', () => {
       MYSQL_PASSWORD: 'production-password',
       OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
       OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
-      ...productionAuthEnvironment,
+      ...productionRequiredEnvironment,
     });
 
     expect(environment.SWAGGER_ENABLED).toBe(true);
@@ -166,7 +191,7 @@ describe('validateEnvironment', () => {
         NODE_ENV: 'production',
         OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
         OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
-        ...productionAuthEnvironment,
+        ...productionRequiredEnvironment,
       }),
     ).toThrow('Environment validation failed for: MYSQL_PASSWORD');
   });
@@ -176,16 +201,30 @@ describe('validateEnvironment', () => {
       validateEnvironment({
         NODE_ENV: 'production',
         MYSQL_PASSWORD: 'production-password',
-        ...productionAuthEnvironment,
+        ...productionRequiredEnvironment,
       }),
     ).toThrow(
       'Environment validation failed for: OBJECT_STORAGE_ACCESS_KEY, OBJECT_STORAGE_SECRET_KEY',
     );
   });
 
+  it('requires the deployed mail sender, credentials, and queue namespace', () => {
+    expect(() =>
+      validateEnvironment({
+        NODE_ENV: 'production',
+        MYSQL_PASSWORD: 'production-password',
+        OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
+        OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
+        ...productionAuthEnvironment,
+      }),
+    ).toThrow(
+      'Environment validation failed for: MAIL_FROM_ADDRESS, MAIL_GMAIL_CLIENT_ID, MAIL_GMAIL_CLIENT_SECRET, MAIL_GMAIL_REFRESH_TOKEN, MAIL_GMAIL_USER, NOTIFICATION_QUEUE_PREFIX',
+    );
+  });
+
   it('requires an explicit valid hotel timezone in production', () => {
     const withoutHotelTimezone = Object.fromEntries(
-      Object.entries(productionAuthEnvironment).filter(
+      Object.entries(productionRequiredEnvironment).filter(
         ([key]) => key !== 'HOTEL_TIMEZONE',
       ),
     );

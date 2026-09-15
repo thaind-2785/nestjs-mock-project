@@ -23,9 +23,6 @@ import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
 import { createTypeOrmOptions } from '../src/database/database.options';
-import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
-import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
-import { CreateBookingCoreSchema1788580000000 } from '../src/database/migrations/1788580000000-CreateBookingCoreSchema';
 import { Amenity } from '../src/rooms/entities/amenity.entity';
 import { RoomAmenity } from '../src/rooms/entities/room-amenity.entity';
 import { RoomTime } from '../src/rooms/entities/room-time.entity';
@@ -39,6 +36,7 @@ import { UserRoleHistory } from '../src/users/entities/user-role-history.entity'
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
 import { UserRole, UserStatus } from '../src/users/entities/user.enums';
+import { applicationMigrations } from './fixtures/application-migrations';
 
 jest.setTimeout(30_000);
 
@@ -101,11 +99,7 @@ describe('Phase 4 booking foundation persistence', () => {
             IdempotencyKey,
             OutboxEvent,
           ],
-          migrations: [
-            CreateAuthRbacSchema1788380000000,
-            CreateRoomCatalogSchema1788490000000,
-            CreateBookingCoreSchema1788580000000,
-          ],
+          migrations: applicationMigrations,
         },
       ),
     );
@@ -124,6 +118,7 @@ describe('Phase 4 booking foundation persistence', () => {
   });
 
   beforeEach(async () => {
+    await dataSource.query('DELETE FROM email_deliveries');
     await dataSource.query('DELETE FROM outbox_events');
     await dataSource.query('DELETE FROM idempotency_keys');
     await dataSource.query('DELETE FROM booking_change_history');
@@ -1414,6 +1409,9 @@ describe('Phase 4 booking foundation persistence', () => {
   });
 
   it('reverts only the Phase 4 schema and reapplies it cleanly', async () => {
+    // The Phase 5 delivery schema is stacked on this one and comes off first; it
+    // refuses its own revert once a delivery exists, which this suite never writes.
+    await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
     expect(await phaseFourTables()).toEqual([]);
 

@@ -18,15 +18,13 @@ import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
 import { createTypeOrmOptions } from '../src/database/database.options';
-import { CreateAuthRbacSchema1788380000000 } from '../src/database/migrations/1788380000000-CreateAuthRbacSchema';
-import { CreateRoomCatalogSchema1788490000000 } from '../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
-import { CreateBookingCoreSchema1788580000000 } from '../src/database/migrations/1788580000000-CreateBookingCoreSchema';
 import { RoomTime } from '../src/rooms/entities/room-time.entity';
 import { RoomType } from '../src/rooms/entities/room-type.entity';
 import { Room } from '../src/rooms/entities/room.entity';
 import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { User } from '../src/users/entities/user.entity';
 import { UserRole } from '../src/users/entities/user.enums';
+import { applicationMigrations } from './fixtures/application-migrations';
 
 jest.setTimeout(30_000);
 
@@ -102,11 +100,7 @@ describe('P4-T02 booking create API', () => {
           MYSQL_DATABASE: disposableDatabase,
         }),
         {
-          migrations: [
-            CreateAuthRbacSchema1788380000000,
-            CreateRoomCatalogSchema1788490000000,
-            CreateBookingCoreSchema1788580000000,
-          ],
+          migrations: applicationMigrations,
         },
       ),
     );

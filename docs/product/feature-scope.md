@@ -53,5 +53,6 @@
 
 - Multi-hotel/property support, room inventory quantities, promotions, taxes,
   refunds, check-in/check-out operations, housekeeping, and multi-currency conversion.
-- The payment provider, cloud vendor, Gmail transport choice, and production deploy
-  target. Their adapters must remain replaceable.
+- The payment provider, cloud vendor, and production deploy target. Their adapters
+  must remain replaceable. `SPEC-007` selects the mail transport: Gmail SMTP with
+  OAuth2 when deployed and Mailpit locally, behind one replaceable sender port.

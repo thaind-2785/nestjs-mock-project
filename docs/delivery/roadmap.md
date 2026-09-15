@@ -33,7 +33,9 @@ one platform capability at a time.
 
 - Frontend origin/callback URLs and OAuth handoff mechanism before Phase 2.
 - Production object storage and file limits before Phase 3.
-- Gmail SMTP versus Gmail API and sender identity before Phase 5.
+- Phase 5 choice settled in `SPEC-007`: Gmail SMTP with OAuth2 in deployment,
+  Mailpit through the same SMTP port locally/CI, and sender identity from validated
+  environment configuration.
 - Maximum export rows/memory/timeout before Phase 6.
 - Deployment target, migration runner, secret store, and rollback method before Phase 8.
 - Revenue definition and payment provider before optional reporting/payment.

@@ -1,0 +1,22 @@
+{
+  "booking.confirmed.v1": {
+    "subject": "Đặt phòng {{bookingId}} đã được xác nhận",
+    "text": "Đặt phòng {{bookingId}} của bạn đã được xác nhận.\n\nPhòng: {{roomNumber}}\nKỳ lưu trú: {{checkIn}} đến {{checkOut}}\nTrạng thái: {{status}}\nGiá: {{priceAmount}} {{currency}}",
+    "html": "<p>Đặt phòng <strong>{{bookingId}}</strong> của bạn đã được xác nhận.</p><dl><dt>Phòng</dt><dd>{{roomNumber}}</dd><dt>Kỳ lưu trú</dt><dd>{{checkIn}} đến {{checkOut}}</dd><dt>Trạng thái</dt><dd>{{status}}</dd><dt>Giá</dt><dd>{{priceAmount}} {{currency}}</dd></dl>"
+  },
+  "booking.rejected.v1": {
+    "subject": "Đặt phòng {{bookingId}} đã bị từ chối",
+    "text": "Đặt phòng {{bookingId}} của bạn đã bị từ chối.\n\nPhòng: {{roomNumber}}\nKỳ lưu trú: {{checkIn}} đến {{checkOut}}\nTrạng thái: {{status}}\nLý do: {{reason}}",
+    "html": "<p>Đặt phòng <strong>{{bookingId}}</strong> của bạn đã bị từ chối.</p><dl><dt>Phòng</dt><dd>{{roomNumber}}</dd><dt>Kỳ lưu trú</dt><dd>{{checkIn}} đến {{checkOut}}</dd><dt>Trạng thái</dt><dd>{{status}}</dd><dt>Lý do</dt><dd>{{reason}}</dd></dl>"
+  },
+  "booking.changed.v1": {
+    "subject": "Đặt phòng {{bookingId}} đã được cập nhật",
+    "text": "Đặt phòng {{bookingId}} của bạn đã được cập nhật.\n\nPhòng trước: {{beforeRoom}}\nKỳ lưu trú trước: {{beforeCheckIn}} đến {{beforeCheckOut}}\nPhòng mới: {{roomNumber}}\nKỳ lưu trú mới: {{afterCheckIn}} đến {{afterCheckOut}}\nTrạng thái: {{status}}\nGiá: {{priceAmount}} {{currency}}\nLý do: {{reason}}",
+    "html": "<p>Đặt phòng <strong>{{bookingId}}</strong> của bạn đã được cập nhật.</p><dl><dt>Phòng trước</dt><dd>{{beforeRoom}}</dd><dt>Kỳ lưu trú trước</dt><dd>{{beforeCheckIn}} đến {{beforeCheckOut}}</dd><dt>Phòng mới</dt><dd>{{roomNumber}}</dd><dt>Kỳ lưu trú mới</dt><dd>{{afterCheckIn}} đến {{afterCheckOut}}</dd><dt>Trạng thái</dt><dd>{{status}}</dd><dt>Giá</dt><dd>{{priceAmount}} {{currency}}</dd><dt>Lý do</dt><dd>{{reason}}</dd></dl>"
+  },
+  "booking.cancelled-by-admin.v1": {
+    "subject": "Đặt phòng {{bookingId}} đã bị hủy",
+    "text": "Đặt phòng {{bookingId}} của bạn đã bị quản trị viên hủy.\n\nPhòng: {{roomNumber}}\nKỳ lưu trú: {{checkIn}} đến {{checkOut}}\nTrạng thái: {{status}}\nLý do: {{reason}}",
+    "html": "<p>Đặt phòng <strong>{{bookingId}}</strong> của bạn đã bị quản trị viên hủy.</p><dl><dt>Phòng</dt><dd>{{roomNumber}}</dd><dt>Kỳ lưu trú</dt><dd>{{checkIn}} đến {{checkOut}}</dd><dt>Trạng thái</dt><dd>{{status}}</dd><dt>Lý do</dt><dd>{{reason}}</dd></dl>"
+  }
+}

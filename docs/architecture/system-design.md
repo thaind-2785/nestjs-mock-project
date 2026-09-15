@@ -46,8 +46,17 @@ flowchart LR
 ## Reliability and security
 
 - Use an outbox row written in the booking transaction. Workers claim with expiring
-  leases, recover abandoned claims, and deduplicate logical delivery by outbox,
-  recipient, and template before marking the event processed.
+  leases, recover abandoned claims, and deduplicate logical delivery by outbox and
+  template before marking the event processed. The first preparation snapshots the
+  owner's current normalized email and deployment locale in that delivery row; every
+  retry reuses those values even if the account email or default locale changes.
+- Notification preparation accepts only the four allowlisted `schemaVersion: 1`
+  booking events. It validates the complete payload before selecting a one-to-one
+  template, renders catalog-parity-checked English or Vietnamese text/HTML, escapes
+  every HTML variable, and derives the subject, Message-ID, and correlation header
+  without placing free-text reasons in headers. Account status is deliberately not
+  a recipient filter: an inactive owner still receives notice of an administrator's
+  change to an existing booking.
 - OAuth uses Authorization Code flow, PKCE where the client shape supports it, and
   exact redirect URI allowlists. The callback accepts an identity only after Google's
   published keys verify the ID-token signature with an explicit algorithm allowlist;

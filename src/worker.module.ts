@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { AppConfigModule } from './config/app-config.module';
 import { DatabaseModule } from './database/database.module';
 import { NotificationsModule } from './notifications/notifications.module';
-import { WorkerHeartbeat } from './worker-heartbeat';
 
 /**
  * The notification worker runs as its own Nest application context: no controllers,
@@ -12,6 +11,5 @@ import { WorkerHeartbeat } from './worker-heartbeat';
  */
 @Module({
   imports: [AppConfigModule, DatabaseModule, NotificationsModule],
-  providers: [WorkerHeartbeat],
 })
 export class WorkerModule {}

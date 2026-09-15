@@ -1,6 +1,5 @@
 import { AppModule } from './app.module';
 import { NotificationsModule } from './notifications/notifications.module';
-import { WorkerHeartbeat } from './worker-heartbeat';
 import { WorkerModule } from './worker.module';
 
 function importsOf(module: object): unknown[] {
@@ -14,9 +13,9 @@ describe('WorkerModule', () => {
     expect(importsOf(WorkerModule)).toContain(NotificationsModule);
     expect(importsOf(WorkerModule)).not.toContain(AppModule);
     expect(Reflect.getMetadata('controllers', WorkerModule)).toBeUndefined();
-    expect(Reflect.getMetadata('providers', WorkerModule)).toEqual([
-      WorkerHeartbeat,
-    ]);
+    // The relay's poll loop is what holds the process open now, so the worker shell
+    // owns no providers of its own.
+    expect(Reflect.getMetadata('providers', WorkerModule)).toBeUndefined();
   });
 
   it('keeps notification delivery out of the API process', () => {

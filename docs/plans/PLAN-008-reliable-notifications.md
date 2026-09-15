@@ -4,7 +4,8 @@
 - Status: In progress (approved 2026-09-14)
 - Owner: Project owner
 - Reviewer (must be independent): Independent agent reviews `REVIEW-030` (slices
-  `P5-T01`, `P5-T02`) and `REVIEW-031` (slice `P5-T03`)
+  `P5-T01`, `P5-T02`), `REVIEW-031` (slice `P5-T03`), and `REVIEW-032` (slice
+  `P5-T04`)
 
 ## Constraints and risks
 
@@ -50,7 +51,7 @@
 | `P5-T01` | Delivery decisions, configuration, and worker entrypoint are fixed | None                        | Config and application-context unit tests     | Complete |
 | `P5-T02` | Outbox failure and email-delivery state persist safely             | Phase 5 notification schema | Real-MySQL migration/constraint integration   | Complete |
 | `P5-T03` | Four versioned events render safe bilingual messages               | None                        | Parser/template/escaping unit and integration | Complete |
-| `P5-T04` | MySQL events reach BullMQ with lease/crash recovery                | Use P5-T02 schema           | Real MySQL/Redis concurrency integration      | Pending  |
+| `P5-T04` | MySQL events reach BullMQ with lease/crash recovery                | Use P5-T02 schema           | Real MySQL/Redis concurrency integration      | Complete |
 | `P5-T05` | Worker sends through Mailpit/Gmail ports with bounded retries      | Use P5-T02 schema           | SMTP contract and real-Mailpit integration    | Pending  |
 | `P5-T06` | Operators can observe, redrive, and shut down delivery safely      | None unless review requires | CLI, metrics/log, shutdown integration        | Pending  |
 | `P5-T07` | Booking-to-email journey and Phase 5 handoff are complete          | Revert/reapply proof        | HTTP/worker/Mailpit E2E and full gate         | Pending  |
@@ -138,6 +139,12 @@
 - **Notes:** Use `<outbox UUID>-<attempt>` as BullMQ job ID and BullMQ `attempts: 1`.
   The job carries only event ID, token, and attempt. Update/release a row only when
   its current claim token still matches.
+- **Status:** Complete (2026-09-15). The claim runs two index-ordered
+  `FOR UPDATE SKIP LOCKED` statements at READ COMMITTED, recovering abandoned leases
+  before taking new arrivals; the database issues every lease and computes every
+  retry time; a refused handoff returns the claim and its attempt. `WorkerHeartbeat`
+  is deleted - the poll loop is what holds the worker open. `REVIEW-032` returned one
+  High and four Medium findings, all fixed and pinned by mutations.
 
 ### P5-T05 — SMTP adapters and delivery worker
 
@@ -314,5 +321,14 @@ booking/outbox/delivery data to make a retry pass.
   failure, and money display (`R31-02`) was settled by the owner the same day:
   recipients see a grouped VND amount, and a currency with decimals fails rendering
   instead of emailing a figure wrong by two decimal places.
+- 2026-09-15 (`P5-T04`): `attempts` is the delivery budget, so a queue handoff that
+  never reached a worker returns it; a recovered lease still spends one, because the
+  worker that stopped reporting may already have reached SMTP.
+- 2026-09-15 (`P5-T04`): the claim orders only by `available_at` in SQL and breaks
+  ties in memory. A locking read that must sort reads - and locks - every eligible
+  row before `LIMIT` applies, which let one dispatcher lock the whole backlog.
+- 2026-09-15 (`P5-T04`): every lease and every retry time is computed by MySQL. The
+  relay is designed for several worker hosts, and a host clock ahead by more than one
+  lease would otherwise treat a live claim as abandoned and send the same mail twice.
 - Metric backend remains an implementation detail to record here and in `ADR-0006`
   when selected.

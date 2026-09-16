@@ -24,6 +24,7 @@ import { notificationBackoffMs } from './notification-backoff';
 import { NOTIFICATION_WORKER_CLIENT } from './notification.tokens';
 import { NotificationWorkerLifecycle } from './notification-worker-lifecycle';
 import type { NotificationJobData } from './outbox-dispatcher.types';
+import { SendAttemptRepository } from './send-attempt.repository';
 import { classifySmtpFailure } from './smtp-error';
 
 /**
@@ -45,6 +46,7 @@ export class DeliveryWorkerService
     private readonly database: DatabaseConnectionService,
     private readonly preparation: DeliveryPreparationService,
     private readonly results: DeliveryResultRepository,
+    private readonly sendAttempts: SendAttemptRepository,
     @Inject(EMAIL_SENDER) private readonly sender: EmailSender,
     @Inject(NOTIFICATION_WORKER_CLIENT) private readonly client: Redis,
     @Inject(notificationsConfig.KEY)
@@ -88,6 +90,20 @@ export class DeliveryWorkerService
     const { prepared } = claimed;
     try {
       const sent = await this.sender.send(prepared.message);
+      // Recorded before the result is written, and deliberately outside the claim.
+      // If the next transaction finds the claim gone, this row is the only surviving
+      // evidence that a guest was mailed - without it a later permanent failure marks
+      // the delivery FAILED and an operator redrives a message that already went out.
+      // The window is not closed, only narrowed from a whole transaction to one
+      // insert: a process killed between the provider's acceptance and this statement
+      // still leaves no trace.
+      await this.sendAttempts.recordAccepted(dataSource.manager, {
+        outboxEventId: data.outboxEventId,
+        templateKey: prepared.templateKey,
+        providerMessageId: sent.providerMessageId,
+        claimToken: data.claimToken,
+        attempt: data.attempt,
+      });
       const held = await dataSource.transaction((manager) =>
         this.results.markSent(manager, {
           ...this.resultKey(data, prepared),

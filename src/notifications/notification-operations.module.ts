@@ -3,6 +3,7 @@ import { AppConfigModule } from '../config/app-config.module';
 import { DatabaseModule } from '../database/database.module';
 import { NotificationRedriveRepository } from './notification-redrive.repository';
 import { NotificationRedriveService } from './notification-redrive.service';
+import { SendAttemptRepository } from './send-attempt.repository';
 
 /**
  * Operator tooling only: the database and the redrive path, and deliberately not
@@ -16,7 +17,11 @@ import { NotificationRedriveService } from './notification-redrive.service';
  */
 @Module({
   imports: [AppConfigModule, DatabaseModule],
-  providers: [NotificationRedriveRepository, NotificationRedriveService],
+  providers: [
+    NotificationRedriveRepository,
+    NotificationRedriveService,
+    SendAttemptRepository,
+  ],
   exports: [NotificationRedriveService],
 })
 export class NotificationOperationsModule {}

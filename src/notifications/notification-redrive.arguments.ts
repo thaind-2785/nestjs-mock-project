@@ -21,16 +21,22 @@ const controlCharacterPattern = /[\u0000-\u001f\u007f\u0085\u2028\u2029]/;
  * a newline is either a paste accident or an attempt to forge a second log line.
  */
 export function parseRedriveArguments(argumentsList: string[]): RedriveRequest {
-  if (argumentsList.length !== 4) throw new Error(redriveInvalidArgumentsCode);
+  // `--allow-duplicate` is a bare flag, so it is stripped before the pairs are read
+  // rather than special-cased inside the loop.
+  const flags = argumentsList.filter((value) => value === '--allow-duplicate');
+  if (flags.length > 1) throw new Error(redriveInvalidArgumentsCode);
+  const allowDuplicate = flags.length === 1;
+  const pairs = argumentsList.filter((value) => value !== '--allow-duplicate');
+  if (pairs.length !== 4) throw new Error(redriveInvalidArgumentsCode);
 
   const values = new Map<string, string>();
-  for (let index = 0; index < argumentsList.length; index += 2) {
-    const flag = argumentsList[index];
+  for (let index = 0; index < pairs.length; index += 2) {
+    const flag = pairs[index];
     if (flag !== '--event-id' && flag !== '--reason') {
       throw new Error(redriveInvalidArgumentsCode);
     }
     if (values.has(flag)) throw new Error(redriveInvalidArgumentsCode);
-    values.set(flag, argumentsList[index + 1]);
+    values.set(flag, pairs[index + 1]);
   }
 
   const outboxEventId = values.get('--event-id') ?? '';
@@ -45,5 +51,5 @@ export function parseRedriveArguments(argumentsList: string[]): RedriveRequest {
   ) {
     throw new Error(redriveInvalidArgumentsCode);
   }
-  return { outboxEventId, reason };
+  return { outboxEventId, reason, allowDuplicate };
 }

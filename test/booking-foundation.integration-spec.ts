@@ -1409,8 +1409,12 @@ describe('Phase 4 booking foundation persistence', () => {
   });
 
   it('reverts only the Phase 4 schema and reapplies it cleanly', async () => {
-    // The Phase 5 delivery schema is stacked on this one and comes off first; it
-    // refuses its own revert once a delivery exists, which this suite never writes.
+    // Two Phase 5 schemas are stacked on this one and come off first: the acceptance
+    // record, then the delivery schema. Each refuses its own revert once the evidence
+    // it protects exists, which this suite never writes. The count is deliberately
+    // explicit - a new migration should make a maintainer look at this test rather
+    // than let a loop quietly absorb it.
+    await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
     expect(await phaseFourTables()).toEqual([]);

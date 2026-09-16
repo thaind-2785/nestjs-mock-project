@@ -9,6 +9,12 @@ export interface RedriveRequest {
   outboxEventId: string;
   /** Operator justification. Its length is audited; its text never is. */
   reason: string;
+  /**
+   * Set only when the operator has established that the guest did not receive a
+   * message the provider already accepted. Without it, recorded evidence of an
+   * accepted send refuses the redrive.
+   */
+  allowDuplicate: boolean;
 }
 
 export interface RedriveResult {

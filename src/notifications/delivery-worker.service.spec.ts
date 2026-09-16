@@ -12,6 +12,7 @@ import { EmailDeliveryLocale } from './entities/notification.enums';
 import { EmailSender } from './email-sender';
 import { NotificationEventError } from './notification-event';
 import type { NotificationJobData } from './outbox-dispatcher.types';
+import { SendAttemptRepository } from './send-attempt.repository';
 import { smtpErrorCodes } from './smtp-error';
 
 const job: NotificationJobData = {
@@ -77,17 +78,27 @@ function createWorker(options: {
       return Promise.resolve({ providerMessageId: '<provider@id>' });
     });
   const sender = { send } as unknown as EmailSender;
+  const recordAccepted = jest.fn(() => {
+    order.push('recordAccepted');
+    return Promise.resolve();
+  });
+  const sendAttempts = {
+    recordAccepted,
+    countAccepted: jest.fn(() => Promise.resolve(0)),
+  } as unknown as SendAttemptRepository;
   const client = { quit: jest.fn() } as unknown as never;
   const service = new DeliveryWorkerService(
     database,
     preparation,
     results,
+    sendAttempts,
     sender,
     client,
     configuration,
   );
   return {
     service,
+    recordAccepted,
     send,
     markSent,
     markRetry,
@@ -107,10 +118,18 @@ describe('DeliveryWorkerService', () => {
     // The provider call happens between two transactions, never inside one: no
     // database connection is held across the network, and no accepted message can be
     // undone by a rollback.
+    //
+    // The acceptance is appended immediately after the send and before the result
+    // transaction, and outside any transaction of its own - it adds no open/commit
+    // pair here. Both positions are load-bearing. Recording it before the send would
+    // claim a delivery the provider might still refuse; recording it inside the result
+    // transaction would tie the evidence to holding a claim, which is exactly the case
+    // where it is the only evidence left.
     expect(harness.order).toEqual([
       'transaction:open',
       'transaction:commit',
       'send',
+      'recordAccepted',
       'transaction:open',
       'transaction:commit',
     ]);

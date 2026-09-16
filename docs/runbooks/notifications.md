@@ -172,30 +172,42 @@ attempts, clears the terminal timestamps, and returns a `FAILED` delivery row to
 attempts, and `last_error_code`, so the history of the message is intact and the retry
 goes to the address the record already claims.
 
-**Check first whether the message already went out.** A delivery reading `FAILED` is
-not proof the provider refused it. If a worker lost its claim after the provider
-accepted the mail, the send is reported as `claim_lost_after_send`, the delivery is
-left `PENDING`, and a later attempt can then fail permanently and mark it `FAILED`.
-Redriving that event mails the guest a second time, and the `SENT` refusal below does
-not fire because no row ever reached `SENT`. Before redriving, grep the worker log for
-that event:
+**A delivery reading `FAILED` is not proof the provider refused it.** If a worker lost
+its claim after the provider accepted the mail, it writes no delivery state at all, and
+a later attempt can fail permanently and mark the row `FAILED` although the guest
+already has the message. The `SENT` refusal cannot catch that, because no row ever
+reached `SENT`.
 
-```bash
-grep '<outbox-event-id>' worker.log | grep notification_delivery_finished
+Every acceptance is therefore appended to `email_send_attempts`, independently of who
+holds the claim, and the CLI refuses a redrive when one exists:
+
+```sql
+SELECT attempt, provider_message_id, accepted_at
+FROM email_send_attempts WHERE outbox_event_id = ? ORDER BY accepted_at;
 ```
 
-A `claim_lost_after_send` line means at least one message was very likely delivered;
-treat a redrive as a deliberate duplicate, not as a repair. If the log has rotated, you
-cannot rule it out.
+If the guest has confirmed that nothing arrived, override it deliberately:
+
+```bash
+npm run notifications:redrive-failed -- \
+  --event-id <uuid> --reason "guest confirmed nothing arrived" --allow-duplicate
+```
+
+The override forgives the acceptance record, not a `SENT` delivery. One window stays
+open: a process killed between the provider's acceptance and the insert records
+nothing, so this narrows the ambiguity rather than removing it. The
+`claim_lost_after_send` line in `notification_delivery_finished` remains the
+corroborating signal.
 
 What it refuses, and why:
 
-| Code                                         | Why                                                                    |
-| -------------------------------------------- | ---------------------------------------------------------------------- |
-| `NOTIFICATION_REDRIVE_EVENT_NOT_FOUND`       | No such event; check the id before assuming loss                       |
-| `NOTIFICATION_REDRIVE_EVENT_NOT_FAILED`      | `PENDING`/`PROCESSING` are already on their way; `PROCESSED` succeeded |
-| `NOTIFICATION_REDRIVE_DELIVERY_ALREADY_SENT` | The provider accepted the mail; redriving would send it twice          |
-| `INVALID_CLI_ARGUMENTS`                      | Malformed id, or a missing/over-long/control-character reason          |
+| Code                                             | Why                                                                                                                                                     |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NOTIFICATION_REDRIVE_EVENT_NOT_FOUND`           | No such event; check the id before assuming loss                                                                                                        |
+| `NOTIFICATION_REDRIVE_EVENT_NOT_FAILED`          | `PENDING`/`PROCESSING` are already on their way; `PROCESSED` succeeded                                                                                  |
+| `NOTIFICATION_REDRIVE_DELIVERY_ALREADY_SENT`     | The delivery succeeded; redriving would send it twice                                                                                                   |
+| `NOTIFICATION_REDRIVE_PROVIDER_ALREADY_ACCEPTED` | A provider acceptance is recorded although no delivery reads `SENT`. Override with `--allow-duplicate` only after confirming the guest received nothing |
+| `INVALID_CLI_ARGUMENTS`                          | Malformed id, or a missing/over-long/control-character reason                                                                                           |
 
 Two operators redriving the same event serialize on the row lock: the second reads the
 state the first committed and is refused. Running it beside live workers is safe - it

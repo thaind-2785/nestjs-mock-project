@@ -21,6 +21,7 @@ import {
 } from './notification.tokens';
 import { NotificationBacklogRepository } from './notification-backlog.repository';
 import { NotificationBacklogService } from './notification-backlog.service';
+import { SendAttemptRepository } from './send-attempt.repository';
 import { SmtpEmailSender } from './smtp-email-sender';
 import { OutboxClaimRepository } from './outbox-claim.repository';
 import { OutboxDispatcherService } from './outbox-dispatcher.service';
@@ -52,6 +53,7 @@ import { OutboxDispatcherService } from './outbox-dispatcher.service';
     DeliveryWorkerService,
     NotificationBacklogRepository,
     NotificationBacklogService,
+    SendAttemptRepository,
     { provide: EMAIL_SENDER, useClass: SmtpEmailSender },
     {
       provide: NOTIFICATION_QUEUE_CLIENT,
@@ -118,6 +120,7 @@ import { OutboxDispatcherService } from './outbox-dispatcher.service';
     DeliveryWorkerService,
     NotificationBacklogRepository,
     NotificationBacklogService,
+    SendAttemptRepository,
     EMAIL_SENDER,
   ],
 })

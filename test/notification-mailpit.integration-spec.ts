@@ -16,6 +16,7 @@ import { DatabaseConnectionService } from '../src/database/database-connection.s
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { DeliveryPreparationService } from '../src/notifications/delivery-preparation.service';
 import { DeliveryResultRepository } from '../src/notifications/delivery-result.repository';
+import { SendAttemptRepository } from '../src/notifications/send-attempt.repository';
 import { DeliveryWorkerService } from '../src/notifications/delivery-worker.service';
 import { EmailDelivery } from '../src/notifications/entities/email-delivery.entity';
 import {
@@ -118,6 +119,7 @@ describe('Phase 5 delivery through Mailpit', () => {
       database,
       new DeliveryPreparationService(templates),
       new DeliveryResultRepository(),
+      new SendAttemptRepository(),
       new SmtpEmailSender(configuration),
       queueClient,
       configuration,
@@ -172,6 +174,60 @@ describe('Phase 5 delivery through Mailpit', () => {
     expect(event.status).toBe(OutboxEventStatus.Processed);
     expect(event.lockedBy).toBeNull();
     expect(event.lastErrorCode).toBeNull();
+  });
+
+  it('mails the recipient the first attempt snapshotted, not the current owner address', async () => {
+    const owner = await insertOwner('original@hotel.test');
+    const eventId = await insertEvent(owner);
+    // A real first attempt against an unreachable provider: it creates the delivery
+    // row, and with it the recipient snapshot, then reschedules.
+    const first = await dispatchOne();
+    await expect(offlineWorker().process(first)).resolves.toBe('retry');
+    expect((await readDelivery(eventId)).recipient).toBe('original@hotel.test');
+
+    await dataSource.query(
+      `UPDATE users SET email = 'changed@hotel.test' WHERE id = ?`,
+      [owner],
+    );
+    await dataSource.query(
+      `UPDATE outbox_events SET available_at = NOW(6) WHERE id = ?`,
+      [eventId],
+    );
+
+    const retry = await dispatchOne();
+    await expect(worker.process(retry)).resolves.toBe('sent');
+
+    // Re-resolving the owner here would send to an address the delivery record does
+    // not claim, and would make the unique key allow a second logical message.
+    const messages = await mailpitMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].To[0].Address).toBe('original@hotel.test');
+    const deliveries: Array<{ total: string | number }> =
+      await dataSource.query(
+        'SELECT COUNT(*) AS total FROM email_deliveries WHERE outbox_event_id = ?',
+        [eventId],
+      );
+    expect(Number(deliveries[0].total)).toBe(1);
+  });
+
+  it('still delivers to an owner whose account was deactivated', async () => {
+    const owner = await insertOwner('deactivated@hotel.test');
+    await dataSource.query(
+      `UPDATE users SET status = 'INACTIVE' WHERE id = ?`,
+      [owner],
+    );
+    const eventId = await insertEvent(owner);
+
+    const job = await dispatchOne();
+    await expect(worker.process(job)).resolves.toBe('sent');
+
+    // Deactivation revokes application access. It does not revoke a booking the hotel
+    // already decided on, and withholding that mail would leave a guest uninformed
+    // about a stay they still hold.
+    const messages = await mailpitMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].To[0].Address).toBe('deactivated@hotel.test');
+    expect((await readDelivery(eventId)).status).toBe(EmailDeliveryStatus.Sent);
   });
 
   it('sends nothing more when the same job arrives twice', async () => {
@@ -326,6 +382,7 @@ describe('Phase 5 delivery through Mailpit', () => {
       new DatabaseConnectionService(dataSource),
       new DeliveryPreparationService(new EmailTemplateService(configuration)),
       new DeliveryResultRepository(),
+      new SendAttemptRepository(),
       {
         send: async () => {
           const [row] = await dataSource.query<Array<{ lockExpiresAt: Date }>>(
@@ -372,6 +429,7 @@ describe('Phase 5 delivery through Mailpit', () => {
       new DatabaseConnectionService(dataSource),
       new DeliveryPreparationService(new EmailTemplateService(configuration)),
       new DeliveryResultRepository(),
+      new SendAttemptRepository(),
       {
         send: async () => {
           // The lease expired and a dispatcher recovered the claim while this send
@@ -450,6 +508,7 @@ describe('Phase 5 delivery through Mailpit', () => {
       new DatabaseConnectionService(dataSource),
       new DeliveryPreparationService(new EmailTemplateService(configuration)),
       new DeliveryResultRepository(),
+      new SendAttemptRepository(),
       new SmtpEmailSender(configuration),
       queueClient,
       configuration,

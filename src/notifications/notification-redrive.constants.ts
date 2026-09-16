@@ -7,6 +7,7 @@ export const redriveOutcomeCodes = {
   eventNotFound: 'NOTIFICATION_REDRIVE_EVENT_NOT_FOUND',
   eventNotFailed: 'NOTIFICATION_REDRIVE_EVENT_NOT_FAILED',
   deliveryAlreadySent: 'NOTIFICATION_REDRIVE_DELIVERY_ALREADY_SENT',
+  providerAlreadyAccepted: 'NOTIFICATION_REDRIVE_PROVIDER_ALREADY_ACCEPTED',
 } as const;
 
 /** The CLI rejects its own input before it opens a database connection. */

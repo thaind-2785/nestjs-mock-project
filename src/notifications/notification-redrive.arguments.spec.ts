@@ -16,7 +16,11 @@ describe('parseRedriveArguments', () => {
         '--reason',
         '  mailbox quota restored  ',
       ]),
-    ).toEqual({ outboxEventId: eventId, reason: 'mailbox quota restored' });
+    ).toEqual({
+      outboxEventId: eventId,
+      reason: 'mailbox quota restored',
+      allowDuplicate: false,
+    });
 
     expect(
       parseRedriveArguments([
@@ -25,7 +29,58 @@ describe('parseRedriveArguments', () => {
         '--event-id',
         eventId,
       ]),
-    ).toEqual({ outboxEventId: eventId, reason: 'sender domain re-verified' });
+    ).toEqual({
+      outboxEventId: eventId,
+      reason: 'sender domain re-verified',
+      allowDuplicate: false,
+    });
+  });
+
+  it('accepts the deliberate duplicate override', () => {
+    expect(
+      parseRedriveArguments([
+        '--event-id',
+        eventId,
+        '--reason',
+        'guest confirmed nothing arrived',
+        '--allow-duplicate',
+      ]),
+    ).toEqual({
+      outboxEventId: eventId,
+      reason: 'guest confirmed nothing arrived',
+      allowDuplicate: true,
+    });
+
+    // Position is not significant: it is a bare flag, not part of a pair.
+    expect(
+      parseRedriveArguments([
+        '--allow-duplicate',
+        '--event-id',
+        eventId,
+        '--reason',
+        'fixed',
+      ]).allowDuplicate,
+    ).toBe(true);
+  });
+
+  it('defaults to refusing a duplicate', () => {
+    expect(
+      parseRedriveArguments(['--event-id', eventId, '--reason', 'fixed'])
+        .allowDuplicate,
+    ).toBe(false);
+  });
+
+  it('refuses a repeated override flag', () => {
+    expect(() =>
+      parseRedriveArguments([
+        '--event-id',
+        eventId,
+        '--reason',
+        'fixed',
+        '--allow-duplicate',
+        '--allow-duplicate',
+      ]),
+    ).toThrow(redriveInvalidArgumentsCode);
   });
 
   it.each([

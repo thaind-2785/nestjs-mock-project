@@ -54,7 +54,7 @@
 | `P5-T04` | MySQL events reach BullMQ with lease/crash recovery                | Use P5-T02 schema           | Real MySQL/Redis concurrency integration      | Complete |
 | `P5-T05` | Worker sends through Mailpit/Gmail ports with bounded retries      | Use P5-T02 schema           | SMTP contract and real-Mailpit integration    | Complete |
 | `P5-T06` | Operators can observe, redrive, and shut down delivery safely      | None unless review requires | CLI, metrics/log, shutdown integration        | Complete |
-| `P5-T07` | Booking-to-email journey and Phase 5 handoff are complete          | Revert/reapply proof        | HTTP/worker/Mailpit E2E and full gate         | Pending  |
+| `P5-T07` | Booking-to-email journey and Phase 5 handoff are complete          | Revert/reapply proof        | HTTP/worker/Mailpit E2E and full gate         | Complete |
 
 ### P5-T01 — Decision, configuration, and worker foundation
 
@@ -399,5 +399,25 @@ booking/outbox/delivery data to make a retry pass.
   the redrive refusal does not fire and the guest is mailed twice. The runbook now
   requires a `claim_lost_after_send` check first. Persisting that marker durably so the
   CLI can refuse is deferred to `P5-T07` beside the crash-after-accept work.
+- 2026-09-16 (`P5-T07`): the journey E2E runs the relay and the consumer for real and
+  then only waits. Writing it found that the worker half cannot share the API's
+  connection: `EmailDelivery` lives in `NotificationsModule`, which `AppModule`
+  deliberately never imports, so the API's DataSource has no metadata for it. Two
+  connections is also what production runs.
+- 2026-09-16 (`P5-T07`): the three checks `REVIEW-033` deferred are covered by spawning
+  the compiled worker as a real process. `ts-node` per worker recompiles the project and
+  exhausted memory badly enough for the OS to kill the run, so the suite builds once and
+  spawns `node dist/worker`; 294s became 88s.
+- 2026-09-16 (`P5-T07`): crash-after-accept is deterministic rather than raced. A
+  purpose-built SMTP fixture turns "the provider has accepted" into a callback: the test
+  takes the outbox row lock while the worker waits for its `250`, so the result
+  transaction cannot commit, then kills the process once the acceptance row appears.
+- 2026-09-16 (`P5-T07`): `email_send_attempts` carries no foreign key to `outbox_events`,
+  unlike `email_deliveries`. An FK insert takes a shared lock on the parent row, which is
+  exactly the row a recovering worker may hold exclusively - the write that must never
+  wait would become the write that waits.
+- 2026-09-16 (`P5-T07`): two acceptance criteria had no test behind them - the recipient
+  snapshot surviving an owner email change, and delivery to a deactivated owner. Both are
+  now covered. The first initially failed and the test was wrong, not the product.
 - Metric backend remains an implementation detail to record here and in `ADR-0006`
   when selected.

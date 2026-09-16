@@ -3,6 +3,7 @@ import { EntityManager } from 'typeorm';
 import { OutboxEventStatus } from '../bookings/entities/booking.enums';
 import { EmailDeliveryStatus } from './entities/notification.enums';
 import { redriveOutcomeCodes } from './notification-redrive.constants';
+import { SendAttemptRepository } from './send-attempt.repository';
 import type {
   LockedDeliveryRow,
   LockedOutboxRow,
@@ -26,6 +27,8 @@ import type {
  */
 @Injectable()
 export class NotificationRedriveRepository {
+  constructor(private readonly sendAttempts: SendAttemptRepository) {}
+
   async redrive(
     manager: EntityManager,
     request: RedriveRequest,
@@ -54,6 +57,25 @@ export class NotificationRedriveRepository {
         redriveOutcomeCodes.deliveryAlreadySent,
         event.status,
       );
+    }
+
+    // A delivery reading FAILED is not proof the provider refused the mail. A worker
+    // that lost its claim after an acceptance writes no delivery state at all, so a
+    // later permanent failure can mark FAILED a message the guest already has. The
+    // append-only acceptance record is the only thing that knows, and refusing on it
+    // is what stops a redrive from being a silent duplicate.
+    if (!request.allowDuplicate) {
+      const accepted = await this.sendAttempts.countAccepted(
+        manager,
+        request.outboxEventId,
+      );
+      if (accepted > 0) {
+        return this.refuse(
+          request,
+          redriveOutcomeCodes.providerAlreadyAccepted,
+          event.status,
+        );
+      }
     }
 
     // Asserted rather than assumed. The `FOR UPDATE` above makes a zero here

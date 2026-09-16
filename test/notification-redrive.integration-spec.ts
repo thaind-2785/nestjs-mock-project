@@ -22,6 +22,7 @@ import {
   redriveOutcomeCodes,
 } from '../src/notifications/notification-redrive.constants';
 import { NotificationRedriveRepository } from '../src/notifications/notification-redrive.repository';
+import { SendAttemptRepository } from '../src/notifications/send-attempt.repository';
 import { NotificationRedriveService } from '../src/notifications/notification-redrive.service';
 import type { RedriveResult } from '../src/notifications/notification-redrive.types';
 import { applicationMigrations } from './fixtures/application-migrations';
@@ -79,7 +80,7 @@ describe('Phase 5 notification operations', () => {
     await dataSource.initialize();
     await dataSource.runMigrations();
 
-    redrives = new NotificationRedriveRepository();
+    redrives = new NotificationRedriveRepository(new SendAttemptRepository());
     backlog = new NotificationBacklogRepository();
     service = new NotificationRedriveService(
       new DatabaseConnectionService(dataSource),
@@ -88,6 +89,7 @@ describe('Phase 5 notification operations', () => {
   });
 
   beforeEach(async () => {
+    await dataSource.query('DELETE FROM email_send_attempts');
     await dataSource.query('DELETE FROM email_deliveries');
     await dataSource.query('DELETE FROM outbox_events');
   });
@@ -117,6 +119,7 @@ describe('Phase 5 notification operations', () => {
       const result = await service.redrive({
         outboxEventId: id,
         reason: 'mailbox quota restored',
+        allowDuplicate: false,
       });
 
       expect(result).toMatchObject({
@@ -150,7 +153,11 @@ describe('Phase 5 notification operations', () => {
         attempts: 4,
       });
 
-      await service.redrive({ outboxEventId: id, reason: 'dns record fixed' });
+      await service.redrive({
+        outboxEventId: id,
+        reason: 'dns record fixed',
+        allowDuplicate: false,
+      });
 
       const delivery = await readDelivery(id);
       // Re-resolving the owner here would mail an address the delivery record does
@@ -196,6 +203,62 @@ describe('Phase 5 notification operations', () => {
       expect((await readDelivery(id)).status).toBe(EmailDeliveryStatus.Sent);
     });
 
+    it('refuses when the provider already accepted a message for this event', async () => {
+      // The R35-02 scenario, reproduced from its durable evidence: the provider took
+      // the mail, the worker lost its claim before it could write the result, and a
+      // later attempt failed permanently. The delivery reads FAILED and no row ever
+      // reached SENT, so the SENT refusal cannot fire - only the acceptance record
+      // knows the guest was already mailed.
+      const id = await insertEvent({ status: OutboxEventStatus.Failed });
+      await insertDelivery(id, { status: EmailDeliveryStatus.Failed });
+      await recordAcceptedSend(id);
+
+      const result = await redrive(id);
+
+      expect(result).toMatchObject({
+        applied: false,
+        code: redriveOutcomeCodes.providerAlreadyAccepted,
+        deliveriesReset: 0,
+      });
+      expect((await readEvent(id)).status).toBe(OutboxEventStatus.Failed);
+    });
+
+    it('lets an operator override the acceptance record deliberately', async () => {
+      const id = await insertEvent({ status: OutboxEventStatus.Failed });
+      await insertDelivery(id, { status: EmailDeliveryStatus.Failed });
+      await recordAcceptedSend(id);
+
+      const result = await dataSource.transaction(redriveIsolation, (manager) =>
+        redrives.redrive(manager, {
+          outboxEventId: id,
+          reason: 'guest confirmed nothing arrived',
+          allowDuplicate: true,
+        }),
+      );
+
+      // A hard refusal with no way past it would be its own failure mode: a guest who
+      // genuinely never received the mail could never be mailed again.
+      expect(result.applied).toBe(true);
+      expect((await readEvent(id)).status).toBe(OutboxEventStatus.Pending);
+    });
+
+    it('still refuses a sent delivery even with the override', async () => {
+      const id = await insertEvent({ status: OutboxEventStatus.Failed });
+      await insertDelivery(id, { status: EmailDeliveryStatus.Sent });
+
+      const result = await dataSource.transaction(redriveIsolation, (manager) =>
+        redrives.redrive(manager, {
+          outboxEventId: id,
+          reason: 'override attempt',
+          allowDuplicate: true,
+        }),
+      );
+
+      // The override forgives missing evidence, not a delivery that plainly succeeded.
+      expect(result.code).toBe(redriveOutcomeCodes.deliveryAlreadySent);
+      expect(result.applied).toBe(false);
+    });
+
     it('refuses an identifier that matches no event', async () => {
       const result = await redrive(randomUUID());
 
@@ -217,6 +280,7 @@ describe('Phase 5 notification operations', () => {
     const firstResult = await redrives.redrive(first.manager, {
       outboxEventId: id,
       reason: 'first operator',
+      allowDuplicate: false,
     });
 
     // Started while the first transaction still holds the row lock.
@@ -228,6 +292,7 @@ describe('Phase 5 notification operations', () => {
         return await redrives.redrive(second.manager, {
           outboxEventId: id,
           reason: 'second operator',
+          allowDuplicate: false,
         });
       } finally {
         await second.commitTransaction();
@@ -259,7 +324,7 @@ describe('Phase 5 notification operations', () => {
     await insertDelivery(id, { status: EmailDeliveryStatus.Failed });
     const reason = 'guest asked again via ticket HD-4172';
 
-    await service.redrive({ outboxEventId: id, reason });
+    await service.redrive({ outboxEventId: id, reason, allowDuplicate: false });
 
     expect(logged).toHaveLength(1);
     expect(logged[0]).toMatchObject({
@@ -495,7 +560,11 @@ describe('Phase 5 notification operations', () => {
 
   async function redrive(outboxEventId: string): Promise<RedriveResult> {
     return dataSource.transaction(redriveIsolation, (manager) =>
-      redrives.redrive(manager, { outboxEventId, reason: 'cause corrected' }),
+      redrives.redrive(manager, {
+        outboxEventId,
+        reason: 'cause corrected',
+        allowDuplicate: false,
+      }),
     );
   }
 
@@ -524,6 +593,16 @@ describe('Phase 5 notification operations', () => {
       failedAt: terminal ? new Date() : null,
     });
     return id;
+  }
+
+  async function recordAcceptedSend(outboxEventId: string): Promise<void> {
+    await new SendAttemptRepository().recordAccepted(dataSource.manager, {
+      outboxEventId,
+      templateKey,
+      providerMessageId: '<provider-id@mailpit>',
+      claimToken: 'lost-claim-token',
+      attempt: 1,
+    });
   }
 
   async function insertDelivery(

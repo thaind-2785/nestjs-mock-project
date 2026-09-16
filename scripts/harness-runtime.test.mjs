@@ -783,6 +783,7 @@ test('selects progressive context from the canonical task-class routes', () => {
     'normalized_scope',
     'api_catalog',
     'test_strategy',
+    'mentor_feedback_checklist',
   ]);
   assert.equal(selected.sources[3].path, 'docs/api/endpoint-catalog.md');
 });

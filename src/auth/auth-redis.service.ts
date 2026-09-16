@@ -6,10 +6,7 @@ import { RateLimitService } from '../common/rate-limit/rate-limit.service';
 import { authConfig } from '../config/auth.config';
 import { authErrors } from './auth.errors';
 import { AUTH_REDIS_CLIENT } from './auth.tokens';
-import { OAuthTransaction } from './auth.types';
-
-/** The complete set of authentication budgets, so no caller can invent a scope. */
-export type AuthRateLimitScope = 'google-start' | 'google-callback' | 'refresh';
+import type { AuthRateLimitScope, OAuthTransaction } from './auth.types';
 
 @Injectable()
 export class AuthRedisService implements OnApplicationShutdown {

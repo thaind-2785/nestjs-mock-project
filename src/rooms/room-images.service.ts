@@ -12,20 +12,9 @@ import {
 } from '../files/entities/attachment.enums';
 import { RoomImageResponseDto } from './dto/room-image-response.dto';
 import { Room } from './entities/room.entity';
+import type { RoomImageSet, RoomImageUpload } from './room-images.types';
 import { lockRoom } from './room-lock';
 import { roomsErrors } from './rooms.errors';
-
-export interface RoomImageUpload {
-  associationType: AttachmentAssociationType;
-  uploaderUserId: string;
-  declaredMimeType: string;
-  body: Buffer;
-}
-
-export interface RoomImageSet {
-  thumbnail: RoomImageResponseDto | null;
-  album: RoomImageResponseDto[];
-}
 
 @Injectable()
 export class RoomImagesService {

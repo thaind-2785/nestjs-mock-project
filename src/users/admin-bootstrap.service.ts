@@ -4,8 +4,7 @@ import { DatabaseConnectionService } from '../database/database-connection.servi
 import { UserRoleHistory } from './entities/user-role-history.entity';
 import { User } from './entities/user.entity';
 import { RoleActorType, UserRole, UserStatus } from './entities/user.enums';
-
-export type AdminBootstrapResult = 'promoted' | 'already-admin';
+import type { AdminBootstrapResult } from './admin-bootstrap.types';
 
 export class AdminBootstrapError extends Error {
   constructor(readonly code: string) {

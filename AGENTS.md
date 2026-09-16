@@ -90,6 +90,29 @@ the rule but does not maintain a second route table.
 - Runtime configuration uses validated, focused config modules. Add new variables
   to `.env.example`; never commit credentials.
 
+## Mentor-feedback conventions
+
+Before implementing or independently reviewing a non-trivial slice, read
+`docs/quality/mentor-feedback-checklist.md` and disposition every applicable item in
+the plan or review report. This checklist is the durable form of mentor feedback from
+prior PRs; a green automated gate does not replace the judgment-based sweep.
+
+- Keep reusable/exported constants and contracts in concern-specific
+  `*.constants.ts`, `*.types.ts`, `*.enums.ts`, token, port, or adapter files. Do not
+  declare exported constants, types, interfaces, or enums in
+  controller/service/repository files, and do not create project-wide catch-all
+  modules.
+- Name non-obvious domain/protocol limits instead of leaving magic values in business
+  logic. Keep a field mutable only when lifecycle/state transitions reassign it.
+- Project only columns consumed by the decision/mapper, review indexes for realistic
+  high-volume joins, and add query-shape evidence when projection has regressed.
+- Avoid N+1 database/provider work; batch or use deliberately bounded concurrency
+  with defined partial-failure behavior.
+- Keep controllers transport-only, split long flows by responsibility, and search for
+  reusable query/mapping/policy helpers before adding a parallel implementation.
+- Review multi-row mutations for lock order/deadlocks and emit structured, sanitized
+  logs for important state changes and recoverable external failures.
+
 ## Persistence invariants
 
 - MySQL with TypeORM migrations is the source of truth. Keep `synchronize: false`.

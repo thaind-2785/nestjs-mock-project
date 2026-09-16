@@ -22,7 +22,7 @@ import { Room } from './entities/room.entity';
 import { ReferenceCatalogService } from './reference-catalog.service';
 import { RoomImagesService } from './room-images.service';
 import { RoomSearchService } from './room-search.service';
-import { ROOM_TIME_USAGE_REPOSITORY } from './room-time-usage.repository';
+import { ROOM_TIME_USAGE_REPOSITORY } from './room-time-usage.port';
 import { BookingRoomTimeUsageRepository } from '../bookings/room-time-usage.repository';
 import { RoomTimesService } from './room-times.service';
 import { RoomsService } from './rooms.service';

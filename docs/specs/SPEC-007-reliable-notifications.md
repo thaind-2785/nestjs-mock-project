@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Owner: Project owner
-- Last updated: 2026-09-14
+- Last updated: 2026-09-15
 - Scope: Required
 - Related endpoints / ADRs: `EVT-01` through `EVT-04`, `SPEC-006`,
   `ADR-0002`; the Phase 5 delivery decision will be recorded in `ADR-0006`
@@ -86,6 +86,13 @@ Delivery headers are:
 - `X-Notification-Id`: the outbox event UUID for provider/support correlation.
 - `Subject`: localized template text containing the public booking ID but never a
   free-text reason.
+
+Money is displayed, not dumped. The stored amount is an integer in the currency's
+minor unit, so it is grouped for the reader's locale and shown beside its ISO code -
+`4.500.000 VND` in Vietnamese, `4,500,000 VND` in English. The deployment sells in
+VND, which has no minor unit; a currency with decimals fails rendering rather than
+emailing a figure wrong by two decimal places, and supporting one means supplying its
+exponent.
 
 `MAIL_DEFAULT_LOCALE` is `en` or `vi` and defaults to `en`, matching the HTTP i18n
 fallback. Both locale catalogs must contain the same template keys and variables.
@@ -307,6 +314,11 @@ notification health signals.
   finding disposition, and another full gate only after accepted Blocker/High fixes.
 
 ## Assumptions and open questions
+
+Owner decisions fixed on 2026-09-15:
+
+- Recipients see a grouped VND amount rather than a raw minor-unit integer, and the
+  deployment is VND-only until a currency exponent table is specified.
 
 Owner decisions fixed on 2026-09-14:
 

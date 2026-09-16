@@ -242,6 +242,11 @@ context_strategy:
         load: implementation_or_review,
       }
     - {
+        id: mentor_feedback_checklist,
+        path: docs/quality/mentor-feedback-checklist.md,
+        load: implementation_or_review,
+      }
+    - {
         id: accepted_adrs,
         path: docs/decisions,
         path_kind: directory,
@@ -274,7 +279,7 @@ context_strategy:
     - {
         id: implementation_review,
         task_classes: [implementation, test, review],
-        source_ids: [test_strategy],
+        source_ids: [test_strategy, mentor_feedback_checklist],
       }
     - {
         id: sequencing,

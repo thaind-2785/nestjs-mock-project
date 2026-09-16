@@ -4,11 +4,11 @@ import { HeadBucketCommand } from '@aws-sdk/client-s3';
 import { DataSource } from 'typeorm';
 import { ReadinessConfiguration } from '../config/readiness.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
-import {
-  ReadinessService,
+import { ReadinessService } from './readiness.service';
+import type {
   RedisReadinessClient,
   StorageReadinessClient,
-} from './readiness.service';
+} from './readiness.types';
 
 const configuration: ReadinessConfiguration = {
   timeoutMs: 25,

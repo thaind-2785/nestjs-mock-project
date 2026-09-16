@@ -3,7 +3,7 @@ import {
   emptyRoomTimeUsage,
   RoomTimeUsage,
 } from '../../src/rooms/room-time-policy';
-import type { RoomTimeUsageRepository } from '../../src/rooms/room-time-usage.repository';
+import type { RoomTimeUsageRepository } from '../../src/rooms/room-time-usage.port';
 
 /**
  * Reports every requested window as unused.

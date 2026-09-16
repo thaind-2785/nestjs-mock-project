@@ -7,7 +7,13 @@ fixtures:
     autonomy_level: L0
     expected:
       route_ids: [implementation_review]
-      source_ids: [project_rules, handbook_router, test_strategy]
+      source_ids:
+        [
+          project_rules,
+          handbook_router,
+          test_strategy,
+          mentor_feedback_checklist,
+        ]
       autonomy_permissions: [read_repository, run_local_checks]
 
   - id: api_product_context

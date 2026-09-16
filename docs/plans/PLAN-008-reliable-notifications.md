@@ -5,7 +5,7 @@
 - Owner: Project owner
 - Reviewer (must be independent): Independent agent reviews `REVIEW-030` (slices
   `P5-T01`, `P5-T02`), `REVIEW-031` (slice `P5-T03`), `REVIEW-032` (slice `P5-T04`),
-  and `REVIEW-033` (slice `P5-T05`)
+  `REVIEW-033` (slice `P5-T05`), and `REVIEW-035` (slice `P5-T06`)
 
 ## Constraints and risks
 
@@ -53,7 +53,7 @@
 | `P5-T03` | Four versioned events render safe bilingual messages               | None                        | Parser/template/escaping unit and integration | Complete |
 | `P5-T04` | MySQL events reach BullMQ with lease/crash recovery                | Use P5-T02 schema           | Real MySQL/Redis concurrency integration      | Complete |
 | `P5-T05` | Worker sends through Mailpit/Gmail ports with bounded retries      | Use P5-T02 schema           | SMTP contract and real-Mailpit integration    | Complete |
-| `P5-T06` | Operators can observe, redrive, and shut down delivery safely      | None unless review requires | CLI, metrics/log, shutdown integration        | Pending  |
+| `P5-T06` | Operators can observe, redrive, and shut down delivery safely      | None unless review requires | CLI, metrics/log, shutdown integration        | Complete |
 | `P5-T07` | Booking-to-email journey and Phase 5 handoff are complete          | Revert/reapply proof        | HTTP/worker/Mailpit E2E and full gate         | Pending  |
 
 ### P5-T01 — Decision, configuration, and worker foundation
@@ -357,5 +357,47 @@ booking/outbox/delivery data to make a retry pass.
   lifecycle identity; this preserves bootstrap/shutdown timing rather than applying
   `readonly` to a field that the lifecycle hooks reassign. `PLAN-009` owns the broader
   repository rule and the audit of every mentor comment through this PR.
+- 2026-09-16 (`P5-T06`): backlog observability is a periodic structured log line,
+  `notification_backlog_sampled`, not an HTTP metrics endpoint. The worker has no HTTP
+  surface, and adding one to a process whose whole purpose is to avoid coupling the API
+  to mail would undo that separation. The alerting contract is therefore the log event
+  plus the runbook's SQL, and any metric backend consumes the same line.
+- 2026-09-16 (`P5-T06`): the backlog aggregate deliberately has no supporting index.
+  Grouping by `event_type` cannot use the claim index, and the alternative is an index
+  every booking transition must maintain on the hottest write path in the system to
+  serve a read that runs once a minute. `NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS` is
+  floored at five seconds instead, and the sampler runs outside every claim and
+  delivery transaction.
+- 2026-09-16 (`P5-T06`): a redrive resets the outbox `attempts` to zero but preserves
+  the delivery's cumulative `attempts`. The outbox counter is the delivery budget: an
+  event reaches `FAILED` with it spent, so preserving it would produce a CLI that
+  reports success and changes nothing. The delivery counter is the history of one
+  logical message and an operator correcting a cause must not erase it.
+- 2026-09-16 (`P5-T06`): the CLI runs on its own `NotificationOperationsModule`
+  rather than `WorkerModule`. `createApplicationContext` runs
+  `onApplicationBootstrap`, so importing the worker module would make a one-shot
+  command claim outbox events and open an SMTP connection on its way to doing
+  something else, then exit mid-flight and leave leases to expire.
+- 2026-09-16 (`P5-T06`): redrive locks outbox-then-delivery, the order
+  `DeliveryResultRepository` fixes for the module, at READ COMMITTED. At REPEATABLE
+  READ the delivery lock ranges over `uq_email_deliveries_logical` and its gap locks
+  would let an operator's open transaction stall a running worker.
+- 2026-09-16 (`P5-T06`): the redrive CLI is not registered as a Harness entry command,
+  matching `auth:bootstrap-admin` and `files:storage-cleanup`. One-shot operator
+  commands live in `package.json` and the runbook; the manifest registers the
+  long-running processes and the gates.
+- 2026-09-16 (`P5-T06`, after `REVIEW-035`): the sample gained a `leases` aggregate.
+  The original design claimed a stuck lease was visible through the pending age; the
+  reviewer disproved it with a lease dead for 7,000 seconds reporting an age of 1.1
+  seconds. `available_at` is never touched by a claim, so the signal had to come from
+  `lock_expires_at`, whose predicate matches `idx_outbox_events_claim` exactly.
+- 2026-09-16 (`P5-T06`, after `REVIEW-035`): every outbox statement is scoped to
+  `notificationEventTypes`. Phase 6 writes export events to the same table, and an
+  unscoped aggregate would let a stuck export page the notification on-call.
+- 2026-09-16 (`P5-T06`, after `REVIEW-035`): a `FAILED` delivery is not proof the
+  provider refused the mail - a claim lost after acceptance leaves no `SENT` row, so
+  the redrive refusal does not fire and the guest is mailed twice. The runbook now
+  requires a `claim_lost_after_send` check first. Persisting that marker durably so the
+  CLI can refuse is deferred to `P5-T07` beside the crash-after-accept work.
 - Metric backend remains an implementation detail to record here and in `ADR-0006`
   when selected.

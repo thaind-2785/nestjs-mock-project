@@ -20,6 +20,7 @@ source instead of defining a parallel routing table.
 | Mentor-feedback delivery checklist         | [`quality/mentor-feedback-checklist.md`](quality/mentor-feedback-checklist.md) |
 | Durable technical decisions                | [`decisions/`](decisions/)                                                     |
 | Reusable failures and prevention           | [`logs/error-log.md`](logs/error-log.md)                                       |
+| Operational runbooks                       | [`runbooks/`](runbooks/)                                                       |
 | Specs, plans, and review reports           | [`templates/`](templates/)                                                     |
 
 ## Harness loop

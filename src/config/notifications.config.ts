@@ -61,6 +61,10 @@ export interface NotificationWorkerConfiguration {
   shutdownDrainMs: number;
 }
 
+export interface NotificationObservabilityConfiguration {
+  backlogSampleIntervalMs: number;
+}
+
 export interface NotificationQueueConfiguration {
   name: string;
   prefix: string;
@@ -74,6 +78,7 @@ export interface NotificationsConfiguration {
   sendTimeoutMs: number;
   relay: NotificationRelayConfiguration;
   worker: NotificationWorkerConfiguration;
+  observability: NotificationObservabilityConfiguration;
   queue: NotificationQueueConfiguration;
 }
 
@@ -99,6 +104,10 @@ export function createNotificationsConfiguration(
     worker: {
       concurrency: environment.NOTIFICATION_WORKER_CONCURRENCY,
       shutdownDrainMs: environment.NOTIFICATION_SHUTDOWN_DRAIN_MS,
+    },
+    observability: {
+      backlogSampleIntervalMs:
+        environment.NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS,
     },
     queue: {
       name: notificationQueueName,
@@ -130,6 +139,7 @@ export interface NotificationsConfigurationSummary {
   backoffMaxMs: number;
   concurrency: number;
   shutdownDrainMs: number;
+  backlogSampleIntervalMs: number;
   queueName: string;
   queuePrefix: string;
 }
@@ -137,7 +147,7 @@ export interface NotificationsConfigurationSummary {
 export function describeNotificationsConfiguration(
   configuration: NotificationsConfiguration,
 ): NotificationsConfigurationSummary {
-  const { transport, relay, worker, queue } = configuration;
+  const { transport, relay, worker, observability, queue } = configuration;
   return {
     provider: transport.provider,
     host: transport.host,
@@ -155,6 +165,7 @@ export function describeNotificationsConfiguration(
     backoffMaxMs: relay.backoffMaxMs,
     concurrency: worker.concurrency,
     shutdownDrainMs: worker.shutdownDrainMs,
+    backlogSampleIntervalMs: observability.backlogSampleIntervalMs,
     queueName: queue.name,
     queuePrefix: queue.prefix,
   };

@@ -95,6 +95,28 @@ describe('Phase 5 migration revert and reapply', () => {
     ]);
   });
 
+  it('stores the ASCII-by-construction columns as ascii, like the delivery schema', async () => {
+    // These mirror `email_deliveries.template_key` / `provider_message_id`. Taking the
+    // table default instead would compare them case- and accent-insensitively and cost
+    // four bytes per character for values that are ASCII by construction.
+    const columns: Array<{
+      COLUMN_NAME: string;
+      COLLATION_NAME: string | null;
+    }> = await dataSource.query(
+      `SELECT COLUMN_NAME, COLLATION_NAME FROM information_schema.columns
+         WHERE table_schema = DATABASE() AND table_name = 'email_send_attempts'
+           AND COLUMN_NAME IN ('template_key', 'provider_message_id', 'outbox_event_id', 'claim_token')
+         ORDER BY COLUMN_NAME`,
+    );
+
+    expect(columns).toEqual([
+      { COLUMN_NAME: 'claim_token', COLLATION_NAME: 'ascii_bin' },
+      { COLUMN_NAME: 'outbox_event_id', COLLATION_NAME: 'ascii_bin' },
+      { COLUMN_NAME: 'provider_message_id', COLLATION_NAME: 'ascii_bin' },
+      { COLUMN_NAME: 'template_key', COLLATION_NAME: 'ascii_bin' },
+    ]);
+  });
+
   it('keeps the index the redrive guard reads through', async () => {
     // Dropping it from the migration was invisible to every suite, while `EXPLAIN`
     // shows the guard depends on it (`ref`, `Using index`).

@@ -25,6 +25,7 @@ import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { User } from '../src/users/entities/user.entity';
 import { UserRole } from '../src/users/entities/user.enums';
 import { applicationMigrations } from './fixtures/application-migrations';
+import { startE2eServer } from './fixtures/e2e-server';
 
 jest.setTimeout(30_000);
 
@@ -115,7 +116,7 @@ describe('P4-T02 booking create API', () => {
       .compile();
     app = fixture.createNestApplication();
     configureApplication(app, { requestLogger: { log: jest.fn() } });
-    await app.init();
+    await startE2eServer(app);
   });
 
   it('requires a user session and creates, replays, then rejects a conflicting retry', async () => {

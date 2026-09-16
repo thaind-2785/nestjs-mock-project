@@ -41,6 +41,7 @@ import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { User } from '../src/users/entities/user.entity';
 import { UserRole } from '../src/users/entities/user.enums';
 import { applicationMigrations } from './fixtures/application-migrations';
+import { startE2eServer } from './fixtures/e2e-server';
 
 jest.setTimeout(120_000);
 
@@ -50,10 +51,12 @@ interface MailpitMessage {
   Subject: string;
 }
 
+const journeyRecipient = `journey-${randomUUID()}@example.com`;
+
 class FakeGoogleOAuthClient implements GoogleOAuthClientContract {
   claims: GoogleIdentityClaims = {
     subject: 'journey-e2e-user',
-    email: 'journey-owner@example.com',
+    email: journeyRecipient,
     displayName: 'Journey Owner',
   };
 
@@ -90,16 +93,27 @@ describe('P5-T07 booking to mail journey', () => {
   let worker: DeliveryWorkerService;
   let mailpitApi: string;
   const savedEnvironment = new Map<string, string | undefined>();
-  const environmentKeys = ['NODE_ENV', 'MYSQL_DATABASE', 'GOOGLE_AUTH_ENABLED'];
+  const environmentKeys = [
+    'NODE_ENV',
+    'MYSQL_DATABASE',
+    'GOOGLE_AUTH_ENABLED',
+    'AUTH_REDIS_KEY_PREFIX',
+    'RATE_LIMIT_REDIS_KEY_PREFIX',
+  ];
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
+    for (const key of environmentKeys)
+      savedEnvironment.set(key, process.env[key]);
     const environment = validateEnvironment(process.env);
     disposableDatabase = `p5_t07_${process.pid}_${randomUUID().replaceAll('-', '')}`;
     mailpitApi = `http://127.0.0.1:${process.env.MAILPIT_UI_PORT ?? '8025'}/api/v1`;
 
-    for (const key of environmentKeys)
-      savedEnvironment.set(key, process.env[key]);
+    process.env.NODE_ENV = 'test';
+    process.env.MYSQL_DATABASE = disposableDatabase;
+    process.env.GOOGLE_AUTH_ENABLED = 'true';
+    process.env.AUTH_REDIS_KEY_PREFIX = `hotel:p5-t07-auth:${process.pid}:${randomUUID().replaceAll('-', '')}`;
+    process.env.RATE_LIMIT_REDIS_KEY_PREFIX = `hotel:p5-t07-rate:${process.pid}:${randomUUID().replaceAll('-', '')}`;
 
     try {
       adminConnection = await mysql.createConnection({
@@ -115,15 +129,11 @@ describe('P5-T07 booking to mail journey', () => {
       await adminConnection.query(
         `GRANT ALL PRIVILEGES ON \`${disposableDatabase}\`.* TO '${environment.MYSQL_USER}'@'%'`,
       );
-      await fetch(`${mailpitApi}/messages`, { method: 'DELETE' });
     } catch (error) {
       throw new Error(
         `Journey e2e prerequisite unavailable. Start npm run compose:smoke and retry. ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-
-    process.env.MYSQL_DATABASE = disposableDatabase;
-    process.env.GOOGLE_AUTH_ENABLED = 'true';
 
     const migrationDataSource = new DataSource(
       createTypeOrmOptions(
@@ -144,7 +154,7 @@ describe('P5-T07 booking to mail journey', () => {
       .compile();
     app = fixture.createNestApplication();
     configureApplication(app, { requestLogger: { log: jest.fn() } });
-    await app.init();
+    await startE2eServer(app);
     dataSource = app.get(DataSource);
 
     // The worker half, wired exactly as `NotificationsModule` wires it, against the
@@ -277,7 +287,7 @@ describe('P5-T07 booking to mail journey', () => {
     const messages = await waitForMessages(1);
 
     expect(messages).toHaveLength(1);
-    expect(messages[0].To[0].Address).toBe('journey-owner@example.com');
+    expect(messages[0].To[0].Address).toBe(journeyRecipient);
     expect(messages[0].Subject).toContain(bookingId);
 
     const event = await waitForEventStatus(
@@ -289,7 +299,7 @@ describe('P5-T07 booking to mail journey', () => {
 
     const delivery = await readDelivery(event.id);
     expect(delivery.status).toBe(EmailDeliveryStatus.Sent);
-    expect(delivery.recipient).toBe('journey-owner@example.com');
+    expect(delivery.recipient).toBe(journeyRecipient);
     expect(delivery.providerMessageId).not.toBeNull();
 
     // The loops keep running. A second message would mean the relay re-claimed a
@@ -363,13 +373,15 @@ describe('P5-T07 booking to mail journey', () => {
   async function mailpitMessages(): Promise<MailpitMessage[]> {
     const response = await fetch(`${mailpitApi}/messages`);
     const body = (await response.json()) as { messages: MailpitMessage[] };
-    return body.messages;
+    return body.messages.filter((message) =>
+      message.To.some(({ Address }) => Address === journeyRecipient),
+    );
   }
 
   async function promoteToAdmin(): Promise<void> {
     await dataSource
       .getRepository(User)
-      .update({ email: 'journey-owner@example.com' }, { role: UserRole.Admin });
+      .update({ email: journeyRecipient }, { role: UserRole.Admin });
   }
 
   async function createRoom(dates: JourneyDates): Promise<string> {

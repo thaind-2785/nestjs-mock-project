@@ -419,5 +419,17 @@ booking/outbox/delivery data to make a retry pass.
 - 2026-09-16 (`P5-T07`): two acceptance criteria had no test behind them - the recipient
   snapshot surviving an owner email change, and delivery to a deactivated owner. Both are
   now covered. The first initially failed and the test was wrong, not the product.
+- 2026-09-16 (`P5-T07` phase-exit): the no-transaction-during-SMTP proof uses a
+  separate real-MySQL transaction and `SELECT ... FOR UPDATE`, not a consistent plain
+  read that can pass while another transaction owns the row lock. The probe has a
+  one-second lock timeout and therefore fails if preparation still holds the outbox row
+  when the provider is called.
+- 2026-09-16 (`P5-T07` phase-exit): `email_send_attempts` is an advisory redrive guard,
+  not a worker deduplication gate. Its no-FK append can race the CLI's non-locking count;
+  a second count only narrows that window, so the runbook instead exposes it and gives a
+  stop/drain procedure for operators who prioritize duplicate avoidance.
+- 2026-09-16 (`P5-T07` phase-exit): the HTTP-to-mail journey uses private auth and
+  rate-limit Redis prefixes and a per-run recipient. Mailpit assertions filter that
+  recipient and never delete or count the shared mailbox globally.
 - Metric backend remains an implementation detail to record here and in `ADR-0006`
   when selected.

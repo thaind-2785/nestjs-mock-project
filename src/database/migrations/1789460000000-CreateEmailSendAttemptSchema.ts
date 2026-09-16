@@ -17,9 +17,11 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * It deliberately carries no foreign key to `outbox_events`, unlike `email_deliveries`.
  * An FK insert takes a shared lock on the parent row, and the parent row is exactly
  * what a recovering worker may already hold exclusively - so the write that must never
- * wait would be the one that waits. Orphans are not a real risk either: the id comes
- * from a row this worker just read under its own claim, and Phase 7 retention removes
- * both together.
+ * wait would be the one that waits. Orphans are unlikely rather than impossible: the id
+ * comes from a row this worker just read under its own claim, but nothing in the schema
+ * enforces that. `email_deliveries` uses `ON DELETE RESTRICT` to force a retention job
+ * to delete in the right order; this table has no such guard, so Phase 7 must delete it
+ * alongside the event deliberately. That is a stated obligation, not an enforced one.
  */
 export class CreateEmailSendAttemptSchema1789460000000 implements MigrationInterface {
   name = 'CreateEmailSendAttemptSchema1789460000000';

@@ -392,10 +392,10 @@ describe('Phase 5 delivery through Mailpit', () => {
     const owner = await insertOwner('lease@hotel.test');
     const eventId = await insertEvent(owner);
     const job = await dispatchOne();
-    // Shorten the lease the dispatcher issued so a renewal is visible, then read the
-    // row from a separate connection while the provider call is in flight. That read
-    // would block if the worker were holding its transaction open across SMTP, and
-    // shows a lease that has not been renewed if the worker forgot to.
+    // Shorten the lease the dispatcher issued so a renewal is visible. The provider
+    // callback then takes a locking read from a separate transaction: unlike a plain
+    // SELECT, this would time out if the worker still held its preparation lock across
+    // the provider call.
     await dataSource.query(
       'UPDATE outbox_events SET lock_expires_at = NOW(6) + INTERVAL 3 SECOND WHERE id = ?',
       [eventId],
@@ -408,11 +408,25 @@ describe('Phase 5 delivery through Mailpit', () => {
       new SendAttemptRepository(),
       {
         send: async () => {
-          const [row] = await dataSource.query<Array<{ lockExpiresAt: Date }>>(
-            'SELECT lock_expires_at AS lockExpiresAt FROM outbox_events WHERE id = ?',
-            [eventId],
-          );
-          duringSend = row;
+          const observer = dataSource.createQueryRunner();
+          await observer.connect();
+          try {
+            await observer.query('SET SESSION innodb_lock_wait_timeout = 1');
+            await observer.startTransaction();
+            // `QueryRunner.query` is untyped, unlike `DataSource.query`.
+            const observed = (await observer.query(
+              `SELECT lock_expires_at AS lockExpiresAt
+               FROM outbox_events WHERE id = ? FOR UPDATE`,
+              [eventId],
+            )) as Array<{ lockExpiresAt: Date }>;
+            duringSend = observed[0];
+            await observer.rollbackTransaction();
+          } finally {
+            if (observer.isTransactionActive) {
+              await observer.rollbackTransaction();
+            }
+            await observer.release();
+          }
           return { providerMessageId: '<observed@id>' };
         },
       },

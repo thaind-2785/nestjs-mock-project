@@ -28,6 +28,7 @@ import { UserRoleHistory } from '../src/users/entities/user-role-history.entity'
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
 import { applicationMigrations } from './fixtures/application-migrations';
+import { startE2eServer } from './fixtures/e2e-server';
 import { ensureAttachmentBucket } from './fixtures/room-images';
 
 jest.setTimeout(60_000);
@@ -133,7 +134,7 @@ describe('Room image upload budget over HTTP (e2e)', () => {
       swaggerEnabled: false,
       requestLogger: { log: jest.fn() },
     });
-    await app.init();
+    await startE2eServer(app);
     await ensureAttachmentBucket(validateEnvironment(process.env));
 
     // A seeded admin plus a real session is enough: this suite is about the upload

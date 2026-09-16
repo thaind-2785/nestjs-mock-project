@@ -179,7 +179,9 @@ already has the message. The `SENT` refusal cannot catch that, because no row ev
 reached `SENT`.
 
 Every acceptance is therefore appended to `email_send_attempts`, independently of who
-holds the claim, and the CLI refuses a redrive when one exists:
+holds the claim. The worker does not consult this table before automatic recovery, so
+it does not prevent an automatic resend after a lost claim. Its narrower purpose is to
+let the CLI refuse an operator-triggered redrive when the evidence already exists:
 
 ```sql
 SELECT attempt, provider_message_id, accepted_at
@@ -193,11 +195,19 @@ npm run notifications:redrive-failed -- \
   --event-id <uuid> --reason "guest confirmed nothing arrived" --allow-duplicate
 ```
 
-The override forgives the acceptance record, not a `SENT` delivery. One window stays
-open: a process killed between the provider's acceptance and the insert records
-nothing, so this narrows the ambiguity rather than removing it. The
-`claim_lost_after_send` line in `notification_delivery_finished` remains the
-corroborating signal.
+The override forgives the acceptance record, not a `SENT` delivery. Two windows stay
+open, so this guard narrows the ambiguity rather than removing it:
+
+- A process killed between the provider's acceptance and the insert records nothing.
+- The acceptance append intentionally has no parent foreign key and does not take the
+  redrive transaction's outbox lock. A send already in flight can therefore append
+  after the CLI reads zero acceptances but before it commits the event back to
+  `PENDING`. Reading the count again would only shorten this TOCTOU window, not close
+  it. Stop and drain workers before redrive when avoiding another send matters more
+  than immediate recovery, and query `email_send_attempts` again after the command.
+
+The `claim_lost_after_send` line in `notification_delivery_finished` remains a
+corroborating signal, subject to log retention.
 
 What it refuses, and why:
 
@@ -210,8 +220,9 @@ What it refuses, and why:
 | `INVALID_CLI_ARGUMENTS`                          | Malformed id, or a missing/over-long/control-character reason                                                                                           |
 
 Two operators redriving the same event serialize on the row lock: the second reads the
-state the first committed and is refused. Running it beside live workers is safe - it
-takes locks in the same outbox-then-delivery order the worker does.
+state the first committed and is refused. Running it beside live workers preserves the
+outbox-then-delivery lock order and does not create that deadlock; it does not serialize
+the separate acceptance append described above.
 
 ## Graceful shutdown
 
@@ -249,7 +260,9 @@ What this means in practice:
 - Never "repair" it by redriving an event whose delivery reads `SENT` - the CLI
   refuses that for this reason. Note the narrower converse: the CLI _accepting_ a
   redrive is not evidence that nothing was sent, because a lost claim leaves no `SENT`
-  row. The log check above is what closes that gap.
+  row, automatic recovery never checks acceptance records, and the redrive check itself
+  has the documented concurrent-insert window. Use the evidence and drain procedure
+  above; neither one turns SMTP into exactly-once delivery.
 
 ## Gmail symptoms
 

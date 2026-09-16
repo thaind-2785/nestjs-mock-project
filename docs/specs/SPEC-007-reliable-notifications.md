@@ -1,6 +1,6 @@
 # SPEC-007: Reliable notifications
 
-- Status: Accepted
+- Status: Accepted (Phase 5 delivered)
 - Owner: Project owner
 - Last updated: 2026-09-16
 - Scope: Required
@@ -177,6 +177,12 @@ could still end as a `FAILED` delivery and be silently duplicated by a redrive.
   belongs to whoever holds the outbox claim, and the worker that most needs to record
   "the mail is out" is precisely the one that has just discovered it no longer holds
   that claim; appending a fact requires no ownership. There is no update and no delete.
+  The table deliberately has no foreign key to `outbox_events`: an FK insert takes a
+  shared lock on the parent row, which is exactly the row a recovering worker may hold
+  exclusively. A real MySQL probe measured the FK form waiting 3,011 ms and ending in
+  `ER_LOCK_WAIT_TIMEOUT`, while the no-FK append completed in 2 ms. Referential cleanup
+  is therefore a Phase 7 retention responsibility rather than a constraint on the
+  crash-path write that must not wait.
   A redrive refuses an event with a recorded acceptance unless the operator passes an
   explicit duplicate override. This narrows the at-least-once ambiguity rather than
   removing it: a process killed between the provider's acceptance and the insert still
@@ -311,7 +317,7 @@ notification health signals.
       real Gmail call.
 - [x] Given a fresh Phase 4 database, the Phase 5 migration applies, constraints and
       uniqueness hold, and a pre-traffic revert/reapply succeeds against real MySQL.
-- [ ] Given the complete Phase 5 change, `npm run verify` passes with Mailpit included
+- [x] Given the complete Phase 5 change, `npm run verify` passes with Mailpit included
       in CI readiness and an independent reviewer has no unresolved Blocker/High.
 
 ## Test strategy

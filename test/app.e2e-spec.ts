@@ -13,6 +13,7 @@ import { HttpRequestCompletedLog } from './../src/common/http/request-context';
 import { swaggerJsonPath, swaggerPath } from './../src/common/openapi/swagger';
 import { ReadinessService } from './../src/health/readiness.service';
 import { Public } from './../src/auth/decorators/public.decorator';
+import { startE2eServer } from './fixtures/e2e-server';
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -61,7 +62,7 @@ describe('Application bootstrap (e2e)', () => {
 
     const testApp = moduleFixture.createNestApplication();
     configureApplication(testApp, options);
-    await testApp.init();
+    await startE2eServer(testApp);
     return testApp;
   }
 

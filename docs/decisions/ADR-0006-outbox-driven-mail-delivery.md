@@ -111,9 +111,12 @@ the worker that most needs to record "the mail is out" is precisely the one that
 just discovered it no longer holds that claim - so the fact had nowhere durable to go,
 and a message the guest already had could later read `FAILED` and be redriven into a
 duplicate. Appending needs no ownership. The redrive command refuses an event with a
-recorded acceptance unless an operator overrides it deliberately. This narrows the
-at-least-once ambiguity; it does not close it, because a process killed between the
-provider's acceptance and the insert still records nothing.
+recorded acceptance unless an operator overrides it deliberately. That refusal protects
+only an operator-triggered redrive: workers do not read acceptance rows before normal
+lease recovery, so recovery may resend a message before an event ever becomes eligible
+for redrive. This narrows the at-least-once ambiguity; it does not close it. A process
+killed between provider acceptance and the insert still records nothing, and the
+deliberately no-FK append can race the redrive CLI's non-locking acceptance check.
 
 Replacing the provider later means writing one adapter behind `EmailSender`. The
 retry policy, the claim protocol, and the delivery record do not move with it.

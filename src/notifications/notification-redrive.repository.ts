@@ -62,8 +62,10 @@ export class NotificationRedriveRepository {
     // A delivery reading FAILED is not proof the provider refused the mail. A worker
     // that lost its claim after an acceptance writes no delivery state at all, so a
     // later permanent failure can mark FAILED a message the guest already has. The
-    // append-only acceptance record is the only thing that knows, and refusing on it
-    // is what stops a redrive from being a silent duplicate.
+    // append-only acceptance record is the only durable evidence that knows. This
+    // check protects an operator-triggered redrive when the evidence already exists;
+    // workers do not consult it before automatic recovery, and an acceptance insert
+    // can race this deliberately non-locking read (documented in the runbook).
     if (!request.allowDuplicate) {
       const accepted = await this.sendAttempts.countAccepted(
         manager,

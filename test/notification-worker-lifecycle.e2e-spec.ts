@@ -36,6 +36,7 @@ describe('P5-T07 worker lifecycle under failure', () => {
   let baseEnvironment: NodeJS.ProcessEnv;
   const children = new Set<ChildProcess>();
   const servers = new Set<ControllableSmtpServer>();
+  const workerOutput = new Map<ChildProcess, string>();
   let redisConnection: { host: string; port: number };
 
   beforeAll(async () => {
@@ -108,6 +109,9 @@ describe('P5-T07 worker lifecycle under failure', () => {
       // drains between two polls, so the "kill it mid-backlog" test killed a worker
       // that had already finished and asserted nothing.
       NOTIFICATION_WORKER_CONCURRENCY: '1',
+      // One event per claim, so a single poll cannot take the whole backlog and leave
+      // the other dispatcher nothing to contend for.
+      NOTIFICATION_CLAIM_BATCH_SIZE: '1',
     };
   });
 
@@ -121,6 +125,7 @@ describe('P5-T07 worker lifecycle under failure', () => {
   afterEach(async () => {
     for (const child of children) child.kill('SIGKILL');
     children.clear();
+    workerOutput.clear();
     // Closed here rather than at the end of each test: a failed assertion skips the
     // rest of the body, and a leaked fixture server keeps jest alive long after the
     // suite reports.
@@ -154,26 +159,35 @@ describe('P5-T07 worker lifecycle under failure', () => {
     );
     const port = await smtp.listen();
     const owner = await seedOwner('concurrent@hotel.test');
+
+    // Both polling before any work exists. Seeding first lets whichever process boots
+    // faster take the whole backlog - on a slower CI runner one drained all six events
+    // before the other had finished loading Nest, and the contention this test exists
+    // to observe never happened.
+    const first = startWorker(port);
+    const second = startWorker(port);
+    await Promise.all([waitForWorkerReady(first), waitForWorkerReady(second)]);
+
     const ids: string[] = [];
     for (let index = 0; index < 6; index += 1) {
       ids.push(await seedEvent(owner));
     }
 
-    // Two processes, one backlog, started together so their claim batches overlap.
-    startWorker(port);
-    startWorker(port);
-
     await waitFor(async () => (await countProcessed()) === ids.length, 90_000);
 
-    // Both halves matter. Counting sends proves nothing was duplicated; counting
-    // distinct claim tokens proves two processes actually contended for the backlog.
-    // Without the second assertion this test passed with one `startWorker` call
-    // deleted, which made it evidence of nothing.
+    // Both halves matter. The send count proves nothing was duplicated; the per-process
+    // delivery counts prove two processes actually shared the backlog.
+    //
+    // `claim_token` cannot carry that second half: the dispatcher mints a fresh one on
+    // every poll cycle, so one worker claiming six events one at a time produces six
+    // distinct tokens and satisfies any "more than one token" assertion by itself. The
+    // only thing here that identifies a process is its own log.
     expect(smtp.accepted).toHaveLength(ids.length);
-    const tokens: Array<{ total: string | number }> = await dataSource.query(
-      'SELECT COUNT(DISTINCT claim_token) AS total FROM email_send_attempts',
+    expect(deliveriesFinishedBy(first)).toBeGreaterThan(0);
+    expect(deliveriesFinishedBy(second)).toBeGreaterThan(0);
+    expect(deliveriesFinishedBy(first) + deliveriesFinishedBy(second)).toBe(
+      ids.length,
     );
-    expect(Number(tokens[0].total)).toBeGreaterThanOrEqual(2);
     const deliveries: Array<{ outboxEventId: string; status: string }> =
       await dataSource.query(
         'SELECT outbox_event_id AS outboxEventId, status FROM email_deliveries',
@@ -196,6 +210,7 @@ describe('P5-T07 worker lifecycle under failure', () => {
     for (let index = 0; index < 4; index += 1) await seedEvent(owner);
 
     const first = startWorker(port);
+    await waitForWorkerReady(first);
     // Kill it mid-backlog: SIGKILL, so no drain, no shutdown hook, no chance to
     // finish anything it had started.
     await waitFor(async () => (await countProcessed()) >= 1, 60_000);
@@ -203,7 +218,7 @@ describe('P5-T07 worker lifecycle under failure', () => {
     const processedBeforeRestart = await countProcessed();
     expect(processedBeforeRestart).toBeLessThan(4);
 
-    startWorker(port);
+    await waitForWorkerReady(startWorker(port));
 
     // Whatever the dead worker held is recovered when its lease expires; whatever it
     // had not claimed is still PENDING. Both paths end in the same place.
@@ -262,6 +277,7 @@ describe('P5-T07 worker lifecycle under failure', () => {
     );
     const port = await smtp.listen();
     worker.current = startWorker(port);
+    await waitForWorkerReady(worker.current);
 
     await waitFor(async () => (await countAcceptedSends(id)) === 1, 90_000);
     await waitFor(() => Promise.resolve(blockingRunner === undefined), 60_000);
@@ -293,10 +309,51 @@ describe('P5-T07 worker lifecycle under failure', () => {
     const child = spawn('node', ['dist/worker'], {
       cwd: process.cwd(),
       env: { ...baseEnvironment, MAIL_SMTP_PORT: String(smtpPort) },
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
     children.add(child);
+    workerOutput.set(child, '');
+    child.stdout?.on('data', (chunk: Buffer) => {
+      workerOutput.set(
+        child,
+        (workerOutput.get(child) ?? '') + chunk.toString('utf8'),
+      );
+    });
     return child;
+  }
+
+  /** How many deliveries this specific process finished, read from its own log. */
+  function deliveriesFinishedBy(child: ChildProcess): number {
+    const output = workerOutput.get(child) ?? '';
+    return output.split('notification_delivery_finished').length - 1;
+  }
+
+  /**
+   * Resolves when the process has logged that it started, which is the first moment it
+   * polls for work. Spawning is not readiness, and the difference is the whole of the
+   * contention this suite is trying to observe.
+   */
+  async function waitForWorkerReady(
+    child: ChildProcess,
+    timeoutMs = 60_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (
+        (workerOutput.get(child) ?? '').includes('notification_worker_started')
+      ) {
+        return;
+      }
+      if (child.exitCode !== null) {
+        throw new Error(
+          `worker exited before starting, code ${String(child.exitCode)}`,
+        );
+      }
+      if (Date.now() >= deadline) {
+        throw new Error('worker did not report notification_worker_started');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   }
 
   async function waitFor(

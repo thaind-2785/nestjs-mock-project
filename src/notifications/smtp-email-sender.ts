@@ -3,7 +3,7 @@ import type { ConfigType } from '@nestjs/config';
 import { createTransport, Transporter } from 'nodemailer';
 import { notificationsConfig } from '../config/notifications.config';
 import { EmailSender, EmailSendResult } from './email-sender';
-import { PreparedEmailMessage } from './email-template.service';
+import type { PreparedEmailMessage } from './email-template.types';
 
 /**
  * The SMTP adapter, and the only file that knows a mail provider exists.

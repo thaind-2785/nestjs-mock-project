@@ -6,19 +6,11 @@ import { attachmentsConfig } from '../config/attachments.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import { StorageCleanupTask } from './entities/storage-cleanup-task.entity';
 import { AttachmentStorageService } from './storage/attachment-storage.service';
-
-export const defaultCleanupBatchSize = 25;
-
-export interface StorageCleanupOptions {
-  batchSize?: number;
-  workerId?: string;
-}
-
-export interface StorageCleanupResult {
-  claimed: number;
-  deleted: number;
-  retryable: number;
-}
+import { defaultCleanupBatchSize } from './storage-cleanup.constants';
+import type {
+  StorageCleanupOptions,
+  StorageCleanupResult,
+} from './storage-cleanup.types';
 
 /**
  * Drains `storage_cleanup_tasks`: upload safeguards whose metadata commit never

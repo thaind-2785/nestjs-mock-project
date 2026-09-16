@@ -16,12 +16,7 @@ import { attachmentsConfig } from '../../config/attachments.config';
 import { objectStorageConfig } from '../../config/object-storage.config';
 import { filesErrors } from '../files.errors';
 import { ATTACHMENT_STORAGE_CLIENT } from './attachment-storage.tokens';
-
-export interface AttachmentUpload {
-  objectKey: string;
-  body: Buffer;
-  contentType: string;
-}
+import type { AttachmentUpload } from './attachment-storage.types';
 
 /**
  * The only path from the application to object storage. Every call is bounded by

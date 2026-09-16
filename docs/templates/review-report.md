@@ -29,5 +29,7 @@ or rejected with evidence. Blocker/high cannot be accepted for a normal release.
 - [ ] Tests would fail before the fix
 - [ ] Logging, metrics, health, deploy, and rollback
 - [ ] Docs, OpenAPI, migrations, and locale files
+- [ ] Applicable prior mentor feedback was swept using
+      `docs/quality/mentor-feedback-checklist.md`
 
 ## Residual risk and follow-up

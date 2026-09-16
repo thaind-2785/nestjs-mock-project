@@ -51,15 +51,16 @@
 ## Required local gate
 
 `npm run verify` performs Harness validation, Harness regression tests, the Harness
-behavioral evaluation, the Compose contract and configuration checks, a non-mutating
-format check, lint, a whole-project type check, unit tests, a distinct integration
-suite, E2E tests, and build, in that order. The Harness and Compose steps come first
-because they are the cheapest way to fail on a broken environment contract. The type
-step runs before the test layers so a type error never waits for MySQL, and it covers
-specs and `test/` because neither the build nor ts-jest typechecks them. The initial integration smoke verifies the
-Nest module graph; Phase 1 expands that same suite with real MySQL/Redis/storage
-adapters. When E2E needs Compose, the configuration must fail with an actionable
-prerequisite rather than silently skip.
+behavioral evaluation, the implementation-declaration convention regression, the
+Compose contract and configuration checks, a non-mutating format check, lint, a
+whole-project type check, unit tests, a distinct integration suite, E2E tests, and
+build, in that order. The Harness and Compose steps come first because they are the
+cheapest way to fail on a broken environment contract. The type step runs before the
+test layers so a type error never waits for MySQL, and it covers specs and `test/`
+because neither the build nor ts-jest typechecks them. The initial integration smoke
+verifies the Nest module graph; Phase 1 expands that same suite with real
+MySQL/Redis/storage adapters. When E2E needs Compose, the configuration must fail with
+an actionable prerequisite rather than silently skip.
 
 ## Definition of done
 

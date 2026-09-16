@@ -14,17 +14,13 @@ import {
   notificationTemplateKeys,
   notificationTemplateRegistry,
 } from './notification-template.registry';
-
-interface NotificationTemplateDefinition {
-  subject: string;
-  text: string;
-  html: string;
-}
-
-type NotificationTemplateCatalog = Record<
-  NotificationTemplateKey,
-  NotificationTemplateDefinition
->;
+import type {
+  EmailTemplateBuildInput,
+  NotificationRenderContext,
+  NotificationTemplateCatalog,
+  PreparedEmailMessage,
+  RenderedEmailContent,
+} from './email-template.types';
 
 const catalogs: Record<EmailDeliveryLocale, NotificationTemplateCatalog> = {
   [EmailDeliveryLocale.English]: englishCatalog,
@@ -95,19 +91,6 @@ const canonicalUuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const messageIdDomainPattern =
   /^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*$/;
-export interface RenderedEmailContent {
-  subject: string;
-  text: string;
-  html: string;
-}
-
-export interface PreparedEmailMessage extends RenderedEmailContent {
-  from: { name: string; address: string };
-  to: string;
-  messageId: string;
-  headers: Readonly<{ 'X-Notification-Id': string }>;
-}
-
 /**
  * Provider-independent rendering. Catalog structure and placeholder parity are
  * checked before the service can render, so a partial translation fails at worker
@@ -148,14 +131,7 @@ export class EmailTemplateService {
     };
   }
 
-  buildMessage(input: {
-    outboxEventId: string;
-    recipient: string;
-    event: NotificationEvent;
-    templateKey: NotificationTemplateKey;
-    locale: EmailDeliveryLocale;
-    context?: NotificationRenderContext;
-  }): PreparedEmailMessage {
+  buildMessage(input: EmailTemplateBuildInput): PreparedEmailMessage {
     if (!canonicalUuidPattern.test(input.outboxEventId)) {
       throw new Error('Notification ID is not a canonical UUID.');
     }
@@ -222,16 +198,6 @@ export function validateNotificationTemplateCatalogs(): void {
       );
     }
   }
-}
-
-/**
- * Values the event cannot carry but a recipient needs. A booking change names the
- * room it moved away from, and the Phase 4 payload holds only that room's internal
- * id - which is not a room to a guest, and is not an identifier this system publishes
- * anywhere else. The caller resolves it; rendering stays pure.
- */
-export interface NotificationRenderContext {
-  beforeRoomNumber?: string;
 }
 
 function variablesFor(

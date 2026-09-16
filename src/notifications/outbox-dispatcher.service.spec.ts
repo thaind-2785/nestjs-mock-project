@@ -4,12 +4,13 @@ import type Redis from 'ioredis';
 import { validateEnvironment } from '../config/environment.validation';
 import { createNotificationsConfiguration } from '../config/notifications.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
-import { OutboxClaim, OutboxClaimRepository } from './outbox-claim.repository';
+import { OutboxClaimRepository } from './outbox-claim.repository';
+import type { OutboxClaim } from './outbox-claim.types';
 import {
   notificationJobName,
   notificationQueueUnavailableCode,
-  OutboxDispatcherService,
-} from './outbox-dispatcher.service';
+} from './outbox-dispatcher.constants';
+import { OutboxDispatcherService } from './outbox-dispatcher.service';
 
 const configuration = createNotificationsConfiguration(
   validateEnvironment({

@@ -7,7 +7,7 @@ import { authConfig } from '../config/auth.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import { User } from '../users/entities/user.entity';
 import { UserRole, UserStatus } from '../users/entities/user.enums';
-import { AuthRateLimitScope, AuthRedisService } from './auth-redis.service';
+import { AuthRedisService } from './auth-redis.service';
 import { authErrors } from './auth.errors';
 import {
   GoogleCallbackQueryDto,
@@ -21,17 +21,13 @@ import type {
 } from './google/google-oauth.client';
 import { SessionService } from './session.service';
 import { GOOGLE_OAUTH_CLIENT } from './auth.tokens';
-import { GoogleIdentityClaims, IssuedSession } from './auth.types';
-
-export interface GoogleLoginStart {
-  authorizationUrl: string;
-  state: string;
-}
-
-export interface GoogleCallbackContext {
-  cookieState?: string;
-  rateLimitKey: string;
-}
+import type {
+  AuthRateLimitScope,
+  GoogleCallbackContext,
+  GoogleIdentityClaims,
+  GoogleLoginStart,
+  IssuedSession,
+} from './auth.types';
 
 @Injectable()
 export class AuthService {

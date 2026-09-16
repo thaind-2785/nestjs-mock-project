@@ -1,6 +1,6 @@
 import { validateEnvironment } from '../config/environment.validation';
 import { createNotificationsConfiguration } from '../config/notifications.config';
-import { PreparedEmailMessage } from './email-template.service';
+import type { PreparedEmailMessage } from './email-template.types';
 import { SmtpEmailSender } from './smtp-email-sender';
 
 const mockSendMail = jest.fn();

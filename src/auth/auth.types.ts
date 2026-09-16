@@ -30,3 +30,16 @@ export interface GoogleIdentityClaims {
   email: string;
   displayName: string;
 }
+
+/** The complete set of authentication budgets, so no caller can invent a scope. */
+export type AuthRateLimitScope = 'google-start' | 'google-callback' | 'refresh';
+
+export interface GoogleLoginStart {
+  authorizationUrl: string;
+  state: string;
+}
+
+export interface GoogleCallbackContext {
+  cookieState?: string;
+  rateLimitKey: string;
+}

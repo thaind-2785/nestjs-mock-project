@@ -18,8 +18,10 @@ import {
   RoomTimeState,
   RoomTimeUsage,
 } from './room-time-policy';
-import { ROOM_TIME_USAGE_REPOSITORY } from './room-time-usage.repository';
-import type { RoomTimeUsageRepository } from './room-time-usage.repository';
+import {
+  ROOM_TIME_USAGE_REPOSITORY,
+  type RoomTimeUsageRepository,
+} from './room-time-usage.port';
 import { hasDefinedUpdate } from './room-version';
 import { isDatabaseError, roomsErrors } from './rooms.errors';
 

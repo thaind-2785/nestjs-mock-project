@@ -1,5 +1,5 @@
-import { EntityManager } from 'typeorm';
-import { RoomTimeUsage } from './room-time-policy';
+import type { EntityManager } from 'typeorm';
+import type { RoomTimeUsage } from './room-time-policy';
 
 export const ROOM_TIME_USAGE_REPOSITORY = Symbol('ROOM_TIME_USAGE_REPOSITORY');
 

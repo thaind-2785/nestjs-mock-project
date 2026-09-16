@@ -13,35 +13,20 @@ import { notificationsConfig } from '../config/notifications.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import { notificationBackoffMs } from './notification-backoff';
 import {
+  notificationJobName,
+  notificationQueueUnavailableCode,
+} from './outbox-dispatcher.constants';
+import type {
+  DispatchResult,
+  NotificationJobData,
+} from './outbox-dispatcher.types';
+import {
   NOTIFICATION_QUEUE,
   NOTIFICATION_QUEUE_CLIENT,
 } from './notification.tokens';
-import {
-  claimBatchIsolation,
-  OutboxClaim,
-  OutboxClaimRepository,
-} from './outbox-claim.repository';
-
-export const notificationJobName = 'deliver';
-export const notificationQueueUnavailableCode =
-  'NOTIFICATION_QUEUE_UNAVAILABLE';
-
-/**
- * Everything the worker needs to find its work again, and nothing else. The event
- * payload, the recipient and the rendered body stay in MySQL: Redis holds opaque
- * identifiers so a queue dump cannot disclose who was emailed about what.
- */
-export interface NotificationJobData {
-  outboxEventId: string;
-  claimToken: string;
-  attempt: number;
-}
-
-export interface DispatchResult {
-  claimed: number;
-  queued: number;
-  released: number;
-}
+import { claimBatchIsolation } from './outbox-claim.constants';
+import { OutboxClaimRepository } from './outbox-claim.repository';
+import type { OutboxClaim } from './outbox-claim.types';
 
 /**
  * Moves durable outbox events onto the delivery queue.

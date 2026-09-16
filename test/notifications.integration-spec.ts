@@ -11,11 +11,9 @@ import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
 import { createNotificationsConfiguration } from '../src/config/notifications.config';
 import { createTypeOrmOptions } from '../src/database/database.options';
-import {
-  DeliveryPreparationError,
-  DeliveryPreparationService,
-  deliveryPreparationErrorCodes,
-} from '../src/notifications/delivery-preparation.service';
+import { deliveryPreparationErrorCodes } from '../src/notifications/delivery-preparation.constants';
+import { DeliveryPreparationError } from '../src/notifications/delivery-preparation.error';
+import { DeliveryPreparationService } from '../src/notifications/delivery-preparation.service';
 import { EmailDelivery } from '../src/notifications/entities/email-delivery.entity';
 import {
   EmailDeliveryLocale,

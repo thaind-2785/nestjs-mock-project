@@ -29,7 +29,8 @@ import {
 } from '../bookings/booking-overlap';
 import { Booking } from '../bookings/entities/booking.entity';
 import { applyRoomAttributeFilters } from './room-filters';
-import { RoomImageSet, RoomImagesService } from './room-images.service';
+import { RoomImagesService } from './room-images.service';
+import type { RoomImageSet } from './room-images.types';
 import {
   assertPriceRange,
   resolveAmenityFilter,

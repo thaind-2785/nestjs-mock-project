@@ -24,10 +24,8 @@ import {
 } from '../src/notifications/entities/notification.enums';
 import { EmailTemplateService } from '../src/notifications/email-template.service';
 import { OutboxClaimRepository } from '../src/notifications/outbox-claim.repository';
-import {
-  NotificationJobData,
-  OutboxDispatcherService,
-} from '../src/notifications/outbox-dispatcher.service';
+import { OutboxDispatcherService } from '../src/notifications/outbox-dispatcher.service';
+import type { NotificationJobData } from '../src/notifications/outbox-dispatcher.types';
 import { SmtpEmailSender } from '../src/notifications/smtp-email-sender';
 import { applicationMigrations } from './fixtures/application-migrations';
 

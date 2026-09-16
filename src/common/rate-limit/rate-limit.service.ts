@@ -9,6 +9,7 @@ import type { ConfigType } from '@nestjs/config';
 import Redis from 'ioredis';
 import { rateLimitConfig } from '../../config/rate-limit.config';
 import { RATE_LIMIT_REDIS_CLIENT } from './rate-limit.tokens';
+import type { RateLimitAttempt } from './rate-limit.types';
 
 const fixedWindowRateLimitScript = `
 local current = redis.call('INCR', KEYS[1])
@@ -24,13 +25,6 @@ return current
  * namespace by forwarding a request field.
  */
 const allowedScope = /^[a-z0-9-]{1,64}$/;
-
-export interface RateLimitAttempt {
-  scope: string;
-  discriminator: string;
-  max: number;
-  windowSeconds: number;
-}
 
 export class RateLimitStoreUnavailableError extends Error {
   public constructor(cause?: unknown) {

@@ -27,7 +27,6 @@ import { ErrorResponseDto } from '../common/errors/error-response.dto';
 import { Public } from './decorators/public.decorator';
 import { AccessTokenResponseDto } from './dto/access-token-response.dto';
 import { GoogleCallbackQueryDto } from './dto/google-callback-query.dto';
-import type { AuthRateLimitScope } from './auth-redis.service';
 import { AuthService } from './auth.service';
 import {
   clearOAuthStateCookieOptions,
@@ -37,7 +36,7 @@ import {
   refreshCookieName,
   refreshCookieOptions,
 } from './auth.cookies';
-import type { AuthenticatedPrincipal } from './auth.types';
+import type { AuthenticatedPrincipal, AuthRateLimitScope } from './auth.types';
 import { SessionService } from './session.service';
 
 @ApiTags('Authentication')

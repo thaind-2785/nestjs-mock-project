@@ -2,18 +2,16 @@ import { EntityManager } from 'typeorm';
 import { validateEnvironment } from '../config/environment.validation';
 import { createNotificationsConfiguration } from '../config/notifications.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
-import {
-  DeliveryPreparationError,
-  deliveryPreparationErrorCodes,
-  DeliveryPreparationService,
-  PreparedNotification,
-} from './delivery-preparation.service';
+import { DeliveryPreparationService } from './delivery-preparation.service';
+import { deliveryPreparationErrorCodes } from './delivery-preparation.constants';
+import { DeliveryPreparationError } from './delivery-preparation.error';
+import type { PreparedNotification } from './delivery-preparation.types';
 import { DeliveryResultRepository } from './delivery-result.repository';
 import { DeliveryWorkerService } from './delivery-worker.service';
 import { EmailDeliveryLocale } from './entities/notification.enums';
 import { EmailSender } from './email-sender';
 import { NotificationEventError } from './notification-event';
-import { NotificationJobData } from './outbox-dispatcher.service';
+import type { NotificationJobData } from './outbox-dispatcher.types';
 import { smtpErrorCodes } from './smtp-error';
 
 const job: NotificationJobData = {

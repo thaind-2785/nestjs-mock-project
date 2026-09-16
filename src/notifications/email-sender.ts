@@ -1,4 +1,4 @@
-import { PreparedEmailMessage } from './email-template.service';
+import type { PreparedEmailMessage } from './email-template.types';
 
 export interface EmailSendResult {
   /** The provider's own identifier, when it returns one. Evidence, not a key. */

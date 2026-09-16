@@ -12,10 +12,8 @@ import { createNotificationsConfiguration } from '../src/config/notifications.co
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { DatabaseConnectionService } from '../src/database/database-connection.service';
 import { EmailDelivery } from '../src/notifications/entities/email-delivery.entity';
-import {
-  claimBatchIsolation,
-  OutboxClaimRepository,
-} from '../src/notifications/outbox-claim.repository';
+import { claimBatchIsolation } from '../src/notifications/outbox-claim.constants';
+import { OutboxClaimRepository } from '../src/notifications/outbox-claim.repository';
 import { OutboxDispatcherService } from '../src/notifications/outbox-dispatcher.service';
 import { applicationMigrations } from './fixtures/application-migrations';
 

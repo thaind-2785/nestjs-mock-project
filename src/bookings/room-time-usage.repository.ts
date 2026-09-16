@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { emptyRoomTimeUsage, RoomTimeUsage } from '../rooms/room-time-policy';
-import type { RoomTimeUsageRepository } from '../rooms/room-time-usage.repository';
+import type { RoomTimeUsageRepository } from '../rooms/room-time-usage.port';
 import { BookingChangeHistory } from './entities/booking-change-history.entity';
 import { Booking } from './entities/booking.entity';
 import { BookingStatus } from './entities/booking.enums';

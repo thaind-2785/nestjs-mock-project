@@ -349,5 +349,13 @@ booking/outbox/delivery data to make a retry pass.
   the schema validates was measuring something the adapter did not enforce.
 - 2026-09-15 (`P5-T05`): Mailpit joins the CI readiness services. A gate without it
   would have reported a green mail path it never exercised.
+- 2026-09-16 (PR #12 mentor follow-up): notification delivery constants, result/job
+  contracts, preparation projections, and worker outcomes moved into
+  concern-specific constant/type/error modules. The RFC mailbox-length limit is now
+  named. The BullMQ handle remains lifecycle-mutable inside
+  `NotificationWorkerLifecycle`, while `DeliveryWorkerService` owns one readonly
+  lifecycle identity; this preserves bootstrap/shutdown timing rather than applying
+  `readonly` to a field that the lifecycle hooks reassign. `PLAN-009` owns the broader
+  repository rule and the audit of every mentor comment through this PR.
 - Metric backend remains an implementation detail to record here and in `ADR-0006`
   when selected.

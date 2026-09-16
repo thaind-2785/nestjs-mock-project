@@ -3,56 +3,24 @@ import { isEmail } from 'class-validator';
 import { EntityManager } from 'typeorm';
 import { OutboxEvent } from '../bookings/entities/outbox-event.entity';
 import { EmailDelivery } from './entities/email-delivery.entity';
+import { EmailDeliveryStatus } from './entities/notification.enums';
 import {
-  EmailDeliveryLocale,
-  EmailDeliveryStatus,
-} from './entities/notification.enums';
-import {
-  EmailTemplateService,
+  deliveryPreparationErrorCodes,
+  maximumEmailAddressLength,
+} from './delivery-preparation.constants';
+import { DeliveryPreparationError } from './delivery-preparation.error';
+import type {
   NotificationRenderContext,
-  PreparedEmailMessage,
-} from './email-template.service';
+  OwnerEmailProjection,
+  PreparedNotification,
+  RoomNumberProjection,
+} from './delivery-preparation.types';
+import { EmailTemplateService } from './email-template.service';
 import {
   NotificationEvent,
   parseNotificationEvent,
 } from './notification-event';
 import { notificationTemplateRegistry } from './notification-template.registry';
-import type { NotificationTemplateKey } from './notification-template.registry';
-
-export const deliveryPreparationErrorCodes = {
-  transactionRequired: 'NOTIFICATION_PREPARATION_TRANSACTION_REQUIRED',
-  ownerNotFound: 'NOTIFICATION_OWNER_NOT_FOUND',
-  recipientInvalid: 'MAIL_RECIPIENT_INVALID',
-  roomNotFound: 'NOTIFICATION_ROOM_NOT_FOUND',
-  deliveryNotPending: 'NOTIFICATION_DELIVERY_NOT_PENDING',
-} as const;
-
-export type DeliveryPreparationErrorCode =
-  (typeof deliveryPreparationErrorCodes)[keyof typeof deliveryPreparationErrorCodes];
-
-export class DeliveryPreparationError extends Error {
-  constructor(readonly code: DeliveryPreparationErrorCode) {
-    super(code);
-    this.name = 'DeliveryPreparationError';
-  }
-}
-
-export interface PreparedNotification {
-  deliveryId: string;
-  eventType: string;
-  templateKey: NotificationTemplateKey;
-  locale: EmailDeliveryLocale;
-  recipient: string;
-  message: PreparedEmailMessage;
-}
-
-interface OwnerEmailProjection {
-  email: unknown;
-}
-
-interface RoomNumberProjection {
-  roomNumber: unknown;
-}
 
 /**
  * Prepares one provider-independent attempt inside the caller's short transaction.
@@ -191,7 +159,7 @@ export class DeliveryPreparationService {
 
 function requireRecipient(value: string): string {
   if (
-    value.length > 254 ||
+    value.length > maximumEmailAddressLength ||
     value !== value.trim().toLowerCase() ||
     !isEmail(value, { require_tld: false, allow_utf8_local_part: false })
   ) {

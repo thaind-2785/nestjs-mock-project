@@ -10,39 +10,13 @@ import {
   READINESS_REDIS_FACTORY,
   READINESS_STORAGE_CLIENT,
 } from './readiness.tokens';
-
-export const readinessDependencies = ['mysql', 'redis', 'storage'] as const;
-
-/** Long enough to be visible while debugging, short enough to leave no residue. */
-const readinessKeyTtlSeconds = 30;
-export type ReadinessDependency = (typeof readinessDependencies)[number];
-
-export interface RedisReadinessClient {
-  connect(): Promise<void>;
-  disconnect(): void;
-  ping(): Promise<string>;
-  set(
-    key: string,
-    value: string,
-    mode: 'EX',
-    seconds: number,
-  ): Promise<unknown>;
-}
-
-export type RedisReadinessClientFactory = () => RedisReadinessClient;
-
-export interface StorageReadinessClient {
-  destroy(): void;
-  send(
-    command: HeadBucketCommand,
-    options?: { abortSignal?: AbortSignal },
-  ): Promise<unknown>;
-}
-
-interface ReadinessProbeResult {
-  dependency: ReadinessDependency;
-  healthy: boolean;
-}
+import { readinessKeyTtlSeconds } from './readiness.constants';
+import type {
+  ReadinessDependency,
+  ReadinessProbeResult,
+  RedisReadinessClientFactory,
+  StorageReadinessClient,
+} from './readiness.types';
 
 @Injectable()
 export class ReadinessService implements OnApplicationShutdown {

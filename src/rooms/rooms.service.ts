@@ -25,7 +25,8 @@ import {
   toRoomTypeResponse,
 } from './reference-catalog.service';
 import { applyRoomAttributeFilters } from './room-filters';
-import { RoomImageSet, RoomImagesService } from './room-images.service';
+import { RoomImagesService } from './room-images.service';
+import type { RoomImageSet } from './room-images.types';
 import { lockRoom } from './room-lock';
 import { hasDefinedUpdate } from './room-version';
 import { isDatabaseError, roomsErrors } from './rooms.errors';

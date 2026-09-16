@@ -6,32 +6,25 @@ import {
   OnApplicationShutdown,
 } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
-import { Worker } from 'bullmq';
 import type Redis from 'ioredis';
 import { EntityManager } from 'typeorm';
 import { OutboxEventStatus } from '../bookings/entities/booking.enums';
 import { notificationsConfig } from '../config/notifications.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
-import {
-  DeliveryPreparationError,
-  deliveryPreparationErrorCodes,
-  DeliveryPreparationService,
-  PreparedNotification,
-} from './delivery-preparation.service';
+import { deliveryPreparationErrorCodes } from './delivery-preparation.constants';
+import { DeliveryPreparationError } from './delivery-preparation.error';
+import { DeliveryPreparationService } from './delivery-preparation.service';
+import type { PreparedNotification } from './delivery-preparation.types';
 import { DeliveryResultRepository } from './delivery-result.repository';
+import type { ClaimedWork, DeliveryOutcome } from './delivery-worker.types';
 import { EMAIL_SENDER } from './email-sender';
 import type { EmailSender } from './email-sender';
 import { NotificationEventError } from './notification-event';
 import { notificationBackoffMs } from './notification-backoff';
 import { NOTIFICATION_WORKER_CLIENT } from './notification.tokens';
-import { NotificationJobData } from './outbox-dispatcher.service';
+import { NotificationWorkerLifecycle } from './notification-worker-lifecycle';
+import type { NotificationJobData } from './outbox-dispatcher.types';
 import { classifySmtpFailure } from './smtp-error';
-
-export type DeliveryOutcome = 'sent' | 'retry' | 'failed' | 'skipped';
-
-interface ClaimedWork {
-  prepared: PreparedNotification;
-}
 
 /**
  * Consumes one delivery job.
@@ -46,7 +39,7 @@ export class DeliveryWorkerService
   implements OnApplicationBootstrap, OnApplicationShutdown
 {
   private readonly logger = new Logger(DeliveryWorkerService.name);
-  private worker: Worker<NotificationJobData, DeliveryOutcome> | undefined;
+  private readonly worker = new NotificationWorkerLifecycle();
 
   constructor(
     private readonly database: DatabaseConnectionService,
@@ -60,38 +53,20 @@ export class DeliveryWorkerService
 
   onApplicationBootstrap(): void {
     const { queue, worker } = this.configuration;
-    this.worker = new Worker<NotificationJobData, DeliveryOutcome>(
-      queue.name,
-      (job) => this.process(job.data),
-      {
-        connection: this.client,
-        prefix: queue.prefix,
-        concurrency: worker.concurrency,
-      },
-    );
-    // BullMQ swallows an unhandled `error` to the console, so a database outage or a
-    // deadlock would otherwise leave no structured record that the consumer is
-    // failing at all.
-    this.worker.on('error', (error: Error) => {
-      this.logger.error({
-        event: 'notification_consumer_error',
-        reason: error.name,
-      });
-    });
-    this.worker.on('failed', (job, error: Error) => {
-      this.logger.error({
-        event: 'notification_job_failed',
-        outboxEventId: job?.data.outboxEventId,
-        attempt: job?.data.attempt,
-        reason: error.name,
-      });
+    this.worker.start({
+      queueName: queue.name,
+      queuePrefix: queue.prefix,
+      concurrency: worker.concurrency,
+      client: this.client,
+      process: (data) => this.process(data),
+      logger: this.logger,
     });
   }
 
   async onApplicationShutdown(): Promise<void> {
     // Closing the worker waits for jobs in flight; the bounded drain above it decides
     // how long that may take.
-    await this.worker?.close();
+    await this.worker.close();
     await this.client.quit();
   }
 

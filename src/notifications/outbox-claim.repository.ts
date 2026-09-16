@@ -1,36 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { OutboxEventStatus } from '../bookings/entities/booking.enums';
-
-export interface OutboxClaim {
-  id: string;
-  attempt: number;
-}
-
-export interface OutboxClaimInput {
-  batchSize: number;
-  leaseMs: number;
-  claimToken: string;
-}
-
-export interface OutboxReleaseInput {
-  id: string;
-  claimToken: string;
-  attempt: number;
-  retryInMs: number;
-  errorCode: string;
-}
-
-interface ClaimedRow {
-  id: string;
-  attempts: number;
-}
-
-interface EligibleRow {
-  id: string;
-  availableAt: Date;
-  createdAt: Date;
-}
+import type {
+  ClaimedRow,
+  EligibleRow,
+  OutboxClaim,
+  OutboxClaimInput,
+  OutboxReleaseInput,
+} from './outbox-claim.types';
 
 /**
  * Orders the rows one batch claimed. SQL sorts only by `available_at`, because that
@@ -63,8 +40,6 @@ function compareEligible(left: EligibleRow, right: EligibleRow): number {
  * then waits out its lock timeout. READ COMMITTED releases the locks on rows the
  * filter rejected; that release is the whole reason the scan is safe.
  */
-export const claimBatchIsolation = 'READ COMMITTED' as const;
-
 @Injectable()
 export class OutboxClaimRepository {
   async claimBatch(

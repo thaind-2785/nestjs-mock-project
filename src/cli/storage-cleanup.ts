@@ -1,9 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
-import {
-  defaultCleanupBatchSize,
-  StorageCleanupService,
-} from '../files/storage-cleanup.service';
+import { defaultCleanupBatchSize } from '../files/storage-cleanup.constants';
+import { StorageCleanupService } from '../files/storage-cleanup.service';
 
 /**
  * Bounded, restartable drain of pending object-storage cleanup. Phase 7 can schedule

@@ -95,6 +95,22 @@ describe('Phase 5 migration revert and reapply', () => {
     ]);
   });
 
+  it('keeps the index the redrive guard reads through', async () => {
+    // Dropping it from the migration was invisible to every suite, while `EXPLAIN`
+    // shows the guard depends on it (`ref`, `Using index`).
+    const columns: Array<{ COLUMN_NAME: string }> = await dataSource.query(
+      `SELECT COLUMN_NAME FROM information_schema.statistics
+       WHERE table_schema = DATABASE() AND table_name = 'email_send_attempts'
+         AND index_name = 'idx_email_send_attempts_event'
+       ORDER BY SEQ_IN_INDEX`,
+    );
+
+    expect(columns.map((column) => column.COLUMN_NAME)).toEqual([
+      'outbox_event_id',
+      'accepted_at',
+    ]);
+  });
+
   it('refuses to revert once a provider acceptance is recorded', async () => {
     await dataSource.query(
       `INSERT INTO email_send_attempts

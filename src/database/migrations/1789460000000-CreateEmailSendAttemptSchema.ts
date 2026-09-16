@@ -29,8 +29,8 @@ export class CreateEmailSendAttemptSchema1789460000000 implements MigrationInter
       CREATE TABLE email_send_attempts (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
         outbox_event_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-        template_key VARCHAR(100) NOT NULL,
-        provider_message_id VARCHAR(255) NULL,
+        template_key VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+        provider_message_id VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NULL,
         claim_token VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
         attempt SMALLINT UNSIGNED NOT NULL,
         accepted_at DATETIME(6) NOT NULL,

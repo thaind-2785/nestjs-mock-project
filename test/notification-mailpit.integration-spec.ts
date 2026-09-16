@@ -127,6 +127,7 @@ describe('Phase 5 delivery through Mailpit', () => {
   });
 
   beforeEach(async () => {
+    await dataSource.query('DELETE FROM email_send_attempts');
     await dataSource.query('DELETE FROM email_deliveries');
     await dataSource.query('DELETE FROM outbox_events');
     await dataSource.query('DELETE FROM users');
@@ -164,6 +165,28 @@ describe('Phase 5 delivery through Mailpit', () => {
     // event without anyone quoting the message body.
     const headers = await mailpitHeaders(messages[0].ID);
     expect(headers['X-Notification-Id']?.[0]).toBe(eventId);
+
+    // The row the whole redrive guard joins on. Writing the claim token into
+    // `outbox_event_id` instead survived every unit and integration suite and was
+    // caught only by a ninety-second e2e, which is not where a join key belongs.
+    const accepted: Array<{
+      outboxEventId: string;
+      templateKey: string;
+      attempt: number;
+      providerMessageId: string | null;
+      claimToken: string;
+    }> = await dataSource.query(
+      `SELECT outbox_event_id AS outboxEventId, template_key AS templateKey,
+              attempt, provider_message_id AS providerMessageId,
+              claim_token AS claimToken
+       FROM email_send_attempts WHERE outbox_event_id = ?`,
+      [eventId],
+    );
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0].templateKey).toBe('booking.confirmed.v1');
+    expect(Number(accepted[0].attempt)).toBe(1);
+    expect(accepted[0].providerMessageId).toContain(eventId);
+    expect(accepted[0].claimToken).toBe(job.claimToken);
 
     const delivery = await readDelivery(eventId);
     expect(delivery.status).toBe(EmailDeliveryStatus.Sent);

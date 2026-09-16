@@ -8,6 +8,9 @@ import { NotificationRedriveService } from '../notifications/notification-redriv
  * fixed.
  *
  * Usage: `npm run notifications:redrive-failed -- --event-id <uuid> --reason <text>`
+ * Add `--allow-duplicate` only when the guest has confirmed that a message the
+ * provider already accepted never arrived; without it a recorded acceptance is
+ * refused.
  *
  * A refusal exits non-zero. The state machine's "no" has to stop a script that runs
  * this in a loop, not scroll past as a success.

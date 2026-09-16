@@ -40,6 +40,8 @@ export class ControllableSmtpServer {
   private readonly server: Server;
   private readonly sockets = new Set<Socket>();
   readonly accepted: AcceptedMessage[] = [];
+  /** Hook failures, surfaced so a test fails loudly instead of hanging. */
+  readonly hookFailures: Error[] = [];
 
   constructor(private readonly options: ControllableSmtpServerOptions = {}) {
     this.server = createServer((socket) => this.handle(socket));
@@ -85,7 +87,15 @@ export class ControllableSmtpServer {
           inData = false;
           const message: AcceptedMessage = { from, to: [...to], body };
           this.accepted.push(message);
-          void this.acceptMessage(socket, message);
+          // A hook that throws here would otherwise be an unhandled rejection, and
+          // whatever state it was holding - a row lock, in the crash test - would
+          // never be released.
+          void this.acceptMessage(socket, message).catch((error: unknown) => {
+            this.hookFailures.push(
+              error instanceof Error ? error : new Error(String(error)),
+            );
+            socket.destroy();
+          });
           continue;
         }
         const lineEnd = buffer.indexOf('\r\n');

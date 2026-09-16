@@ -33,6 +33,7 @@ const prepared = {
 function createWorker(options: {
   prepare?: jest.Mock;
   send?: jest.Mock;
+  recordAccepted?: jest.Mock;
   attempt?: number;
   maxAttempts?: number;
 }) {
@@ -78,10 +79,12 @@ function createWorker(options: {
       return Promise.resolve({ providerMessageId: '<provider@id>' });
     });
   const sender = { send } as unknown as EmailSender;
-  const recordAccepted = jest.fn(() => {
-    order.push('recordAccepted');
-    return Promise.resolve();
-  });
+  const recordAccepted =
+    options.recordAccepted ??
+    jest.fn(() => {
+      order.push('recordAccepted');
+      return Promise.resolve();
+    });
   const sendAttempts = {
     recordAccepted,
     countAccepted: jest.fn(() => Promise.resolve(0)),
@@ -110,6 +113,44 @@ function createWorker(options: {
 }
 
 describe('DeliveryWorkerService', () => {
+  it('reports a delivered message as sent even when the evidence cannot be written', async () => {
+    const recordAccepted = jest.fn(() =>
+      Promise.reject(
+        Object.assign(new Error('QueryFailedError'), {
+          code: 'ER_NO_SUCH_TABLE',
+        }),
+      ),
+    );
+    const harness = createWorker({ recordAccepted });
+
+    // The provider has the message. A database fault while noting that down used to
+    // fall through `classifySmtpFailure`'s catch-all, be recorded as a retryable
+    // MAIL_PROVIDER_UNAVAILABLE, and send the guest the same mail again on every
+    // remaining attempt - blaming the provider for a database fault.
+    await expect(harness.service.process(job)).resolves.toBe('sent');
+
+    expect(harness.send).toHaveBeenCalledTimes(1);
+    expect(harness.markSent).toHaveBeenCalledTimes(1);
+    expect(harness.markRetry).not.toHaveBeenCalled();
+    expect(harness.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('records no acceptance when the provider refused the message', async () => {
+    const send = jest.fn(() =>
+      Promise.reject(
+        Object.assign(new Error('rejected'), { responseCode: 550 }),
+      ),
+    );
+    const recordAccepted = jest.fn(() => Promise.resolve());
+    const harness = createWorker({ send, recordAccepted });
+
+    await expect(harness.service.process(job)).resolves.toBe('failed');
+
+    // The false-positive direction: an acceptance row for a message the provider
+    // refused would refuse every legitimate redrive of it, forever.
+    expect(recordAccepted).not.toHaveBeenCalled();
+  });
+
   it('sends once and records the provider acceptance', async () => {
     const harness = createWorker({});
 

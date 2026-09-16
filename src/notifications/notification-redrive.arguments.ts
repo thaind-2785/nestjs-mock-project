@@ -39,7 +39,11 @@ export function parseRedriveArguments(argumentsList: string[]): RedriveRequest {
     values.set(flag, pairs[index + 1]);
   }
 
-  const outboxEventId = values.get('--event-id') ?? '';
+  // `outbox_events.id` is `ascii_bin`, so an uppercase paste matches no row and
+  // would return NOT_FOUND - the very "the event is gone" reading this function
+  // exists to prevent. Normalised rather than rejected: the casing is not a
+  // mistake worth refusing, only worth correcting.
+  const outboxEventId = (values.get('--event-id') ?? '').toLowerCase();
   const reason = (values.get('--reason') ?? '').trim();
   if (!uuidPattern.test(outboxEventId)) {
     throw new Error(redriveInvalidArgumentsCode);

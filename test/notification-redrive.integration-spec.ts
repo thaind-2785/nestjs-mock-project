@@ -245,6 +245,10 @@ describe('Phase 5 notification operations', () => {
     it('still refuses a sent delivery even with the override', async () => {
       const id = await insertEvent({ status: OutboxEventStatus.Failed });
       await insertDelivery(id, { status: EmailDeliveryStatus.Sent });
+      // A SENT delivery always has an acceptance behind it. Without this row the test
+      // described a state production cannot reach, and it passed even with the two
+      // refusals evaluated in the opposite order.
+      await recordAcceptedSend(id);
 
       const result = await dataSource.transaction(redriveIsolation, (manager) =>
         redrives.redrive(manager, {

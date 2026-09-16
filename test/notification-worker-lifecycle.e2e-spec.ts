@@ -35,6 +35,8 @@ describe('P5-T07 worker lifecycle under failure', () => {
   let queuePrefix: string;
   let baseEnvironment: NodeJS.ProcessEnv;
   const children = new Set<ChildProcess>();
+  const servers = new Set<ControllableSmtpServer>();
+  let redisConnection: { host: string; port: number };
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
@@ -86,6 +88,11 @@ describe('P5-T07 worker lifecycle under failure', () => {
       stdio: 'ignore',
     });
 
+    redisConnection = {
+      host: environment.REDIS_HOST,
+      port: environment.REDIS_PORT,
+    };
+
     baseEnvironment = {
       ...process.env,
       NODE_ENV: 'test',
@@ -97,6 +104,10 @@ describe('P5-T07 worker lifecycle under failure', () => {
       MAIL_SEND_TIMEOUT_MS: '10000',
       NOTIFICATION_SHUTDOWN_DRAIN_MS: '10000',
       NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS: '5000',
+      // One send at a time. At the default concurrency of five the whole backlog
+      // drains between two polls, so the "kill it mid-backlog" test killed a worker
+      // that had already finished and asserted nothing.
+      NOTIFICATION_WORKER_CONCURRENCY: '1',
     };
   });
 
@@ -110,6 +121,14 @@ describe('P5-T07 worker lifecycle under failure', () => {
   afterEach(async () => {
     for (const child of children) child.kill('SIGKILL');
     children.clear();
+    // Closed here rather than at the end of each test: a failed assertion skips the
+    // rest of the body, and a leaked fixture server keeps jest alive long after the
+    // suite reports.
+    for (const server of servers) {
+      expect(server.hookFailures).toEqual([]);
+      await server.close();
+    }
+    servers.clear();
     // BullMQ state outlives the process that wrote it, so a job left behind would be
     // consumed by the next test's worker and its assertions would be about work this
     // test created.
@@ -130,7 +149,9 @@ describe('P5-T07 worker lifecycle under failure', () => {
   });
 
   it('never lets two workers deliver the same event twice', async () => {
-    const smtp = new ControllableSmtpServer({ acceptDelayMs: 100 });
+    const smtp = registerServer(
+      new ControllableSmtpServer({ acceptDelayMs: 100 }),
+    );
     const port = await smtp.listen();
     const owner = await seedOwner('concurrent@hotel.test');
     const ids: string[] = [];
@@ -144,10 +165,15 @@ describe('P5-T07 worker lifecycle under failure', () => {
 
     await waitFor(async () => (await countProcessed()) === ids.length, 90_000);
 
-    // `FOR UPDATE SKIP LOCKED` plus the claim token is the whole of the mutual
-    // exclusion. If either were wrong, a duplicate would show up here as a ninth
-    // acceptance, not as a failing query.
+    // Both halves matter. Counting sends proves nothing was duplicated; counting
+    // distinct claim tokens proves two processes actually contended for the backlog.
+    // Without the second assertion this test passed with one `startWorker` call
+    // deleted, which made it evidence of nothing.
     expect(smtp.accepted).toHaveLength(ids.length);
+    const tokens: Array<{ total: string | number }> = await dataSource.query(
+      'SELECT COUNT(DISTINCT claim_token) AS total FROM email_send_attempts',
+    );
+    expect(Number(tokens[0].total)).toBeGreaterThanOrEqual(2);
     const deliveries: Array<{ outboxEventId: string; status: string }> =
       await dataSource.query(
         'SELECT outbox_event_id AS outboxEventId, status FROM email_deliveries',
@@ -158,12 +184,13 @@ describe('P5-T07 worker lifecycle under failure', () => {
         (row) => row.status === String(EmailDeliveryStatus.Sent),
       ),
     ).toBe(true);
-    await smtp.close();
   });
 
   it('resumes the backlog after a worker is killed outright', async () => {
     // Paced so the backlog cannot drain before the kill lands.
-    const smtp = new ControllableSmtpServer({ acceptDelayMs: 600 });
+    const smtp = registerServer(
+      new ControllableSmtpServer({ acceptDelayMs: 600 }),
+    );
     const port = await smtp.listen();
     const owner = await seedOwner('restart@hotel.test');
     for (let index = 0; index < 4; index += 1) await seedEvent(owner);
@@ -190,7 +217,6 @@ describe('P5-T07 worker lifecycle under failure', () => {
         (row) => row.status === String(EmailDeliveryStatus.Sent),
       ),
     ).toBe(true);
-    await smtp.close();
   });
 
   it('records the acceptance when killed between the provider and the database', async () => {
@@ -199,33 +225,41 @@ describe('P5-T07 worker lifecycle under failure', () => {
     let blockingRunner: QueryRunner | undefined;
     const worker: { current?: ChildProcess } = {};
 
-    const smtp = new ControllableSmtpServer({
-      onBeforeAccept: async () => {
-        // Taken while the worker is still waiting for its 250: from here its result
-        // transaction cannot commit, which turns "killed inside the window" from a
-        // race into a controlled state.
-        blockingRunner = dataSource.createQueryRunner();
-        await blockingRunner.connect();
-        await blockingRunner.startTransaction();
-        await blockingRunner.query(
-          'SELECT id FROM outbox_events WHERE id = ? FOR UPDATE',
-          [id],
-        );
-      },
-      onAfterAccept: async () => {
-        // The provider has accepted. Wait for the append-only record, then kill the
-        // process before it can ever write the delivery result.
-        await waitFor(async () => (await countAcceptedSends(id)) === 1, 30_000);
-        worker.current?.kill('SIGKILL');
-        await waitFor(
-          () => Promise.resolve(worker.current?.killed === true),
-          10_000,
-        );
-        await blockingRunner?.rollbackTransaction();
-        await blockingRunner?.release();
-        blockingRunner = undefined;
-      },
-    });
+    const smtp = registerServer(
+      new ControllableSmtpServer({
+        onBeforeAccept: async () => {
+          // Taken while the worker is still waiting for its 250: from here its result
+          // transaction cannot commit, which turns "killed inside the window" from a
+          // race into a controlled state.
+          blockingRunner = dataSource.createQueryRunner();
+          await blockingRunner.connect();
+          await blockingRunner.startTransaction();
+          await blockingRunner.query(
+            'SELECT id FROM outbox_events WHERE id = ? FOR UPDATE',
+            [id],
+          );
+        },
+        onAfterAccept: async () => {
+          // The provider has accepted. Wait for the append-only record, then kill the
+          // process before it can ever write the delivery result.
+          await waitFor(
+            async () => (await countAcceptedSends(id)) === 1,
+            30_000,
+          );
+          // `killed` is set synchronously by `kill()` and says nothing about the
+          // process being gone. Waiting for `exit` is what makes releasing the lock
+          // below safe.
+          const exited = new Promise<void>((resolve) =>
+            worker.current?.once('exit', () => resolve()),
+          );
+          worker.current?.kill('SIGKILL');
+          await exited;
+          await blockingRunner?.rollbackTransaction();
+          await blockingRunner?.release();
+          blockingRunner = undefined;
+        },
+      }),
+    );
     const port = await smtp.listen();
     worker.current = startWorker(port);
 
@@ -246,8 +280,14 @@ describe('P5-T07 worker lifecycle under failure', () => {
     // keeps it from becoming a silent duplicate later: a redrive of this event is
     // refused, because something did reach the guest.
     expect(await countAcceptedSends(id)).toBe(1);
-    await smtp.close();
   });
+
+  function registerServer(
+    server: ControllableSmtpServer,
+  ): ControllableSmtpServer {
+    servers.add(server);
+    return server;
+  }
 
   function startWorker(smtpPort: number): ChildProcess {
     const child = spawn('node', ['dist/worker'], {
@@ -294,7 +334,11 @@ describe('P5-T07 worker lifecycle under failure', () => {
   }
 
   async function obliterateQueue(): Promise<void> {
-    const client = new Redis({ maxRetriesPerRequest: null });
+    // The workers honour REDIS_HOST/REDIS_PORT; so must the cleanup that follows them.
+    const client = new Redis({
+      ...redisConnection,
+      maxRetriesPerRequest: null,
+    });
     try {
       const keys = await client.keys(`${queuePrefix}:*`);
       if (keys.length > 0) await client.del(...keys);

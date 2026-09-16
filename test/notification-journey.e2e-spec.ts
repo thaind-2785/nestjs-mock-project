@@ -97,6 +97,9 @@ describe('P5-T07 booking to mail journey', () => {
     'NODE_ENV',
     'MYSQL_DATABASE',
     'GOOGLE_AUTH_ENABLED',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_REDIRECT_URI',
     'AUTH_REDIS_KEY_PREFIX',
     'RATE_LIMIT_REDIS_KEY_PREFIX',
   ];
@@ -111,7 +114,13 @@ describe('P5-T07 booking to mail journey', () => {
 
     process.env.NODE_ENV = 'test';
     process.env.MYSQL_DATABASE = disposableDatabase;
+    // Enabling Google auth makes these three required. A developer machine has them
+    // in `.env`, so omitting them only fails where there is no `.env` - which is CI.
     process.env.GOOGLE_AUTH_ENABLED = 'true';
+    process.env.GOOGLE_CLIENT_ID = 'fake-google-client';
+    process.env.GOOGLE_CLIENT_SECRET = 'fake-google-client-secret';
+    process.env.GOOGLE_REDIRECT_URI =
+      'http://127.0.0.1:3000/api/v1/auth/google/callback';
     process.env.AUTH_REDIS_KEY_PREFIX = `hotel:p5-t07-auth:${process.pid}:${randomUUID().replaceAll('-', '')}`;
     process.env.RATE_LIMIT_REDIS_KEY_PREFIX = `hotel:p5-t07-rate:${process.pid}:${randomUUID().replaceAll('-', '')}`;
 

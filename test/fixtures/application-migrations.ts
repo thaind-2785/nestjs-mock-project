@@ -2,6 +2,8 @@ import { CreateAuthRbacSchema1788380000000 } from '../../src/database/migrations
 import { CreateRoomCatalogSchema1788490000000 } from '../../src/database/migrations/1788490000000-CreateRoomCatalogSchema';
 import { CreateBookingCoreSchema1788580000000 } from '../../src/database/migrations/1788580000000-CreateBookingCoreSchema';
 import { CreateNotificationDeliverySchema1789370000000 } from '../../src/database/migrations/1789370000000-CreateNotificationDeliverySchema';
+import { CreateEmailSendAttemptSchema1789460000000 } from '../../src/database/migrations/1789460000000-CreateEmailSendAttemptSchema';
+import { AddDeliveryBacklogIndex1789550000000 } from '../../src/database/migrations/1789550000000-AddDeliveryBacklogIndex';
 
 /**
  * The ordered migration list every suite that builds a disposable database runs.
@@ -18,4 +20,6 @@ export const applicationMigrations = [
   CreateRoomCatalogSchema1788490000000,
   CreateBookingCoreSchema1788580000000,
   CreateNotificationDeliverySchema1789370000000,
+  CreateEmailSendAttemptSchema1789460000000,
+  AddDeliveryBacklogIndex1789550000000,
 ];

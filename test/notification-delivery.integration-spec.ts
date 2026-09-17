@@ -63,8 +63,17 @@ describe('Phase 5 notification delivery persistence', () => {
   });
 
   beforeEach(async () => {
+    // Restores whatever a previous test reverted, so each one starts from the whole
+    // stack rather than from its predecessor's leftovers.
+    await dataSource.runMigrations();
+    await dataSource.query('DELETE FROM email_send_attempts');
     await dataSource.query('DELETE FROM email_deliveries');
     await dataSource.query('DELETE FROM outbox_events');
+    // This suite is about the delivery migration and calls `undoLastMigration` expecting
+    // to get it. Two migrations now sit on top - the backlog index, then the acceptance
+    // schema - so peel both and leave the stack these tests were written against.
+    await dataSource.undoLastMigration();
+    await dataSource.undoLastMigration();
   });
 
   afterAll(async () => {

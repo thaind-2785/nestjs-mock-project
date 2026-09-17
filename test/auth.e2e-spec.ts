@@ -26,6 +26,7 @@ import { UserRoleHistory } from '../src/users/entities/user-role-history.entity'
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
 import { UserStatus } from '../src/users/entities/user.enums';
+import { startE2eServer } from './fixtures/e2e-server';
 
 jest.setTimeout(30_000);
 
@@ -141,7 +142,7 @@ describe('Google auth and RBAC journey (e2e)', () => {
       swaggerEnabled: true,
       requestLogger: { log: jest.fn() },
     });
-    await app.init();
+    await startE2eServer(app);
   });
 
   it('rejects a copied state in another browser without consuming the owner transaction', async () => {

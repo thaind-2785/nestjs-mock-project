@@ -37,6 +37,7 @@ import { UserStatusHistory } from '../src/users/entities/user-status-history.ent
 import { User } from '../src/users/entities/user.entity';
 import { UserRole, UserStatus } from '../src/users/entities/user.enums';
 import { applicationMigrations } from './fixtures/application-migrations';
+import { startE2eServer } from './fixtures/e2e-server';
 
 jest.setTimeout(30_000);
 
@@ -159,7 +160,7 @@ describe('Phase 3 public room API (e2e)', () => {
       swaggerEnabled: true,
       requestLogger: { log: jest.fn() },
     });
-    await app.init();
+    await startE2eServer(app);
   });
 
   it('serves the public catalog to guests with filters, availability, and localized errors', async () => {

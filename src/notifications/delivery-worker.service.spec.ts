@@ -12,6 +12,7 @@ import { EmailDeliveryLocale } from './entities/notification.enums';
 import { EmailSender } from './email-sender';
 import { NotificationEventError } from './notification-event';
 import type { NotificationJobData } from './outbox-dispatcher.types';
+import { SendAttemptRepository } from './send-attempt.repository';
 import { smtpErrorCodes } from './smtp-error';
 
 const job: NotificationJobData = {
@@ -32,6 +33,7 @@ const prepared = {
 function createWorker(options: {
   prepare?: jest.Mock;
   send?: jest.Mock;
+  recordAccepted?: jest.Mock;
   attempt?: number;
   maxAttempts?: number;
 }) {
@@ -77,17 +79,29 @@ function createWorker(options: {
       return Promise.resolve({ providerMessageId: '<provider@id>' });
     });
   const sender = { send } as unknown as EmailSender;
+  const recordAccepted =
+    options.recordAccepted ??
+    jest.fn(() => {
+      order.push('recordAccepted');
+      return Promise.resolve();
+    });
+  const sendAttempts = {
+    recordAccepted,
+    countAccepted: jest.fn(() => Promise.resolve(0)),
+  } as unknown as SendAttemptRepository;
   const client = { quit: jest.fn() } as unknown as never;
   const service = new DeliveryWorkerService(
     database,
     preparation,
     results,
+    sendAttempts,
     sender,
     client,
     configuration,
   );
   return {
     service,
+    recordAccepted,
     send,
     markSent,
     markRetry,
@@ -99,6 +113,44 @@ function createWorker(options: {
 }
 
 describe('DeliveryWorkerService', () => {
+  it('reports a delivered message as sent even when the evidence cannot be written', async () => {
+    const recordAccepted = jest.fn(() =>
+      Promise.reject(
+        Object.assign(new Error('QueryFailedError'), {
+          code: 'ER_NO_SUCH_TABLE',
+        }),
+      ),
+    );
+    const harness = createWorker({ recordAccepted });
+
+    // The provider has the message. A database fault while noting that down used to
+    // fall through `classifySmtpFailure`'s catch-all, be recorded as a retryable
+    // MAIL_PROVIDER_UNAVAILABLE, and send the guest the same mail again on every
+    // remaining attempt - blaming the provider for a database fault.
+    await expect(harness.service.process(job)).resolves.toBe('sent');
+
+    expect(harness.send).toHaveBeenCalledTimes(1);
+    expect(harness.markSent).toHaveBeenCalledTimes(1);
+    expect(harness.markRetry).not.toHaveBeenCalled();
+    expect(harness.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('records no acceptance when the provider refused the message', async () => {
+    const send = jest.fn(() =>
+      Promise.reject(
+        Object.assign(new Error('rejected'), { responseCode: 550 }),
+      ),
+    );
+    const recordAccepted = jest.fn(() => Promise.resolve());
+    const harness = createWorker({ send, recordAccepted });
+
+    await expect(harness.service.process(job)).resolves.toBe('failed');
+
+    // The false-positive direction: an acceptance row for a message the provider
+    // refused would refuse every legitimate redrive of it, forever.
+    expect(recordAccepted).not.toHaveBeenCalled();
+  });
+
   it('sends once and records the provider acceptance', async () => {
     const harness = createWorker({});
 
@@ -107,10 +159,18 @@ describe('DeliveryWorkerService', () => {
     // The provider call happens between two transactions, never inside one: no
     // database connection is held across the network, and no accepted message can be
     // undone by a rollback.
+    //
+    // The acceptance is appended immediately after the send and before the result
+    // transaction, and outside any transaction of its own - it adds no open/commit
+    // pair here. Both positions are load-bearing. Recording it before the send would
+    // claim a delivery the provider might still refuse; recording it inside the result
+    // transaction would tie the evidence to holding a claim, which is exactly the case
+    // where it is the only evidence left.
     expect(harness.order).toEqual([
       'transaction:open',
       'transaction:commit',
       'send',
+      'recordAccepted',
       'transaction:open',
       'transaction:commit',
     ]);

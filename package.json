@@ -24,6 +24,7 @@
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
     "auth:bootstrap-admin": "ts-node -r tsconfig-paths/register src/cli/bootstrap-admin.ts",
     "files:storage-cleanup": "ts-node -r tsconfig-paths/register src/cli/storage-cleanup.ts",
+    "notifications:redrive-failed": "ts-node -r tsconfig-paths/register src/cli/redrive-failed.ts",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.mjs\" \"docs/**/*.md\" \".agents/skills/**/*.md\" \".github/**/*.yml\" \".harness/*.yaml\" \".harness/*.json\" \"*.md\"",
     "start": "nest start",
@@ -45,7 +46,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
     "harness:check": "node scripts/harness-check-all.mjs",
     "harness:eval": "node scripts/harness-eval.mjs",
-    "test:harness": "node --test scripts/harness-check.test.mjs scripts/harness-runtime.test.mjs scripts/harness-eval.test.mjs scripts/harness-v02-closure.test.mjs scripts/eslint-conventions.test.mjs",
+    "test:harness": "node --test scripts/harness-check.test.mjs scripts/harness-runtime.test.mjs scripts/harness-eval.test.mjs scripts/harness-v02-closure.test.mjs scripts/eslint-conventions.test.mjs scripts/source-encoding.test.mjs",
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {

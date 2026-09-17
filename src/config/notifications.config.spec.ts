@@ -37,6 +37,7 @@ describe('createNotificationsConfiguration', () => {
         backoffMaxMs: 3_600_000,
       },
       worker: { concurrency: 5, shutdownDrainMs: 30_000 },
+      observability: { backlogSampleIntervalMs: 60_000 },
       queue: {
         name: notificationQueueName,
         prefix: 'hotel:notifications',
@@ -177,6 +178,7 @@ describe('describeNotificationsConfiguration', () => {
       backoffMaxMs: 3_600_000,
       concurrency: 5,
       shutdownDrainMs: 30_000,
+      backlogSampleIntervalMs: 60_000,
       queueName: notificationQueueName,
       queuePrefix: 'hotel:notifications',
     });

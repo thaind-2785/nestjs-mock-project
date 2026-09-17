@@ -272,7 +272,8 @@ erDiagram
 | `reviews`                 | unique `booking_id`; check `rating BETWEEN 1 AND 5`                                                                                                                                                                             |
 | `payment_provider_events` | unique `(provider, provider_event_id)`; index `(payment_id, created_at)`                                                                                                                                                        |
 | `outbox_events`           | unique `idempotency_key`; claim index `(status, available_at, lock_expires_at)`; lease, processed-time, and terminal failure shape is checked                                                                                   |
-| `email_deliveries`        | unique `(outbox_event_id, template_key)`; operations index `(status, created_at, id)`; restrictive FK to `outbox_events`; sent/failed shape is checked                                                                          |
+| `email_deliveries`        | unique `(outbox_event_id, template_key)`; operations index `(status, created_at, id)`; backlog-aggregate index `(template_key, status)`; restrictive FK to `outbox_events`; sent/failed shape is checked                        |
+| `email_send_attempts`     | append-only provider acceptances; index `(outbox_event_id, accepted_at)`; deliberately **no** FK to `outbox_events`, because an FK insert takes a shared lock on the very row a recovering worker may hold exclusively          |
 | `idempotency_keys`        | unique `(actor_user_id, operation, idempotency_key)`; index `expires_at`; pending/completed response shape is checked                                                                                                           |
 | `schedule_runs`           | unique `(job_key, period_key)` for cron idempotency                                                                                                                                                                             |
 
@@ -306,6 +307,19 @@ LOCKED` and performs delivery.
 
 ## Phase 5 notification persistence contract
 
+Three additive migrations. `CreateNotificationDeliverySchema1789370000000` ships the
+delivery record; `CreateEmailSendAttemptSchema1789460000000` adds the acceptance
+evidence `P5-T07` found the first one could not carry; `AddDeliveryBacklogIndex1789550000000`
+covers the backlog aggregate the operator alerts on.
+
+`AddDeliveryBacklogIndex1789550000000` is the only one of the three that reverts
+unconditionally. It adds `(template_key, status)` and nothing else, so it destroys no
+evidence when dropped - the aggregate simply returns to scanning the clustered index.
+The backlog sampler groups on those two columns in that order and selects no third,
+which makes the read a covering index scan; a query change that selects another column
+silently gives that up. The write cost is one index insert per delivery plus one index
+update when the row leaves `PENDING`, because `status` is part of the key.
+
 `CreateNotificationDeliverySchema1789370000000` is additive on Phase 4. It widens the
 outbox lifecycle with the terminal `FAILED` state plus `last_error_code` and
 `failed_at`, and creates `email_deliveries`. Every Phase 4 row shape stays valid.
@@ -314,6 +328,17 @@ outbox lifecycle with the terminal `FAILED` state plus `last_error_code` and
 a `PENDING` row so an operator can see why a retry is scheduled, is cleared by
 success, and is required by the terminal state. A `FAILED` event keeps no lease, so a
 terminal failure cannot look like work someone still owns.
+
+`email_send_attempts` is append-only and never updated. It records that a provider
+accepted a message, with the claim token that was sending and the attempt number. It
+exists because the delivery row is owned by whoever holds the outbox claim, while the
+worker that most needs to write "the mail is out" is the one that has just found its
+claim gone: without a place to put that fact, a message the guest already received
+could later be marked `FAILED` and redriven into a duplicate. Appending conflicts with
+no owner, which is also why it carries no foreign key - an FK insert would take a
+shared lock on the parent row a recovering worker may hold exclusively, making the one
+write that must not wait the write that waits. The redrive command refuses an event
+with a recorded acceptance unless an operator overrides it explicitly.
 
 An `email_deliveries` row is the one logical delivery for an outbox event and a
 template. The worker locks or creates it before calling the provider, so a duplicate

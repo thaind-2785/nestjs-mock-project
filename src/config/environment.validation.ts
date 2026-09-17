@@ -103,6 +103,7 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   NOTIFICATION_BACKOFF_MAX_MS: number;
   NOTIFICATION_WORKER_CONCURRENCY: number;
   NOTIFICATION_SHUTDOWN_DRAIN_MS: number;
+  NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS: number;
 }
 
 const environmentSchema = Joi.object<EnvironmentVariables>({
@@ -436,6 +437,14 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(1_000)
     .max(120_000)
     .default(30_000),
+  // The backlog sample is an alerting signal, not a poll: it aggregates the whole
+  // table, so a short interval buys staleness no operator acts on at the price of a
+  // repeated scan. The floor keeps that cost off the delivery path.
+  NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(5_000)
+    .max(3_600_000)
+    .default(60_000),
 }).unknown(true);
 
 export function validateEnvironment(

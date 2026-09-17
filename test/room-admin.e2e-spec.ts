@@ -32,6 +32,7 @@ import { UserRoleHistory } from '../src/users/entities/user-role-history.entity'
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
 import { applicationMigrations } from './fixtures/application-migrations';
+import { startE2eServer } from './fixtures/e2e-server';
 import { ensureAttachmentBucket } from './fixtures/room-images';
 
 jest.setTimeout(30_000);
@@ -156,7 +157,7 @@ describe('Phase 3 admin room API (e2e)', () => {
       swaggerEnabled: true,
       requestLogger: { log: jest.fn() },
     });
-    await app.init();
+    await startE2eServer(app);
     await ensureAttachmentBucket(validateEnvironment(process.env));
   });
 

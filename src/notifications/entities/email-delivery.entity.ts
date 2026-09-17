@@ -18,6 +18,7 @@ import { EmailDeliveryLocale, EmailDeliveryStatus } from './notification.enums';
   unique: true,
 })
 @Index('idx_email_deliveries_status_created', ['status', 'createdAt', 'id'])
+@Index('idx_email_deliveries_template_status', ['templateKey', 'status'])
 @Check(
   'chk_email_deliveries_state',
   "(`status` = 'PENDING' AND `sent_at` IS NULL AND `failed_at` IS NULL AND `provider_message_id` IS NULL) OR (`status` = 'SENT' AND `sent_at` IS NOT NULL AND `failed_at` IS NULL AND `last_error_code` IS NULL) OR (`status` = 'FAILED' AND `sent_at` IS NULL AND `failed_at` IS NOT NULL AND `last_error_code` IS NOT NULL)",

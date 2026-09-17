@@ -16,6 +16,7 @@ import { DatabaseConnectionService } from '../src/database/database-connection.s
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { DeliveryPreparationService } from '../src/notifications/delivery-preparation.service';
 import { DeliveryResultRepository } from '../src/notifications/delivery-result.repository';
+import { SendAttemptRepository } from '../src/notifications/send-attempt.repository';
 import { DeliveryWorkerService } from '../src/notifications/delivery-worker.service';
 import { EmailDelivery } from '../src/notifications/entities/email-delivery.entity';
 import {
@@ -118,6 +119,7 @@ describe('Phase 5 delivery through Mailpit', () => {
       database,
       new DeliveryPreparationService(templates),
       new DeliveryResultRepository(),
+      new SendAttemptRepository(),
       new SmtpEmailSender(configuration),
       queueClient,
       configuration,
@@ -125,6 +127,7 @@ describe('Phase 5 delivery through Mailpit', () => {
   });
 
   beforeEach(async () => {
+    await dataSource.query('DELETE FROM email_send_attempts');
     await dataSource.query('DELETE FROM email_deliveries');
     await dataSource.query('DELETE FROM outbox_events');
     await dataSource.query('DELETE FROM users');
@@ -163,6 +166,28 @@ describe('Phase 5 delivery through Mailpit', () => {
     const headers = await mailpitHeaders(messages[0].ID);
     expect(headers['X-Notification-Id']?.[0]).toBe(eventId);
 
+    // The row the whole redrive guard joins on. Writing the claim token into
+    // `outbox_event_id` instead survived every unit and integration suite and was
+    // caught only by a ninety-second e2e, which is not where a join key belongs.
+    const accepted: Array<{
+      outboxEventId: string;
+      templateKey: string;
+      attempt: number;
+      providerMessageId: string | null;
+      claimToken: string;
+    }> = await dataSource.query(
+      `SELECT outbox_event_id AS outboxEventId, template_key AS templateKey,
+              attempt, provider_message_id AS providerMessageId,
+              claim_token AS claimToken
+       FROM email_send_attempts WHERE outbox_event_id = ?`,
+      [eventId],
+    );
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0].templateKey).toBe('booking.confirmed.v1');
+    expect(Number(accepted[0].attempt)).toBe(1);
+    expect(accepted[0].providerMessageId).toContain(eventId);
+    expect(accepted[0].claimToken).toBe(job.claimToken);
+
     const delivery = await readDelivery(eventId);
     expect(delivery.status).toBe(EmailDeliveryStatus.Sent);
     expect(delivery.sentAt).toBeInstanceOf(Date);
@@ -172,6 +197,60 @@ describe('Phase 5 delivery through Mailpit', () => {
     expect(event.status).toBe(OutboxEventStatus.Processed);
     expect(event.lockedBy).toBeNull();
     expect(event.lastErrorCode).toBeNull();
+  });
+
+  it('mails the recipient the first attempt snapshotted, not the current owner address', async () => {
+    const owner = await insertOwner('original@hotel.test');
+    const eventId = await insertEvent(owner);
+    // A real first attempt against an unreachable provider: it creates the delivery
+    // row, and with it the recipient snapshot, then reschedules.
+    const first = await dispatchOne();
+    await expect(offlineWorker().process(first)).resolves.toBe('retry');
+    expect((await readDelivery(eventId)).recipient).toBe('original@hotel.test');
+
+    await dataSource.query(
+      `UPDATE users SET email = 'changed@hotel.test' WHERE id = ?`,
+      [owner],
+    );
+    await dataSource.query(
+      `UPDATE outbox_events SET available_at = NOW(6) WHERE id = ?`,
+      [eventId],
+    );
+
+    const retry = await dispatchOne();
+    await expect(worker.process(retry)).resolves.toBe('sent');
+
+    // Re-resolving the owner here would send to an address the delivery record does
+    // not claim, and would make the unique key allow a second logical message.
+    const messages = await mailpitMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].To[0].Address).toBe('original@hotel.test');
+    const deliveries: Array<{ total: string | number }> =
+      await dataSource.query(
+        'SELECT COUNT(*) AS total FROM email_deliveries WHERE outbox_event_id = ?',
+        [eventId],
+      );
+    expect(Number(deliveries[0].total)).toBe(1);
+  });
+
+  it('still delivers to an owner whose account was deactivated', async () => {
+    const owner = await insertOwner('deactivated@hotel.test');
+    await dataSource.query(
+      `UPDATE users SET status = 'INACTIVE' WHERE id = ?`,
+      [owner],
+    );
+    const eventId = await insertEvent(owner);
+
+    const job = await dispatchOne();
+    await expect(worker.process(job)).resolves.toBe('sent');
+
+    // Deactivation revokes application access. It does not revoke a booking the hotel
+    // already decided on, and withholding that mail would leave a guest uninformed
+    // about a stay they still hold.
+    const messages = await mailpitMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].To[0].Address).toBe('deactivated@hotel.test');
+    expect((await readDelivery(eventId)).status).toBe(EmailDeliveryStatus.Sent);
   });
 
   it('sends nothing more when the same job arrives twice', async () => {
@@ -313,10 +392,10 @@ describe('Phase 5 delivery through Mailpit', () => {
     const owner = await insertOwner('lease@hotel.test');
     const eventId = await insertEvent(owner);
     const job = await dispatchOne();
-    // Shorten the lease the dispatcher issued so a renewal is visible, then read the
-    // row from a separate connection while the provider call is in flight. That read
-    // would block if the worker were holding its transaction open across SMTP, and
-    // shows a lease that has not been renewed if the worker forgot to.
+    // Shorten the lease the dispatcher issued so a renewal is visible. The provider
+    // callback then takes a locking read from a separate transaction: unlike a plain
+    // SELECT, this would time out if the worker still held its preparation lock across
+    // the provider call.
     await dataSource.query(
       'UPDATE outbox_events SET lock_expires_at = NOW(6) + INTERVAL 3 SECOND WHERE id = ?',
       [eventId],
@@ -326,13 +405,28 @@ describe('Phase 5 delivery through Mailpit', () => {
       new DatabaseConnectionService(dataSource),
       new DeliveryPreparationService(new EmailTemplateService(configuration)),
       new DeliveryResultRepository(),
+      new SendAttemptRepository(),
       {
         send: async () => {
-          const [row] = await dataSource.query<Array<{ lockExpiresAt: Date }>>(
-            'SELECT lock_expires_at AS lockExpiresAt FROM outbox_events WHERE id = ?',
-            [eventId],
-          );
-          duringSend = row;
+          const observer = dataSource.createQueryRunner();
+          await observer.connect();
+          try {
+            await observer.query('SET SESSION innodb_lock_wait_timeout = 1');
+            await observer.startTransaction();
+            // `QueryRunner.query` is untyped, unlike `DataSource.query`.
+            const observed = (await observer.query(
+              `SELECT lock_expires_at AS lockExpiresAt
+               FROM outbox_events WHERE id = ? FOR UPDATE`,
+              [eventId],
+            )) as Array<{ lockExpiresAt: Date }>;
+            duringSend = observed[0];
+            await observer.rollbackTransaction();
+          } finally {
+            if (observer.isTransactionActive) {
+              await observer.rollbackTransaction();
+            }
+            await observer.release();
+          }
           return { providerMessageId: '<observed@id>' };
         },
       },
@@ -372,6 +466,7 @@ describe('Phase 5 delivery through Mailpit', () => {
       new DatabaseConnectionService(dataSource),
       new DeliveryPreparationService(new EmailTemplateService(configuration)),
       new DeliveryResultRepository(),
+      new SendAttemptRepository(),
       {
         send: async () => {
           // The lease expired and a dispatcher recovered the claim while this send
@@ -450,6 +545,7 @@ describe('Phase 5 delivery through Mailpit', () => {
       new DatabaseConnectionService(dataSource),
       new DeliveryPreparationService(new EmailTemplateService(configuration)),
       new DeliveryResultRepository(),
+      new SendAttemptRepository(),
       new SmtpEmailSender(configuration),
       queueClient,
       configuration,

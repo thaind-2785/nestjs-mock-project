@@ -1,11 +1,11 @@
 # SPEC-007: Reliable notifications
 
-- Status: Accepted
+- Status: Accepted (Phase 5 delivered)
 - Owner: Project owner
-- Last updated: 2026-09-15
+- Last updated: 2026-09-16
 - Scope: Required
 - Related endpoints / ADRs: `EVT-01` through `EVT-04`, `SPEC-006`,
-  `ADR-0002`; the Phase 5 delivery decision will be recorded in `ADR-0006`
+  `ADR-0002`; the Phase 5 delivery decision is recorded in `ADR-0006`
 
 ## Problem and outcome
 
@@ -150,7 +150,9 @@ rather than misrepresented as exactly-once delivery.
 
 ## Data and migration impact
 
-One additive Phase 5 migration:
+Two additive Phase 5 migrations. The first ships with the delivery worker; the second
+was added in `P5-T07` after `REVIEW-035` proved that a message accepted by the provider
+could still end as a `FAILED` delivery and be silently duplicated by a redrive.
 
 - Extends `outbox_events.status` with `FAILED` and adds nullable
   `last_error_code` plus `failed_at`. The lifecycle check becomes:
@@ -167,12 +169,32 @@ One additive Phase 5 migration:
   the duplicate this record exists to prevent. State-shape checks reject
   contradictory sent/failed fields.
 
+- Creates append-only `email_send_attempts`: unsigned bigint ID, `outbox_event_id`,
+  template key, nullable provider message ID, the claim token that was sending, the
+  attempt number, and the acceptance time, indexed by `(outbox_event_id, accepted_at)`.
+  It is appended immediately after the provider accepts and before the result
+  transaction, and it is deliberately not part of `email_deliveries`. The delivery row
+  belongs to whoever holds the outbox claim, and the worker that most needs to record
+  "the mail is out" is precisely the one that has just discovered it no longer holds
+  that claim; appending a fact requires no ownership. There is no update and no delete.
+  The table deliberately has no foreign key to `outbox_events`: an FK insert takes a
+  shared lock on the parent row, which is exactly the row a recovering worker may hold
+  exclusively. A real MySQL probe measured the FK form waiting 3,011 ms and ending in
+  `ER_LOCK_WAIT_TIMEOUT`, while the no-FK append completed in 2 ms. Referential cleanup
+  is therefore a Phase 7 retention responsibility rather than a constraint on the
+  crash-path write that must not wait.
+  A redrive refuses an event with a recorded acceptance unless the operator passes an
+  explicit duplicate override. This narrows the at-least-once ambiguity rather than
+  removing it: a process killed between the provider's acceptance and the insert still
+  records nothing.
+
 The event payload and rendered body are not duplicated into `email_deliveries`.
 Outbox payloads and delivery rows are retained through Phase 5; retention/cleanup is
 owned by Phase 7. No migration modifies booking, history, or user data.
 
-The migration is mechanically reversible only before a Phase 5 worker writes a
-delivery or `FAILED` outbox state. After activation, rollback keeps the additive
+Each migration is mechanically reversible only before the evidence it protects exists -
+a delivery or `FAILED` outbox state for the first, a recorded acceptance for the
+second. After activation, rollback keeps the additive
 columns/table and uses a schema-compatible application rollback or forward fix.
 
 ## External services, async work, and failure behavior
@@ -252,47 +274,50 @@ notification health signals.
 
 ## Acceptance criteria
 
-- [ ] Given a supported Phase 4 outbox event, when the worker is running, then one
+- [x] Given a supported Phase 4 outbox event, when the worker is running, then one
       localized Mailpit email with the expected template fields is accepted and the
       delivery/outbox become `SENT`/`PROCESSED`.
-- [ ] Given booking confirmation through the HTTP API, when the admin approves it,
+- [x] Given booking confirmation through the HTTP API, when the admin approves it,
       then the booking/history/outbox commit first and the owner eventually receives
       exactly one logical confirmation delivery in the local end-to-end flow.
-- [ ] Given rejection, admin edit, or admin cancellation, when its event is consumed,
+- [x] Given rejection, admin edit, or admin cancellation, when its event is consumed,
       then the mapped template contains the correct authorized reason and, for edit,
       the correct before/after values.
-- [ ] Given English and Vietnamese catalogs, every template key and variable exists
+- [x] Given English and Vietnamese catalogs, every template key and variable exists
       in both, and HTML-sensitive reason/room text is escaped without corrupting the
       plain-text body.
-- [ ] Given two dispatchers, when eligible events are claimed concurrently, no claim
+- [x] Given two dispatchers, when eligible events are claimed concurrently, no claim
       is shared and every event is eventually queued.
-- [ ] Given a dispatcher crash after claim but before queue handoff, when the lease
+- [x] Given a dispatcher crash after claim but before queue handoff, when the lease
       expires, another dispatcher recovers and queues the event.
-- [ ] Given a duplicate or stale BullMQ job, when the worker checks its claim token,
+- [x] Given a duplicate or stale BullMQ job, when the worker checks its claim token,
       it performs no SMTP call and does not mutate a sent/failed delivery.
-- [ ] Given Redis or queue handoff failure, the booking API remains committed, the
+- [x] Given Redis or queue handoff failure, the booking API remains committed, the
       matching claim returns to or recovers as `PENDING`, and later delivery succeeds.
-- [ ] Given a retryable SMTP failure, the event is rescheduled with bounded backoff;
+- [x] Given a retryable SMTP failure, the event is rescheduled with bounded backoff;
       after a later success there is one delivery row and one provider message ID.
-- [ ] Given a permanent SMTP failure, malformed payload, unsupported version, absent
+- [x] Given a permanent SMTP failure, malformed payload, unsupported version, absent
       owner, or exhausted budget, the event becomes durably `FAILED` with a sanitized
       code and no hot retry loop.
-- [ ] Given a provider timeout/crash path, no database transaction remains open during
+- [x] Given a provider timeout/crash path, no database transaction remains open during
       SMTP and the documented at-least-once ambiguity is preserved in tests/runbook.
-- [ ] Given a worker process restart, queued/pending work resumes from MySQL/Redis and
+- [x] Given a worker process restart, queued/pending work resumes from MySQL/Redis and
       completed events are successful no-ops.
-- [ ] Given an owner email change after the first attempt, retries retain the original
+- [x] Given an owner email change after the first attempt, retries retain the original
       delivery recipient snapshot instead of creating a second logical delivery.
-- [ ] Given an inactive booking owner, a valid admin-triggered event still produces
+- [x] Given an inactive booking owner, a valid admin-triggered event still produces
       the required delivery without granting application access.
-- [ ] Given a failed event whose cause is fixed, the operator CLI redrives only that
+- [x] Given a failed event whose cause is fixed, the operator CLI redrives only that
       event; it refuses pending, processing, processed, and sent states.
-- [ ] Given Gmail mode, invalid/missing OAuth2 or sender configuration fails worker
+- [x] Given a failed event for which a provider acceptance is recorded, the CLI refuses
+      the redrive with a distinct code, and applies it only when the operator passes an
+      explicit duplicate override.
+- [x] Given Gmail mode, invalid/missing OAuth2 or sender configuration fails worker
       startup without exposing a secret; CI proves the adapter contract without a
       real Gmail call.
-- [ ] Given a fresh Phase 4 database, the Phase 5 migration applies, constraints and
+- [x] Given a fresh Phase 4 database, the Phase 5 migration applies, constraints and
       uniqueness hold, and a pre-traffic revert/reapply succeeds against real MySQL.
-- [ ] Given the complete Phase 5 change, `npm run verify` passes with Mailpit included
+- [x] Given the complete Phase 5 change, `npm run verify` passes with Mailpit included
       in CI readiness and an independent reviewer has no unresolved Blocker/High.
 
 ## Test strategy

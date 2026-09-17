@@ -18,12 +18,13 @@ import type { PreparedNotification } from './delivery-preparation.types';
 import { DeliveryResultRepository } from './delivery-result.repository';
 import type { ClaimedWork, DeliveryOutcome } from './delivery-worker.types';
 import { EMAIL_SENDER } from './email-sender';
-import type { EmailSender } from './email-sender';
+import type { EmailSender, EmailSendResult } from './email-sender';
 import { NotificationEventError } from './notification-event';
 import { notificationBackoffMs } from './notification-backoff';
 import { NOTIFICATION_WORKER_CLIENT } from './notification.tokens';
 import { NotificationWorkerLifecycle } from './notification-worker-lifecycle';
 import type { NotificationJobData } from './outbox-dispatcher.types';
+import { SendAttemptRepository } from './send-attempt.repository';
 import { classifySmtpFailure } from './smtp-error';
 
 /**
@@ -45,6 +46,7 @@ export class DeliveryWorkerService
     private readonly database: DatabaseConnectionService,
     private readonly preparation: DeliveryPreparationService,
     private readonly results: DeliveryResultRepository,
+    private readonly sendAttempts: SendAttemptRepository,
     @Inject(EMAIL_SENDER) private readonly sender: EmailSender,
     @Inject(NOTIFICATION_WORKER_CLIENT) private readonly client: Redis,
     @Inject(notificationsConfig.KEY)
@@ -86,21 +88,66 @@ export class DeliveryWorkerService
     if (!claimed) return this.record(data, 'skipped', 'stale_claim');
 
     const { prepared } = claimed;
+    let sent: EmailSendResult;
     try {
-      const sent = await this.sender.send(prepared.message);
-      const held = await dataSource.transaction((manager) =>
-        this.results.markSent(manager, {
-          ...this.resultKey(data, prepared),
-          providerMessageId: sent.providerMessageId,
-        }),
-      );
-      // The provider accepted it and the claim moved on while we waited: the message
-      // is out, and whoever holds the claim now decides what the record says. This is
-      // the at-least-once window, and it has to be visible rather than silent.
-      if (!held) return this.record(data, 'skipped', 'claim_lost_after_send');
-      return this.record(data, 'sent', prepared.templateKey);
+      sent = await this.sender.send(prepared.message);
     } catch (error: unknown) {
       return this.recordProviderFailure(dataSource, data, prepared, error);
+    }
+
+    // The provider has accepted. Nothing below this line is a verdict about the
+    // message, and nothing below it may be classified as one: a database fault here
+    // used to fall through `classifySmtpFailure`'s catch-all, be recorded as
+    // MAIL_PROVIDER_UNAVAILABLE, and reschedule a message the guest already had -
+    // sending it again on every remaining attempt while blaming the provider.
+    await this.recordAcceptance(data, prepared, sent);
+
+    const held = await dataSource.transaction((manager) =>
+      this.results.markSent(manager, {
+        ...this.resultKey(data, prepared),
+        providerMessageId: sent.providerMessageId,
+      }),
+    );
+    // The provider accepted it and the claim moved on while we waited: the message
+    // is out, and whoever holds the claim now decides what the record says. This is
+    // the at-least-once window, and it has to be visible rather than silent.
+    if (!held) return this.record(data, 'skipped', 'claim_lost_after_send');
+    return this.record(data, 'sent', prepared.templateKey);
+  }
+
+  /**
+   * Appends the evidence that a provider accepted this message, and never fails the
+   * delivery for it.
+   *
+   * The row is evidence, not an outcome. Letting it throw would turn "we could not
+   * write a note about a message that was delivered" into "the message was not
+   * delivered", which reschedules a send the guest already received. A worker that
+   * cannot record it is strictly better off saying so and moving on: the operator
+   * loses the redrive guard for this event, which is the smaller harm and is the
+   * state that existed before this table.
+   */
+  private async recordAcceptance(
+    data: NotificationJobData,
+    prepared: PreparedNotification,
+    sent: EmailSendResult,
+  ): Promise<void> {
+    try {
+      const dataSource = await this.database.ensureInitialized();
+      await this.sendAttempts.recordAccepted(dataSource.manager, {
+        outboxEventId: data.outboxEventId,
+        templateKey: prepared.templateKey,
+        providerMessageId: sent.providerMessageId,
+        claimToken: data.claimToken,
+        attempt: data.attempt,
+      });
+    } catch (error: unknown) {
+      this.logger.error({
+        event: 'notification_send_attempt_record_failed',
+        outboxEventId: data.outboxEventId,
+        attempt: data.attempt,
+        reason:
+          error instanceof Error ? error.name : 'SEND_ATTEMPT_RECORD_FAILED',
+      });
     }
   }
 

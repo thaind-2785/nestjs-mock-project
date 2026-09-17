@@ -5,7 +5,8 @@
 - Last updated: 2026-09-17
 - Scope: Selected optional
 - Related endpoints / ADRs: `ADMIN-EXP-01`, `ADMIN-EXP-02`, `JOB-01`,
-  `ADR-0003`, `ADR-0005`, `ADR-0006`; `ADR-0007` is planned for the
+  `ADR-0003`, `ADR-0005`, `ADR-0006`,
+  [`ADR-0007`](../decisions/ADR-0007-worker-thread-export-boundary.md) for the
   export/outbox/Worker Thread boundary
 
 ## Problem and outcome

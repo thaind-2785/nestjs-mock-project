@@ -7,7 +7,7 @@
 
 ## Constraints and risks
 
-- This branch is stacked on Phase 5 commit `b3f205a`, while `main` does not yet
+- This branch is stacked on Phase 5 commit `e5d250b`, while `main` does not yet
   contain the completed Phase 5 worker/outbox changes. Phase 6 must not be presented
   as a merge-ready PR until Phase 5 lands and this branch is updated from `main`.
 - The owner accepted `SPEC-009` on 2026-09-17, including the 10,000-row, 128-MiB
@@ -469,5 +469,7 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
 - 2026-09-17: `EXPIRED` is an API view in Phase 6. Phase 7 owns the durable scheduled
   transition/deletion so Phase 6 does not smuggle cron scope into the worker export.
 
-Link `ADR-0007` when accepted and append only evidence-backed decisions as slices are
-implemented.
+[`ADR-0007`](../decisions/ADR-0007-worker-thread-export-boundary.md) is accepted as
+of 2026-09-17 and records the Worker Thread boundary, the measured XLSX dependency
+choice, and the two limits findings below. Append only evidence-backed decisions as
+slices are implemented.

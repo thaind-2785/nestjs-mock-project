@@ -7,9 +7,10 @@
 
 ## Constraints and risks
 
-- This branch is stacked on Phase 5 commit `e5d250b`, while `main` does not yet
-  contain the completed Phase 5 worker/outbox changes. Phase 6 must not be presented
-  as a merge-ready PR until Phase 5 lands and this branch is updated from `main`.
+- Phase 5 merged into `main` as `e610ce6` on 2026-09-17 and this branch was rebased
+  onto it, so the stacking constraint is discharged. What remains is the ordinary
+  one: PR 1 covers `P6-T01`-`P6-T03`, so it is not merge-ready until `P6-T03` is
+  complete, and it stays a draft until then.
 - The owner accepted `SPEC-009` on 2026-09-17, including the 10,000-row, 128-MiB
   Worker Thread heap, 60-second generation, 25-MiB file, 24-hour result,
   five-per-hour rate, single-concurrency, and three-attempt limits. Implementation

@@ -2,8 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import mysql from 'mysql2/promise';
 import { DataSource, EntityManager, getMetadataArgsStorage } from 'typeorm';
-import { AuthIdentity } from '../src/auth/entities/auth-identity.entity';
-import { AuthSession } from '../src/auth/entities/auth-session.entity';
 import { BookingChangeHistory } from '../src/bookings/entities/booking-change-history.entity';
 import { BookingStatusHistory } from '../src/bookings/entities/booking-status-history.entity';
 import {
@@ -19,12 +17,12 @@ import { BookingsService } from '../src/bookings/bookings.service';
 import { BookingRoomTimeUsageRepository } from '../src/bookings/room-time-usage.repository';
 import { BookingCreateResponse } from '../src/bookings/booking-create.types';
 import { createBookingsConfiguration } from '../src/config/bookings.config';
+import { IdempotencyRepository } from '../src/common/idempotency/idempotency.repository';
+import { applicationEntities } from '../src/database/application-entities';
 import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
 import { createTypeOrmOptions } from '../src/database/database.options';
-import { Amenity } from '../src/rooms/entities/amenity.entity';
-import { RoomAmenity } from '../src/rooms/entities/room-amenity.entity';
 import { RoomTime } from '../src/rooms/entities/room-time.entity';
 import { RoomType } from '../src/rooms/entities/room-type.entity';
 import { Room } from '../src/rooms/entities/room.entity';
@@ -32,8 +30,6 @@ import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { lockRoom } from '../src/rooms/room-lock';
 import { RoomTimesService } from '../src/rooms/room-times.service';
 import { DatabaseConnectionService } from '../src/database/database-connection.service';
-import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
-import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
 import { UserRole, UserStatus } from '../src/users/entities/user.enums';
 import { applicationMigrations } from './fixtures/application-migrations';
@@ -82,23 +78,7 @@ describe('Phase 4 booking foundation persistence', () => {
           MYSQL_DATABASE: disposableDatabase,
         }),
         {
-          entities: [
-            User,
-            AuthIdentity,
-            AuthSession,
-            UserStatusHistory,
-            UserRoleHistory,
-            RoomType,
-            Amenity,
-            Room,
-            RoomAmenity,
-            RoomTime,
-            Booking,
-            BookingStatusHistory,
-            BookingChangeHistory,
-            IdempotencyKey,
-            OutboxEvent,
-          ],
+          entities: applicationEntities,
           migrations: applicationMigrations,
         },
       ),
@@ -107,6 +87,7 @@ describe('Phase 4 booking foundation persistence', () => {
     await dataSource.runMigrations();
     bookings = new BookingsService(
       dataSource,
+      new IdempotencyRepository(),
       createBookingsConfiguration(environment),
     );
     usage = new BookingRoomTimeUsageRepository();

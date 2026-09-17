@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
 import { bookingsConfig } from '../config/bookings.config';
 import { DatabaseModule } from '../database/database.module';
@@ -19,6 +20,7 @@ import { BookingsService } from './bookings.service';
   imports: [
     ConfigModule.forFeature(bookingsConfig),
     DatabaseModule,
+    IdempotencyModule,
     RateLimitModule,
     TypeOrmModule.forFeature([
       Booking,

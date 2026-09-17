@@ -50,18 +50,29 @@ describe('report export module boundaries', () => {
     // and heap this design isolates back beside authentication and booking traffic.
     expect(importsOf(AppModule)).toContain(ReportsApiModule);
     expect(importsOf(AppModule)).not.toContain(ReportsWorkerModule);
-    expect(providersOf(ReportsApiModule)).toEqual([]);
     expect(importsOf(ReportsApiModule)).not.toContain(ReportsWorkerModule);
+    // The only Redis the API touches is the shared request-budget store every
+    // protected route already uses. No queue, no producer connection, no consumer.
+    const providers = providersOf(ReportsApiModule).map((provider) =>
+      typeof provider === 'function' ? provider.name : String(provider),
+    );
+    expect(providers).not.toContain('Queue');
+    expect(providers.join(' ')).not.toMatch(/QUEUE|Worker/);
   });
 
   it('runs the export boundary in the worker context without controllers', () => {
     expect(importsOf(WorkerModule)).toContain(ReportsWorkerModule);
+    // The worker owns queue work and no HTTP surface; the API owns the reverse. A
+    // controller registered in the worker context would be unreachable at best and,
+    // once the consumer exists, a second process answering requests at worst.
     expect(
       Reflect.getMetadata('controllers', ReportsWorkerModule),
     ).toBeUndefined();
     expect(
-      Reflect.getMetadata('controllers', ReportsApiModule),
-    ).toBeUndefined();
+      (Reflect.getMetadata('controllers', ReportsApiModule) as unknown[]).map(
+        (controller) => (controller as { name: string }).name,
+      ),
+    ).toEqual(['AdminExportsController']);
   });
 
   it('gives exports their own queue rather than the notification one', () => {

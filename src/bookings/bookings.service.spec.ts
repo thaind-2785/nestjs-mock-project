@@ -1,4 +1,5 @@
 import { DataSource, EntityManager } from 'typeorm';
+import { IdempotencyRepository } from '../common/idempotency/idempotency.repository';
 import { BookingsService } from './bookings.service';
 import { IdempotencyKeyStatus } from './entities/booking.enums';
 
@@ -35,6 +36,7 @@ describe('BookingsService', () => {
         transaction: (callback: (transaction: EntityManager) => unknown) =>
           callback(manager),
       } as unknown as DataSource,
+      new IdempotencyRepository(),
       {
         hotelTimezone: 'Asia/Ho_Chi_Minh',
         createRateLimit: { max: 10, windowSeconds: 60 },
@@ -83,6 +85,7 @@ describe('BookingsService', () => {
         transaction: (callback: (transaction: EntityManager) => unknown) =>
           callback(manager),
       } as unknown as DataSource,
+      new IdempotencyRepository(),
       {
         hotelTimezone: 'Asia/Ho_Chi_Minh',
         createRateLimit: { max: 10, windowSeconds: 60 },

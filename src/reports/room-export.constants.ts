@@ -16,3 +16,12 @@ export const roomExportEventType = 'room-export.requested';
 export const roomExportEventTypes = [roomExportEventType] as const;
 
 export type RoomExportEventType = (typeof roomExportEventTypes)[number];
+
+/** The `idempotency_keys.operation` namespace for export creation. */
+export const roomExportCreateOperation = 'ROOM_EXPORT_CREATE';
+
+/** The schema version carried by every `room-export.requested` payload. */
+export const roomExportEventSchemaVersion = 1;
+
+/** Where a requester polls the job, returned in the accepted response. */
+export const roomExportPollPathPrefix = '/api/v1/admin/exports';

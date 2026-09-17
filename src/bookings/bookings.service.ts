@@ -8,7 +8,6 @@ import {
   MoreThanOrEqual,
   SelectQueryBuilder,
 } from 'typeorm';
-import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { RoomTimeStatus, RoomStatus } from '../rooms/entities/room.enums';
 import { RoomTime } from '../rooms/entities/room-time.entity';
 import { RoomType } from '../rooms/entities/room-type.entity';
@@ -24,7 +23,6 @@ import {
 import { BookingStatusHistory } from './entities/booking-status-history.entity';
 import { BookingChangeHistory } from './entities/booking-change-history.entity';
 import { Booking } from './entities/booking.entity';
-import { IdempotencyKey } from './entities/idempotency-key.entity';
 import { OutboxEvent } from './entities/outbox-event.entity';
 import {
   bookingCreateFingerprint,
@@ -38,6 +36,9 @@ import {
 import { UserBookingQueryDto } from './dto/user-booking-query.dto';
 import { AdminBookingQueryDto } from './dto/admin-booking-query.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
+import { idempotencyKeyPattern } from '../common/idempotency/idempotency.constants';
+import { idempotencyErrors } from '../common/idempotency/idempotency.errors';
+import { IdempotencyRepository } from '../common/idempotency/idempotency.repository';
 import { bookingsErrors } from './bookings.errors';
 import { orderedUniqueRoomIds } from './booking-lock-order';
 import {
@@ -62,7 +63,6 @@ const bookingApproveOperation = 'BOOKING_APPROVE';
 const bookingRejectOperation = 'BOOKING_REJECT';
 const bookingUpdateOperation = 'BOOKING_UPDATE';
 const bookingAdminCancelOperation = 'BOOKING_ADMIN_CANCEL';
-const idempotencyKeyPattern = /^[A-Za-z0-9._:-]{8,128}$/;
 const bookingSummarySelect = [
   'booking.id',
   'booking.publicId',
@@ -113,6 +113,7 @@ export class BookingsService {
 
   constructor(
     private readonly dataSource: DataSource,
+    private readonly idempotency: IdempotencyRepository,
     @Inject(bookingsConfig.KEY)
     private readonly configuration: ConfigType<typeof bookingsConfig>,
   ) {}
@@ -124,7 +125,7 @@ export class BookingsService {
     requestId?: string,
   ): Promise<BookingCreateResponse> {
     if (!idempotencyKey || !idempotencyKeyPattern.test(idempotencyKey)) {
-      throw bookingsErrors.idempotencyKeyInvalid();
+      throw idempotencyErrors.keyInvalid();
     }
     const fingerprint = bookingCreateFingerprint(actorUserId, input);
 
@@ -954,12 +955,13 @@ export class BookingsService {
     fingerprint: string,
     input: BookingCreateInput,
   ): Promise<BookingCreateTransactionResult> {
-    const idempotency = await this.lockIdempotency(
-      manager,
+    const idempotency = await this.idempotency.lock(manager, {
       actorUserId,
+      operation: bookingCreateOperation,
       idempotencyKey,
       fingerprint,
-    );
+      retentionHours: this.configuration.idempotencyRetentionHours,
+    });
     if (idempotency.status === IdempotencyKeyStatus.Completed) {
       return {
         response: idempotency.responseBody as unknown as BookingCreateResponse,
@@ -988,7 +990,10 @@ export class BookingsService {
     );
     const roomType = await this.findResponseRoomType(manager, room.roomTypeId);
     const response = toCreateResponse(booking, room, roomType, nights);
-    await this.completeIdempotency(manager, idempotency.id, response);
+    await this.idempotency.complete(manager, idempotency.id, {
+      responseStatus: 201,
+      responseBody: response as unknown as Record<string, unknown>,
+    });
     return { response, replayed: false };
   }
 
@@ -1058,55 +1063,6 @@ export class BookingsService {
       where: { id: roomTypeId },
       select: { id: true, name: true },
     });
-  }
-
-  private async completeIdempotency(
-    manager: EntityManager,
-    idempotencyId: string,
-    response: BookingCreateResponse,
-  ): Promise<void> {
-    await manager.update(IdempotencyKey, idempotencyId, {
-      status: IdempotencyKeyStatus.Completed,
-      responseStatus: 201,
-      responseBody: response as unknown as QueryDeepPartialEntity<
-        Record<string, unknown>
-      >,
-    });
-  }
-
-  private async lockIdempotency(
-    manager: EntityManager,
-    actorUserId: string,
-    idempotencyKey: string,
-    fingerprint: string,
-  ): Promise<IdempotencyKey> {
-    await manager.query(
-      `INSERT INTO idempotency_keys
-        (actor_user_id, operation, idempotency_key, request_fingerprint, status, response_status, response_body, expires_at)
-       VALUES (?, ?, ?, ?, 'PENDING', NULL, NULL, ?)
-       ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
-      [
-        actorUserId,
-        bookingCreateOperation,
-        idempotencyKey,
-        fingerprint,
-        new Date(
-          Date.now() + this.configuration.idempotencyRetentionHours * 3_600_000,
-        ),
-      ],
-    );
-    const row = await manager.findOneOrFail(IdempotencyKey, {
-      where: {
-        actorUserId,
-        operation: bookingCreateOperation,
-        idempotencyKey,
-      },
-      lock: { mode: 'pessimistic_write' },
-    });
-    if (row.requestFingerprint !== fingerprint) {
-      throw bookingsErrors.idempotencyKeyReused();
-    }
-    return row;
   }
 }
 

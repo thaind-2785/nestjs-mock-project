@@ -82,7 +82,7 @@
 | -------- | ----------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------- | ------- |
 | `P6-T01` | Decisions, limits, modules, and Worker protocol are fixed               | None                          | Config/module/Worker protocol unit and benchmark    | Done    |
 | `P6-T02` | Export state persists and outbox consumers are type-isolated            | Phase 6 export schema/index   | Real-MySQL migration, claim concurrency, `EXPLAIN`  | Done    |
-| `P6-T03` | Admin creates exactly one durable, rate-limited export request          | Use P6-T02 schema             | Controller/service/idempotency integration + E2E    | Pending |
+| `P6-T03` | Admin creates exactly one durable, rate-limited export request          | Use P6-T02 schema             | Controller/service/idempotency integration + E2E    | Done    |
 | `P6-T04` | A bounded room snapshot becomes a safe XLSX in a Worker Thread          | None                          | Query-shape, XLSX package, resource/process tests   | Pending |
 | `P6-T05` | BullMQ attempts recover, upload privately, and finalize exactly one key | Use P6-T02 and cleanup schema | MySQL/Redis/MinIO crash/concurrency integration     | Pending |
 | `P6-T06` | Requester polls status and downloads only an unexpired private result   | Use P6-T02 schema             | Ownership/expiry/presign API integration + E2E      | Pending |
@@ -452,6 +452,26 @@ gate is not the checklist disposition.
   test now pins that an export backlog cannot drive the notification age and page the
   wrong on-call.
 
+### `P6-T03` evidence
+
+- **Constants/contracts:** The operation namespace, event schema version, poll path
+  prefix and key pattern are named constants; the request/response contracts are in
+  `room-export.types.ts` and the repository's return shape with them.
+- **Projection/indexes:** The create path reads only the idempotency row it locks and
+  the job row it just wrote, by primary key. No catalogue query runs in the request.
+- **Batching/N+1:** N/A. The transaction performs a fixed three writes and one read
+  regardless of the filters.
+- **Responsibility/reuse:** The controller translates HTTP and normalizes the body;
+  every decision is in the service. The idempotency protocol, the filter DTO and the
+  fail-closed limiter are all reused rather than reimplemented, and the reports module
+  does not depend on `BookingsService`.
+- **Concurrency:** Insert-then-lock ordering is proven against real MySQL with five
+  concurrent identical calls producing one job, one event and one idempotency row, and
+  with a deliberate foreign-key failure proving the whole transaction rolls back.
+- **Observability:** One `room_export_requested` after commit carrying the job id and
+  the replayed flag, and a separate warning for an idempotency conflict. Filters, the
+  key, the requester's email and the outbox payload are all absent.
+
 ## Documentation / OpenAPI impact
 
 - Add both export routes and every stable status/error/ownership/idempotency field to
@@ -608,6 +628,36 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   That is a real position - a later migration whose `down` refuses would otherwise be
   peeled without anyone checking - and it is worth revisiting only if the churn starts
   outweighing the signal, which is a call for the slice that feels it.
+
+- 2026-09-17 (`P6-T03`): the idempotency claim is now one implementation in
+  `src/common/idempotency/`, used by booking create and export create alike. The plan
+  allowed the extraction only if both sides' tests pin unchanged semantics, and they
+  do: the Phase 4 concurrency suite and the new Phase 6 one both assert that identical
+  concurrent calls produce exactly one durable row. Two separately written insert-then
+  -lock statements would eventually differ in a way no test names - a missing
+  `ON DUPLICATE KEY`, a lock taken after the first write - and the symptom would be
+  duplicate durable work, which is what the table exists to prevent. The two error
+  factories moved with it, because a reused key is not a booking concept.
+- 2026-09-17 (`P6-T03`): the export body is `RoomCatalogFilterDto`, which the admin
+  room list now also composes with pagination rather than declaring its own copy of
+  `query` and `status`. That is what makes "the export returns what the list shows" a
+  property instead of a claim: a filter added to one surface and not the other cannot
+  happen. Pagination is rejected rather than ignored because it was never part of that
+  contract, so the global `forbidNonWhitelisted` pipe refuses it without the endpoint
+  needing a rule of its own.
+- 2026-09-17 (`P6-T03`): the export budget is spent by every call that reaches the
+  endpoint, including a replay, a conflict and a malformed body. The budget protects
+  the cost of handling a request rather than the cost of the job it may or may not
+  create - an attacker who only ever sends malformed bodies is still an attacker. The
+  E2E asserts this directly by exhausting the budget on four rejected calls and one
+  accepted one.
+- 2026-09-17 (`P6-T03`): the entity list for integration suites is now
+  `src/database/application-entities.ts`, for the reason `application-migrations.ts`
+  exists. It was copied into each suite, the Phase 4 copy had already drifted four
+  entities behind, and a partial copy does not fail where it was written: TypeORM
+  resolves relations across the whole registered set, so it fails at `initialize` with
+  `Entity metadata for User#identities was not found`. Naming the transitive graph by
+  hand is a puzzle, not a decision.
 
 - 2026-09-17 (`P6-T01`, owner direction): the export environment surface is four
   variables, not twenty-two. The first implementation made every accepted cap an

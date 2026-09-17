@@ -152,6 +152,24 @@ room_times.room_id=:roomId`; mismatch returns the same not-found response. Windo
   every ID against the same target tuple, and updates positions collision-safely in
   one transaction. Room/user deactivation preserves media; only hard deletion
   detaches it.
+- `ADMIN-EXP-01` takes the admin catalogue's own filter contract as a JSON body, minus
+  pagination. `page` and `pageSize` are not ignored there - they are not part of the
+  contract, so the global pipe rejects them with `400 VALIDATION_FAILED` rather than
+  quietly returning the full export the caller did not ask for. `query` is trimmed and
+  a blank one is dropped, exactly as the admin list treats it, so two requests that
+  mean the same thing fingerprint identically and the second replays.
+- `ADMIN-EXP-01` requires an `Idempotency-Key` of 8-128 characters from
+  `[A-Za-z0-9._:-]` and stores the exact `202` body against it. The same actor, key and
+  normalized filters replay that body; the same key with different filters returns
+  `409 IDEMPOTENCY_KEY_REUSED`. Concurrent identical calls produce exactly one job and
+  one `room-export.requested` outbox event, because the idempotency row is inserted
+  before it is locked and the losers replay rather than race.
+- The per-admin export budget is spent before any durable write, and by every call that
+  reaches the endpoint - including a replay, a conflict and a malformed body. The budget
+  protects the cost of handling a request, not the cost of the job it may or may not
+  create. It fails closed: a limiter that cannot decide returns
+  `503 EXPORT_CREATE_UNAVAILABLE` rather than admitting an unbounded number of exports.
+  While the boundary is disabled the same status carries `EXPORT_CREATE_DISABLED`.
 - Payment webhooks first insert `(provider, provider_event_id)` into the optional
   `payment_provider_events` ledger. Its unique key makes retries return success
   without applying the payment transition twice.

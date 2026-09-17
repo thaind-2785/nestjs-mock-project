@@ -74,6 +74,7 @@ describe('Phase 5 migration revert and reapply', () => {
 
   it('reverts and reapplies the acceptance schema before any evidence exists', async () => {
     expect(await tableExists('email_send_attempts')).toBe(true);
+    await peelBacklogIndex();
 
     await dataSource.undoLastMigration();
     expect(await tableExists('email_send_attempts')).toBe(false);
@@ -133,6 +134,33 @@ describe('Phase 5 migration revert and reapply', () => {
     ]);
   });
 
+  it('covers the backlog aggregate with the index PR #13 asked for', async () => {
+    // The column order is the assertion. `(status, template_key)` would satisfy a
+    // "there is an index" check and still leave the sampler's GROUP BY scanning the
+    // clustered index, because the grouping leads on `template_key`.
+    const columns: Array<{ COLUMN_NAME: string }> = await dataSource.query(
+      `SELECT COLUMN_NAME FROM information_schema.statistics
+       WHERE table_schema = DATABASE() AND table_name = 'email_deliveries'
+         AND index_name = 'idx_email_deliveries_template_status'
+       ORDER BY SEQ_IN_INDEX`,
+    );
+    expect(columns.map((column) => column.COLUMN_NAME)).toEqual([
+      'template_key',
+      'status',
+    ]);
+
+    // An access path, not evidence: this one reverts with rows in the table, which is
+    // what separates it from every migration under it.
+    await dataSource.undoLastMigration();
+    expect(await indexExists('idx_email_deliveries_template_status')).toBe(
+      false,
+    );
+    await dataSource.runMigrations();
+    expect(await indexExists('idx_email_deliveries_template_status')).toBe(
+      true,
+    );
+  });
+
   it('refuses to revert once a provider acceptance is recorded', async () => {
     await dataSource.query(
       `INSERT INTO email_send_attempts
@@ -143,6 +171,7 @@ describe('Phase 5 migration revert and reapply', () => {
 
     // Dropping the table would destroy the only record that a guest was mailed, and
     // silently remove the redrive command's duplicate guard with it.
+    await peelBacklogIndex();
     await expect(dataSource.undoLastMigration()).rejects.toThrow(
       /EMAIL_SEND_ATTEMPT_REVERT_BLOCKED/,
     );
@@ -150,8 +179,9 @@ describe('Phase 5 migration revert and reapply', () => {
   });
 
   it('refuses to revert the delivery schema once a delivery exists', async () => {
-    // The acceptance schema comes off first; it is the delivery schema underneath
-    // that carries the older guard.
+    // The backlog index and then the acceptance schema come off first; it is the
+    // delivery schema underneath that carries the older guard.
+    await peelBacklogIndex();
     await dataSource.undoLastMigration();
     // `email_deliveries` does carry a restrictive foreign key, so the delivery needs
     // its event. `email_send_attempts` deliberately does not - see that migration.
@@ -174,6 +204,24 @@ describe('Phase 5 migration revert and reapply', () => {
     );
     expect(await tableExists('email_deliveries')).toBe(true);
   });
+
+  /**
+   * Takes the backlog index off so the migration under test is the last one again.
+   * It holds no evidence, so this never hits a revert guard.
+   */
+  async function peelBacklogIndex(): Promise<void> {
+    await dataSource.undoLastMigration();
+  }
+
+  async function indexExists(name: string): Promise<boolean> {
+    const rows: Array<{ total: string | number }> = await dataSource.query(
+      `SELECT COUNT(*) AS total FROM information_schema.statistics
+       WHERE table_schema = DATABASE() AND table_name = 'email_deliveries'
+         AND index_name = ?`,
+      [name],
+    );
+    return Number(rows[0].total) > 0;
+  }
 
   async function tableExists(name: string): Promise<boolean> {
     const rows: Array<{ total: string | number }> = await dataSource.query(

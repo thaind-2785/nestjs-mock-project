@@ -10,24 +10,13 @@ import { Queue } from 'bullmq';
 import { OutboxEventStatus } from '../bookings/entities/booking.enums';
 import { notificationsConfig } from '../config/notifications.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
-import { backlogSampleFailedCode } from './notification-backlog.constants';
+import { backlogFailureCode } from './notification-backlog.error';
 import { NotificationBacklogRepository } from './notification-backlog.repository';
 import type {
   NotificationBacklogSnapshot,
   QueueBacklogCounts,
 } from './notification-backlog.types';
 import { NOTIFICATION_QUEUE } from './notification.tokens';
-
-/**
- * Driver errors carry a stable `code` (`ER_LOCK_WAIT_TIMEOUT`, `ECONNREFUSED`, ...);
- * everything else degrades to one constant rather than to a class name.
- */
-function backlogFailureCode(error: unknown): string {
-  const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === 'string' && code.length > 0
-    ? code
-    : backlogSampleFailedCode;
-}
 
 /**
  * Publishes the backlog an operator alerts on.
@@ -45,6 +34,9 @@ export class NotificationBacklogService
   implements OnApplicationBootstrap, OnApplicationShutdown
 {
   private readonly logger = new Logger(NotificationBacklogService.name);
+  // These three fields are lifecycle state, not stable dependencies: start/schedule
+  // assign them and stop/finally clear them. Marking any of them readonly would make
+  // the bootstrap/shutdown protocol impossible rather than safer.
   private timer: NodeJS.Timeout | undefined;
   private sample: Promise<void> | undefined;
   private stopping = false;

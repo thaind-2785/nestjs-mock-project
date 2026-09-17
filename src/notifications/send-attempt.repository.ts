@@ -9,6 +9,12 @@ import type { RecordAcceptedSendInput } from './send-attempt.types';
  * worker that has just lost its claim, and an append conflicts with no owner. It also
  * means this table can never contradict `email_deliveries` - it makes a narrower
  * statement ("a provider took this") than the delivery's ("this is the outcome").
+ *
+ * There is deliberately no injected connection and therefore no constructor. The
+ * caller supplies its exact `EntityManager`: the acceptance append must run outside
+ * the result transaction, while the redrive guard must use the transaction that
+ * already owns the outbox lock. An injected default manager would make accidentally
+ * escaping either boundary easy.
  */
 @Injectable()
 export class SendAttemptRepository {

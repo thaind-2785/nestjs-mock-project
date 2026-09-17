@@ -123,6 +123,15 @@ export class NotificationBacklogRepository {
   private async readDeliveries(
     manager: EntityManager,
   ): Promise<DeliveryBacklogEntry[]> {
+    // These are deliberately lifetime counts: omitting SENT would hide throughput,
+    // and a time WHERE would make a count fall merely because the clock crossed a
+    // boundary, so the WHERE that would bound this scan is the one that would break
+    // the metric. The bound is an access path instead:
+    // `idx_email_deliveries_template_status` leads on the grouping columns in the
+    // order asked for here and carries nothing else, so this is a covering index scan
+    // with no row lookups and no sort. Keep the SELECT list, GROUP BY, and ORDER BY
+    // aligned with that index; adding a column here silently returns it to a
+    // clustered-index scan. Row growth itself is bounded by Phase 7 retention.
     const rows: DeliveryBacklogRow[] = await manager.query(
       `SELECT template_key AS templateKey,
               status,

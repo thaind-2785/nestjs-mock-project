@@ -272,7 +272,7 @@ erDiagram
 | `reviews`                 | unique `booking_id`; check `rating BETWEEN 1 AND 5`                                                                                                                                                                             |
 | `payment_provider_events` | unique `(provider, provider_event_id)`; index `(payment_id, created_at)`                                                                                                                                                        |
 | `outbox_events`           | unique `idempotency_key`; claim index `(status, available_at, lock_expires_at)`; lease, processed-time, and terminal failure shape is checked                                                                                   |
-| `email_deliveries`        | unique `(outbox_event_id, template_key)`; operations index `(status, created_at, id)`; restrictive FK to `outbox_events`; sent/failed shape is checked                                                                          |
+| `email_deliveries`        | unique `(outbox_event_id, template_key)`; operations index `(status, created_at, id)`; backlog-aggregate index `(template_key, status)`; restrictive FK to `outbox_events`; sent/failed shape is checked                        |
 | `email_send_attempts`     | append-only provider acceptances; index `(outbox_event_id, accepted_at)`; deliberately **no** FK to `outbox_events`, because an FK insert takes a shared lock on the very row a recovering worker may hold exclusively          |
 | `idempotency_keys`        | unique `(actor_user_id, operation, idempotency_key)`; index `expires_at`; pending/completed response shape is checked                                                                                                           |
 | `schedule_runs`           | unique `(job_key, period_key)` for cron idempotency                                                                                                                                                                             |
@@ -307,9 +307,18 @@ LOCKED` and performs delivery.
 
 ## Phase 5 notification persistence contract
 
-Two additive migrations. `CreateNotificationDeliverySchema1789370000000` ships the
+Three additive migrations. `CreateNotificationDeliverySchema1789370000000` ships the
 delivery record; `CreateEmailSendAttemptSchema1789460000000` adds the acceptance
-evidence `P5-T07` found the first one could not carry.
+evidence `P5-T07` found the first one could not carry; `AddDeliveryBacklogIndex1789550000000`
+covers the backlog aggregate the operator alerts on.
+
+`AddDeliveryBacklogIndex1789550000000` is the only one of the three that reverts
+unconditionally. It adds `(template_key, status)` and nothing else, so it destroys no
+evidence when dropped - the aggregate simply returns to scanning the clustered index.
+The backlog sampler groups on those two columns in that order and selects no third,
+which makes the read a covering index scan; a query change that selects another column
+silently gives that up. The write cost is one index insert per delivery plus one index
+update when the row leaves `PENDING`, because `status` is part of the key.
 
 `CreateNotificationDeliverySchema1789370000000` is additive on Phase 4. It widens the
 outbox lifecycle with the terminal `FAILED` state plus `last_error_code` and

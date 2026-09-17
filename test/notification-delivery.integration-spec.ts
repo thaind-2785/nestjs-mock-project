@@ -70,8 +70,9 @@ describe('Phase 5 notification delivery persistence', () => {
     await dataSource.query('DELETE FROM email_deliveries');
     await dataSource.query('DELETE FROM outbox_events');
     // This suite is about the delivery migration and calls `undoLastMigration` expecting
-    // to get it. `P5-T07` stacked the acceptance schema on top, so peel that first and
-    // leave the stack these tests were written against.
+    // to get it. Two migrations now sit on top - the backlog index, then the acceptance
+    // schema - so peel both and leave the stack these tests were written against.
+    await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
   });
 

@@ -74,7 +74,7 @@ describe('Phase 5 migration revert and reapply', () => {
 
   it('reverts and reapplies the acceptance schema before any evidence exists', async () => {
     expect(await tableExists('email_send_attempts')).toBe(true);
-    await peelBacklogIndex();
+    await peelAboveAcceptanceSchema();
 
     await dataSource.undoLastMigration();
     expect(await tableExists('email_send_attempts')).toBe(false);
@@ -150,7 +150,9 @@ describe('Phase 5 migration revert and reapply', () => {
     ]);
 
     // An access path, not evidence: this one reverts with rows in the table, which is
-    // what separates it from every migration under it.
+    // what separates it from every migration under it. The Phase 6 export schema sits
+    // above it and comes off first.
+    await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
     expect(await indexExists('idx_email_deliveries_template_status')).toBe(
       false,
@@ -171,7 +173,7 @@ describe('Phase 5 migration revert and reapply', () => {
 
     // Dropping the table would destroy the only record that a guest was mailed, and
     // silently remove the redrive command's duplicate guard with it.
-    await peelBacklogIndex();
+    await peelAboveAcceptanceSchema();
     await expect(dataSource.undoLastMigration()).rejects.toThrow(
       /EMAIL_SEND_ATTEMPT_REVERT_BLOCKED/,
     );
@@ -179,9 +181,9 @@ describe('Phase 5 migration revert and reapply', () => {
   });
 
   it('refuses to revert the delivery schema once a delivery exists', async () => {
-    // The backlog index and then the acceptance schema come off first; it is the
-    // delivery schema underneath that carries the older guard.
-    await peelBacklogIndex();
+    // Everything above the acceptance schema comes off, then the acceptance schema
+    // itself; it is the delivery schema underneath that carries the older guard.
+    await peelAboveAcceptanceSchema();
     await dataSource.undoLastMigration();
     // `email_deliveries` does carry a restrictive foreign key, so the delivery needs
     // its event. `email_send_attempts` deliberately does not - see that migration.
@@ -209,7 +211,13 @@ describe('Phase 5 migration revert and reapply', () => {
    * Takes the backlog index off so the migration under test is the last one again.
    * It holds no evidence, so this never hits a revert guard.
    */
-  async function peelBacklogIndex(): Promise<void> {
+  /**
+   * Leaves the acceptance schema on top, which is where these tests expect to find it.
+   * Each later slice appends a migration above it, so the count lives here rather than
+   * in every test: the Phase 6 export schema, then the backlog index.
+   */
+  async function peelAboveAcceptanceSchema(): Promise<void> {
+    await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
   }
 

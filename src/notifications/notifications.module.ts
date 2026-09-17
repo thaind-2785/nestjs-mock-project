@@ -23,7 +23,7 @@ import { NotificationBacklogRepository } from './notification-backlog.repository
 import { NotificationBacklogService } from './notification-backlog.service';
 import { SendAttemptRepository } from './send-attempt.repository';
 import { SmtpEmailSender } from './smtp-email-sender';
-import { OutboxClaimRepository } from './outbox-claim.repository';
+import { OutboxClaimRepository } from '../common/outbox/outbox-claim.repository';
 import { OutboxDispatcherService } from './outbox-dispatcher.service';
 
 /**

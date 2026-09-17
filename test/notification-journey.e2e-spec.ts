@@ -31,7 +31,7 @@ import { DeliveryWorkerService } from '../src/notifications/delivery-worker.serv
 import { EmailTemplateService } from '../src/notifications/email-template.service';
 import { EmailDelivery } from '../src/notifications/entities/email-delivery.entity';
 import { EmailDeliveryStatus } from '../src/notifications/entities/notification.enums';
-import { OutboxClaimRepository } from '../src/notifications/outbox-claim.repository';
+import { OutboxClaimRepository } from '../src/common/outbox/outbox-claim.repository';
 import { OutboxDispatcherService } from '../src/notifications/outbox-dispatcher.service';
 import { SmtpEmailSender } from '../src/notifications/smtp-email-sender';
 import { Room } from '../src/rooms/entities/room.entity';

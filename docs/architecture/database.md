@@ -357,6 +357,67 @@ terminal failure exists, because reverting would destroy the only record of what
 or was not sent; after that point a deployment rolls the application back to a
 schema-compatible version or fixes forward.
 
+## Phase 6 export persistence contract
+
+One additive migration, `CreateRoomExportSchema1789640000000`. It creates
+`export_jobs` and adds `idx_outbox_events_claim_by_type` to `outbox_events`. No Phase
+4 or Phase 5 row shape changes, and nothing existing reads the new table, so it can be
+applied ahead of the code that uses it - which is what the rollout asks for.
+
+`export_jobs` is written by two processes on different schedules: the API creates the
+row inside the same transaction as the idempotency response and the outbox event, and
+the worker finishes it after generation and upload. The check constraints are there
+because of that split. `chk_export_jobs_state_shape` makes a `COMPLETED` row carry a
+whole result - object key, row count, byte count, content hash, start, completion and
+expiry - and no failure evidence, while a `FAILED` row carries a stable error code and
+a failure time and no result at all. A half-written completion is exactly the shape
+that would hand an administrator a download URL for an object that was never uploaded.
+`chk_export_jobs_result_bounds` caps the two counts at 2^53 - 1: `BIGINT UNSIGNED`
+already excludes negatives, but a larger value reaches the API as a rounded JavaScript
+number, so MySQL would accept a figure that becomes a different figure by the time an
+administrator reads it.
+
+The unique `outbox_event_id` is the proof that one job has exactly one durable
+trigger; two jobs sharing an event would be two workers generating from one claim.
+Both foreign keys are `RESTRICT`, because the outbox event is the job's trigger and
+the requester is its permanent owner - deleting either while a job references it would
+leave a result whose provenance cannot be established, which is worse than a refused
+delete an operator has to think about. `filters` is the normalized snapshot taken at
+request time, stored once, never reread from the client, and never interpolated into
+SQL. `object_key` is server-generated and is never returned to a client or written to
+a log.
+
+`EXPIRED` is not a stored status. It is a read-time view of a `COMPLETED` row whose
+`expires_at` has passed, compared against database time rather than an API host's
+clock. Storing it would need a scheduler Phase 6 does not have, and a result that is
+only expired once something remembered to say so is one the API would keep handing out
+in the meantime. Phase 7 owns the durable deletion of expired objects and rows.
+
+### Two consumers, one outbox
+
+Phase 6 puts a second event family in `outbox_events`, and the Phase 5 dispatcher
+claimed by status and availability alone - nothing in it said "mail". The event-type
+allowlist is therefore a claim invariant rather than a consumer check: every
+claim, release, renewal, finalize, failure and backlog statement carries
+`event_type IN (...)`, in SQL, before `LIMIT`. Filtering a claimed batch afterwards
+would not be equivalent, because the wrong consumer would already hold the lease and
+the row would be invisible to its real owner until that lease expired - a stall that
+looks exactly like a stuck worker.
+
+`idx_outbox_events_claim_by_type` leads on `event_type`, so a single-family dispatcher
+
+- which the export consumer is - gets an ordered range scan with no sort. The
+  notification claim filters four types and is expected to stay on
+  `idx_outbox_events_claim`, whose leading `status` still yields `available_at` order
+  directly; a multi-value `IN` on a leading column could not. Both indexes therefore
+  remain until `EXPLAIN` against a mixed and a skewed backlog decides otherwise, which
+  is why the migration adds an index rather than replacing one.
+
+The migration's `down` drops the index and the table, and is allowed only before the
+first export job exists. After activation it would destroy the rows that prove which
+object belongs to whom, so the documented rollback is a schema-compatible application
+version or a forward fix.
+
 ## Connection and concurrency bounds
 
 `MYSQL_POOL_SIZE` (default `10`) sets the mysql2 pool's `connectionLimit`. Every

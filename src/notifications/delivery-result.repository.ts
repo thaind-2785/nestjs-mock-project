@@ -2,12 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { OutboxEventStatus } from '../bookings/entities/booking.enums';
 import { EmailDeliveryStatus } from './entities/notification.enums';
+import { notificationEventTypes } from './notification-event';
 import type {
   DeliveryFailureInput,
   DeliveryResultKey,
   DeliveryRetryInput,
   DeliverySentInput,
 } from './delivery-result.types';
+
+const notificationEventTypePlaceholders = notificationEventTypes
+  .map(() => '?')
+  .join(', ');
 
 /**
  * Writes what happened, in one short transaction, after the provider call is over.
@@ -138,6 +143,12 @@ export class DeliveryResultRepository {
     );
   }
 
+  /**
+   * The claim token already makes a foreign row unmatchable, because only this
+   * dispatcher could have written it. The event type is here anyway: that argument
+   * holds only while the token is generated where it is today, and a finalize that
+   * can write to the wrong family is the failure nobody would find from the outside.
+   */
   private async finishEvent(
     manager: EntityManager,
     key: DeliveryResultKey,
@@ -155,6 +166,7 @@ export class DeliveryResultRepository {
            locked_by = NULL,
            ${outcome.assignments}
        WHERE id = ?
+         AND event_type IN (${notificationEventTypePlaceholders})
          AND status = ?
          AND locked_by = ?
          AND attempts = ?`,
@@ -162,6 +174,7 @@ export class DeliveryResultRepository {
         outcome.status,
         ...outcome.parameters,
         key.outboxEventId,
+        ...notificationEventTypes,
         OutboxEventStatus.Processing,
         key.claimToken,
         key.attempt,

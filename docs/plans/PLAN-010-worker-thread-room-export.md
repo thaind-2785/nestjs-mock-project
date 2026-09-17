@@ -81,7 +81,7 @@
 | Slice    | Observable outcome                                                      | Migration                     | Primary tests                                       | Status  |
 | -------- | ----------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------- | ------- |
 | `P6-T01` | Decisions, limits, modules, and Worker protocol are fixed               | None                          | Config/module/Worker protocol unit and benchmark    | Done    |
-| `P6-T02` | Export state persists and outbox consumers are type-isolated            | Phase 6 export schema/index   | Real-MySQL migration, claim concurrency, `EXPLAIN`  | Pending |
+| `P6-T02` | Export state persists and outbox consumers are type-isolated            | Phase 6 export schema/index   | Real-MySQL migration, claim concurrency, `EXPLAIN`  | Done    |
 | `P6-T03` | Admin creates exactly one durable, rate-limited export request          | Use P6-T02 schema             | Controller/service/idempotency integration + E2E    | Pending |
 | `P6-T04` | A bounded room snapshot becomes a safe XLSX in a Worker Thread          | None                          | Query-shape, XLSX package, resource/process tests   | Pending |
 | `P6-T05` | BullMQ attempts recover, upload privately, and finalize exactly one key | Use P6-T02 and cleanup schema | MySQL/Redis/MinIO crash/concurrency integration     | Pending |
@@ -429,6 +429,29 @@ gate is not the checklist disposition.
   only bounds and namespaces. There is nothing to redact because the export path owns
   no credential: it borrows the shared Redis connection and storage adapter.
 
+### `P6-T02` evidence
+
+- **Constants/contracts:** `ExportJobStatus` is in `export-job.enums.ts` and the claim
+  allowlist contract in `outbox-claim.types.ts`. The lifecycle shape is a database
+  check rather than a comment, because two processes on different schedules write the
+  row.
+- **Projection/indexes:** `EXPLAIN` against a mixed and a skewed backlog is recorded in
+  the decision log above and asserted in
+  `test/room-export-persistence.integration-spec.ts`. Both outbox indexes are kept on
+  measured evidence, not assumption; the two `export_jobs` indexes serve the ownership
+  poll and the operations scan `P6-T06` and the runbook will use.
+- **Batching/N+1:** N/A. This slice adds no per-row database or provider work.
+- **Responsibility/reuse:** The Phase 5 claim protocol was parameterized and moved, not
+  copied. There is one claim implementation, one release, and one set of lease
+  semantics for both event families.
+- **Concurrency:** Two dispatchers claiming concurrently under
+  `FOR UPDATE SKIP LOCKED` is tested with a live open transaction and a two-second
+  lock-wait bound, so a claim that blocked instead of skipping fails rather than
+  hangs. Cross-family release refusal and expired-lease recovery are covered.
+- **Observability:** The backlog sampler was already event-type scoped in Phase 5; a
+  test now pins that an export backlog cannot drive the notification age and page the
+  wrong on-call.
+
 ## Documentation / OpenAPI impact
 
 - Add both export routes and every stable status/error/ownership/idempotency field to
@@ -558,6 +581,34 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   previous release can receive a message from the next one; a worker that silently
   drops a field it does not recognize answers an older question with a workbook that
   looks entirely plausible. Refusing makes it a failed attempt the lease recovers.
+- 2026-09-17 (`P6-T02`): the claim protocol moved to `src/common/outbox/` and takes an
+  event-type allowlist as input rather than being notification-specific. The allowlist
+  is required, not optional, and an empty one throws: a dispatcher that quietly dropped
+  the restriction would claim everything, which is the exact failure the mechanism
+  exists to prevent. It reaches every statement - both eligibility selects, the
+  claiming update, release, the worker's claim recheck, the lease renewal, finalize,
+  and redrive - and always in SQL before `LIMIT`.
+- 2026-09-17 (`P6-T02`, `EXPLAIN` evidence): both outbox claim indexes are required,
+  which settles the question the plan left open. Against a skewed 200-row backlog where
+  exports are one row in twenty-five, the single-family export claim uses
+  `idx_outbox_events_claim_by_type` as a `range` scan examining 8 rows at
+  `filtered: 100`, with no sort. The four-type notification claim keeps
+  `idx_outbox_events_claim`, examining 200 at `filtered: 40` with
+  `Using index condition; Using where` and, critically, no filesort - its leading
+  `status` still yields `available_at` order directly, which a multi-value `IN` on a
+  leading column could not. A claim that sorts would lock the whole backlog before
+  `LIMIT` applies and leave `SKIP LOCKED` nothing to skip to, so the test asserts the
+  absence of a sort on both paths rather than pinning an optimizer choice that
+  statistics may legitimately change.
+- 2026-09-17 (`P6-T02`): the new migration broke four revert tests in three suites,
+  which peel a deliberately explicit number of migrations off the top before reverting
+  their own. The counts were updated rather than replaced with a loop: the comment in
+  `booking-foundation.integration-spec.ts` states the intent, which is that a new
+  migration should make a maintainer look at the test rather than be quietly absorbed.
+  That is a real position - a later migration whose `down` refuses would otherwise be
+  peeled without anyone checking - and it is worth revisiting only if the churn starts
+  outweighing the signal, which is a call for the slice that feels it.
+
 - 2026-09-17 (`P6-T01`, owner direction): the export environment surface is four
   variables, not twenty-two. The first implementation made every accepted cap an
   environment variable by analogy with the Phase 5 notification settings, without

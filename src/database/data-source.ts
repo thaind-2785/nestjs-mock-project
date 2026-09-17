@@ -21,6 +21,7 @@ import { Room } from '../rooms/entities/room.entity';
 import { Attachment } from '../files/entities/attachment.entity';
 import { StorageCleanupTask } from '../files/entities/storage-cleanup-task.entity';
 import { EmailDelivery } from '../notifications/entities/email-delivery.entity';
+import { ExportJob } from '../reports/entities/export-job.entity';
 import { createTypeOrmOptions } from './database.options';
 import { CreateAuthRbacSchema1788380000000 } from './migrations/1788380000000-CreateAuthRbacSchema';
 import { CreateRoomCatalogSchema1788490000000 } from './migrations/1788490000000-CreateRoomCatalogSchema';
@@ -28,6 +29,7 @@ import { CreateBookingCoreSchema1788580000000 } from './migrations/1788580000000
 import { CreateNotificationDeliverySchema1789370000000 } from './migrations/1789370000000-CreateNotificationDeliverySchema';
 import { CreateEmailSendAttemptSchema1789460000000 } from './migrations/1789460000000-CreateEmailSendAttemptSchema';
 import { AddDeliveryBacklogIndex1789550000000 } from './migrations/1789550000000-AddDeliveryBacklogIndex';
+import { CreateRoomExportSchema1789640000000 } from './migrations/1789640000000-CreateRoomExportSchema';
 
 loadRepositoryEnvironment();
 const environment = validateEnvironment(process.env);
@@ -53,6 +55,7 @@ export default new DataSource(
       IdempotencyKey,
       OutboxEvent,
       EmailDelivery,
+      ExportJob,
     ],
     migrations: [
       CreateAuthRbacSchema1788380000000,
@@ -61,6 +64,7 @@ export default new DataSource(
       CreateNotificationDeliverySchema1789370000000,
       CreateEmailSendAttemptSchema1789460000000,
       AddDeliveryBacklogIndex1789550000000,
+      CreateRoomExportSchema1789640000000,
     ],
   }),
 );

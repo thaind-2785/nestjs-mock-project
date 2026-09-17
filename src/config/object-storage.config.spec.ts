@@ -35,6 +35,7 @@ describe('createObjectStorageConfiguration', () => {
       MAIL_GMAIL_CLIENT_SECRET: 'google-production-mail-secret',
       MAIL_GMAIL_REFRESH_TOKEN: 'google-production-refresh-token',
       NOTIFICATION_QUEUE_PREFIX: 'hotel:production-notifications',
+      REPORT_EXPORT_QUEUE_PREFIX: 'hotel:production-reports',
     });
 
     expect(createObjectStorageConfiguration(environment)).toEqual({

@@ -80,7 +80,7 @@
 
 | Slice    | Observable outcome                                                      | Migration                     | Primary tests                                       | Status  |
 | -------- | ----------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------- | ------- |
-| `P6-T01` | Decisions, limits, modules, and Worker protocol are fixed               | None                          | Config/module/Worker protocol unit and benchmark    | Pending |
+| `P6-T01` | Decisions, limits, modules, and Worker protocol are fixed               | None                          | Config/module/Worker protocol unit and benchmark    | Done    |
 | `P6-T02` | Export state persists and outbox consumers are type-isolated            | Phase 6 export schema/index   | Real-MySQL migration, claim concurrency, `EXPLAIN`  | Pending |
 | `P6-T03` | Admin creates exactly one durable, rate-limited export request          | Use P6-T02 schema             | Controller/service/idempotency integration + E2E    | Pending |
 | `P6-T04` | A bounded room snapshot becomes a safe XLSX in a Worker Thread          | None                          | Query-shape, XLSX package, resource/process tests   | Pending |
@@ -405,6 +405,30 @@ The required pre-implementation sweep against
 Each slice review records concrete evidence or an explicit N/A; a green automated
 gate is not the checklist disposition.
 
+### `P6-T01` evidence
+
+- **Constants/contracts:** Every accepted cap is a named constant in
+  `reports.config.ts` with the reason for its value beside it, and their relationships
+  are executable in `assertRoomExportBounds`. The four values a deployment sets stay in
+  `environment.validation.ts`. The event type and claim allowlist live in
+  `room-export.constants.ts`, the injection tokens in `report.tokens.ts`, and the whole
+  Worker contract in `room-export.protocol.ts`. Every injected dependency in
+  `RoomExportQueueLifecycle` is `readonly`; this slice introduces no lifecycle state
+  that is reassigned.
+- **Projection/indexes:** N/A. This slice adds no query.
+- **Batching/N+1:** N/A. This slice adds no database or provider call.
+- **Responsibility/reuse:** `ReportsApiModule` and `ReportsWorkerModule` are the
+  seams, not implementations. The Redis connection contract is the existing
+  `createRedisConnectionConfiguration`, and the client error reporter is the existing
+  `reportRedisClientErrors`; the queue-client provider shape is the accepted Phase 5
+  one rather than a second arrangement of the same parts.
+- **Concurrency:** The claim lease is bounded against the sum of the stages it covers,
+  and the cleanup grace against the upload it protects plus a finalize margin, so a
+  later slice cannot configure a lease that expires mid-attempt.
+- **Observability:** `describeReportsConfiguration` is the startup summary and holds
+  only bounds and namespaces. There is nothing to redact because the export path owns
+  no credential: it borrows the shared Redis connection and storage adapter.
+
 ## Documentation / OpenAPI impact
 
 - Add both export routes and every stable status/error/ownership/idempotency field to
@@ -494,6 +518,82 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   exactly the migrations on disk, in the same order, in ascending timestamp order. It
   closes the residual risk `REVIEW-037` left open after `R37-05`, and it runs inside
   `npm run test:harness` so it is part of the gate before `P6-T02` adds a migration.
+
+- 2026-09-17 (`P6-T01`): `REPORT_EXPORT_ENABLED` is one flag read per process rather
+  than a pair. The API reads it to gate creation and the worker reads it to gate
+  polling and the consumer, and because those are separate processes with separate
+  environments, the documented rollout - enable the consumer, watch one fixture job
+  reach a private object, then enable the endpoint - is the same switch thrown twice
+  rather than two switches that could disagree.
+- 2026-09-17 (`P6-T01`): the claim lease is bounded against the sum of the snapshot,
+  generation, and upload timeouts plus a margin, not against the longest stage. The
+  slice plan says "every individually renewed bounded stage", which is the right bound
+  once `P6-T05` renews a lease between stages; until it does, the whole attempt has to
+  fit inside one lease or a slow but entirely legal run would finalize against a lease
+  another worker had already recovered. The stricter bound holds at every accepted
+  default (30s + 60s + 30s + 10s against 180s), so nothing is given up by taking it
+  now, and `P6-T05` may relax it when renewal exists and is tested.
+- 2026-09-17 (`P6-T01`): the export upload timeout is the export's own constant
+  rather than a reuse of `ATTACHMENT_STORAGE_TIMEOUT_MS`. The attachment bound is 10
+  seconds for a 5 MiB image cap; an export object is five times that, so the value that
+  is generous for a thumbnail would abandon a legitimate workbook upload. The
+  cleanup-safeguard grace is bounded against the export timeout for the same reason -
+  coupling it to the attachment variable would make one concern's tuning silently
+  reshape the other's failure window.
+- 2026-09-17 (`P6-T01`): queue concurrency is the constant
+  `roomExportQueueConcurrency`, not a variable. An operational value may be lowered but
+  not raised, and the accepted concurrency is already one, so a variable could only
+  ever hold the value it was given. The reason it is one is structural rather than
+  operational: a second concurrent generation would put a second bounded heap, a second
+  snapshot, and a second 25 MiB buffer in the process that also delivers mail, and the
+  measured evidence in `ADR-0007` covers one.
+- 2026-09-17 (`P6-T01`): while the boundary is disabled, `ROOM_EXPORT_QUEUE` and
+  `ROOM_EXPORT_QUEUE_CLIENT` resolve to `null` rather than being absent. The module
+  graph is then the same shape in both modes and the difference is a value a consumer
+  must handle, not a provider that may fail to resolve - and a deployment that has not
+  enabled exports opens no socket at all, which is what makes "starts without queue
+  work" a tested property rather than an absence.
+- 2026-09-17 (`P6-T01`): the Worker protocol rejects unknown keys in both directions
+  instead of ignoring them. A queue job outlives a deployment, so a worker from the
+  previous release can receive a message from the next one; a worker that silently
+  drops a field it does not recognize answers an older question with a workbook that
+  looks entirely plausible. Refusing makes it a failed attempt the lease recovers.
+- 2026-09-17 (`P6-T01`, owner direction): the export environment surface is four
+  variables, not twenty-two. The first implementation made every accepted cap an
+  environment variable by analogy with the Phase 5 notification settings, without
+  asking of each one who changes it and when. The answer for eighteen of them is
+  nobody: they do not differ between staging and production, they are not tuned during
+  an incident, and changing one needs the benchmark rerun and a reviewer. Each was a
+  row in every deployment manifest that could be mistyped, omitted, or left to drift,
+  in exchange for flexibility no operator wants. They are now named constants in
+  `reports.config.ts` with the reason beside the number, and their relationships are
+  executable in `assertRoomExportBounds`, which runs at startup and in the unit suite.
+  What stays in the environment is what a deployment genuinely decides:
+  `REPORT_EXPORT_ENABLED` (per-process rollout), `REPORT_EXPORT_QUEUE_PREFIX`
+  (deployment namespace, required in production), and the two
+  `REPORT_EXPORT_CREATE_RATE_LIMIT_*` values, which sit beside the three other request
+  budgets because tightening one is an incident response. The accepted caps are no
+  weaker for it: raising one is now a code change a reviewer sees and the dependency
+  profile check can fail, rather than a schema maximum nobody reads.
+- 2026-09-17 (`P6-T01`, open for `P6-T05`): the worker process drains on
+  `NOTIFICATION_SHUTDOWN_DRAIN_MS`, whose default of 30 seconds is shorter than one
+  bounded 60-second export generation. The export consumer's own 90-second drain is
+  therefore not yet reachable: today the process would close first. Nothing is broken
+  while no consumer exists, and the lease and upload safeguard make an interrupted
+  attempt recoverable either way, but `P6-T05` owns reconciling the two - most likely
+  by making the process bound the larger of the families it hosts rather than the mail
+  family's alone.
+- 2026-09-17 (`P6-T01`): the `ADR-0007` benchmark is now
+  `scripts/xlsx-dependency-profile.test.mjs` inside `npm run test:harness`, so it runs
+  in the gate. It measures the pinned library rather than the production generator,
+  which does not exist until `P6-T04`: one 10,000-row worst-case fixture in a real
+  Worker Thread under the accepted `resourceLimits`, asserting the applied heap limit,
+  peak heap against a ceiling of 96 MiB, output bytes, and wall time. Measured here at
+  33 MiB, 1.1 MiB, and 242 ms; the ceiling is three quarters of the cap because a
+  release that spends that much has changed the profile `ADR-0007` rests on even
+  though it has not failed yet. Its second case starts a thread with the misspelled
+  `oldGenerationSizeMb` and requires the run to fail, which is what keeps every other
+  number in the check meaningful.
 
 [`ADR-0007`](../decisions/ADR-0007-worker-thread-export-boundary.md) is accepted as
 of 2026-09-17 and records the Worker Thread boundary, the measured XLSX dependency

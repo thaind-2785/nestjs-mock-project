@@ -104,6 +104,10 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   NOTIFICATION_WORKER_CONCURRENCY: number;
   NOTIFICATION_SHUTDOWN_DRAIN_MS: number;
   NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS: number;
+  REPORT_EXPORT_ENABLED: boolean;
+  REPORT_EXPORT_QUEUE_PREFIX: string;
+  REPORT_EXPORT_CREATE_RATE_LIMIT_MAX: number;
+  REPORT_EXPORT_CREATE_RATE_LIMIT_WINDOW_SECONDS: number;
 }
 
 const environmentSchema = Joi.object<EnvironmentVariables>({
@@ -445,6 +449,37 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(5_000)
     .max(3_600_000)
     .default(60_000),
+  // Room export is selected optional scope and ships disabled. The flag is read per
+  // process, which is what makes the documented rollout possible: the worker enables
+  // its consumer and a fixture job is observed end to end while the API process still
+  // refuses to create one.
+  REPORT_EXPORT_ENABLED: Joi.boolean().default(false),
+  // Required in production for the reason the other two prefixes are: a second
+  // deployment sharing one Redis must not consume this one's export jobs.
+  REPORT_EXPORT_QUEUE_PREFIX: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.string()
+      .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
+      .required(),
+    otherwise: Joi.string()
+      .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
+      .default('hotel:reports'),
+  }),
+  // The one export bound an operator genuinely spends: tightening an administrator's
+  // creation budget is an incident response, and it sits beside the three other
+  // request budgets rather than inside the export code. Its ceiling is the rate
+  // SPEC-009 accepted. Every other export limit is fixed in `reports.config.ts`,
+  // where the reason for the number lives next to it.
+  REPORT_EXPORT_CREATE_RATE_LIMIT_MAX: Joi.number()
+    .integer()
+    .min(1)
+    .max(5)
+    .default(5),
+  REPORT_EXPORT_CREATE_RATE_LIMIT_WINDOW_SECONDS: Joi.number()
+    .integer()
+    .min(60)
+    .max(3_600)
+    .default(3_600),
 }).unknown(true);
 
 export function validateEnvironment(

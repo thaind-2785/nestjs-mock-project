@@ -23,9 +23,16 @@ const productionMailEnvironment = {
   NOTIFICATION_QUEUE_PREFIX: 'hotel:production-notifications',
 };
 
+const productionReportEnvironment = {
+  // Exports namespace their own queue for the same reason mail does: a second
+  // deployment sharing one Redis must not consume this one's export jobs.
+  REPORT_EXPORT_QUEUE_PREFIX: 'hotel:production-reports',
+};
+
 const productionRequiredEnvironment = {
   ...productionAuthEnvironment,
   ...productionMailEnvironment,
+  ...productionReportEnvironment,
 };
 
 describe('validateEnvironment', () => {

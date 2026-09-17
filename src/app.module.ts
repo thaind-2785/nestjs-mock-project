@@ -9,6 +9,7 @@ import { DatabaseModule } from './database/database.module';
 import { FilesModule } from './files/files.module';
 import { HealthModule } from './health/health.module';
 import { LocalizationModule } from './i18n/localization.module';
+import { ReportsApiModule } from './reports/reports-api.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { UsersModule } from './users/users.module';
 
@@ -22,6 +23,7 @@ import { UsersModule } from './users/users.module';
     LocalizationModule,
     HttpFoundationModule,
     HealthModule,
+    ReportsApiModule,
     RoomsModule,
     UsersModule,
   ],

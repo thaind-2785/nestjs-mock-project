@@ -469,7 +469,32 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
 - 2026-09-17: `EXPIRED` is an API view in Phase 6. Phase 7 owns the durable scheduled
   transition/deletion so Phase 6 does not smuggle cron scope into the worker export.
 
+- 2026-09-17 (`P6-T01`): `exceljs@4.4.0` is pinned exactly and used through its
+  streaming `WorkbookWriter` with `useStyles` and `useSharedStrings` enabled. Measured
+  in a real Worker Thread at the accepted caps, it peaks near 53 MiB against 128 MiB,
+  where the in-memory builder reaches 87 MiB and fails outright at 25,000 rows. Shared
+  strings cost roughly 20 MiB and buy the `t="s"` literal-string encoding `SPEC-009`
+  requires; with them off exceljs emits `t="str"`, which OOXML defines as a cached
+  formula string result. The accepted caps all hold, so none were revised. The
+  transitive `uuid` advisory is accepted with the pin and recorded in `ADR-0007`.
+- 2026-09-17 (`P6-T01`): the Worker reads back its own applied `resourceLimits` and
+  refuses to generate when the old-generation limit is not the configured one. Node
+  silently ignores an unknown key, so the plausible misspelling `oldGenerationSizeMb`
+  starts a thread with the default multi-gigabyte heap and no warning; the first
+  benchmark run did exactly that and its numbers described a different machine than
+  the one being reported.
+- 2026-09-17 (`P6-T01`): the `limit + 1` row check that `SPEC-009` already specifies
+  is load-bearing, not defensive. An ordinary Worker overrun is a catchable
+  `ERR_WORKER_OUT_OF_MEMORY`, but a large enough allocation produces a V8 fatal error
+  that aborts the whole process and takes the notification consumer with it. The
+  memory cap is a backstop; refusing to start on an unbounded row set is the bound.
+- 2026-09-17 (`P6-T01`): `scripts/migration-registration.test.mjs` asserts that
+  `src/database/data-source.ts` and `test/fixtures/application-migrations.ts` register
+  exactly the migrations on disk, in the same order, in ascending timestamp order. It
+  closes the residual risk `REVIEW-037` left open after `R37-05`, and it runs inside
+  `npm run test:harness` so it is part of the gate before `P6-T02` adds a migration.
+
 [`ADR-0007`](../decisions/ADR-0007-worker-thread-export-boundary.md) is accepted as
 of 2026-09-17 and records the Worker Thread boundary, the measured XLSX dependency
-choice, and the two limits findings below. Append only evidence-backed decisions as
+choice, and the two limits findings above. Append only evidence-backed decisions as
 slices are implemented.

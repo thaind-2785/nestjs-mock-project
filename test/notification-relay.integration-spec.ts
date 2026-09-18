@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { OutboxEventStatus } from '../src/common/outbox/outbox.enums';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import mysql from 'mysql2/promise';
 import { DataSource } from 'typeorm';
-import { OutboxEventStatus } from '../src/bookings/entities/booking.enums';
-import { OutboxEvent } from '../src/bookings/entities/outbox-event.entity';
+import { OutboxEvent } from '../src/common/outbox/outbox-event.entity';
 import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';

@@ -1,6 +1,6 @@
 import { Check, Column, Entity, Index, PrimaryColumn } from 'typeorm';
 import { MutableEntity } from '../../database/entities/base.entity';
-import { OutboxEventStatus } from './booking.enums';
+import { OutboxEventStatus } from './outbox.enums';
 
 @Entity({ name: 'outbox_events' })
 @Index('uq_outbox_events_idempotency_key', ['idempotencyKey'], { unique: true })

@@ -1,4 +1,4 @@
-import type { OutboxEventStatus } from '../bookings/entities/booking.enums';
+import type { OutboxEventStatus } from '../common/outbox/outbox.enums';
 import type { EmailDeliveryStatus } from './entities/notification.enums';
 
 /**

@@ -4,7 +4,7 @@ import type { ConfigType } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
-import { OutboxEvent } from '../bookings/entities/outbox-event.entity';
+import { OutboxEvent } from '../common/outbox/outbox-event.entity';
 import { reportRedisClientErrors } from '../common/redis/redis-client-errors';
 import { notificationsConfig } from '../config/notifications.config';
 import { DatabaseModule } from '../database/database.module';

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
-import { OutboxEventStatus } from '../../bookings/entities/booking.enums';
+import { OutboxEventStatus } from './outbox.enums';
 import type {
   ClaimedRow,
   EligibleRow,

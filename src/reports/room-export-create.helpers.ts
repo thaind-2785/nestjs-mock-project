@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { RoomCatalogFilterDto } from '../rooms/dto/room-catalog-filter.dto';
 import { roomExportCreateOperation } from './room-export.constants';
-import type { RoomExportFilters } from './room-export.types';
+import type {
+  RoomExportCreateResponse,
+  RoomExportFilters,
+} from './room-export.types';
 
 /**
  * Reduces the accepted body to the filters the admin catalogue would actually apply.
@@ -53,4 +56,25 @@ export function roomExportCreateFingerprint(
       }),
     )
     .digest('hex');
+}
+
+/**
+ * Rebuilds the accepted response in one fixed key order.
+ *
+ * MySQL stores a JSON object in its own canonical order rather than the insertion
+ * order, so a body read back from `idempotency_keys` serializes differently from the
+ * one that was stored even though the values are identical. `SPEC-009` promises the
+ * exact response on replay, and a client comparing raw bodies - or a signature over
+ * them - would see two different strings. Every response therefore leaves through
+ * here, fresh or replayed.
+ */
+export function toRoomExportCreateResponse(
+  stored: RoomExportCreateResponse,
+): RoomExportCreateResponse {
+  return {
+    id: stored.id,
+    status: stored.status,
+    createdAt: stored.createdAt,
+    pollPath: stored.pollPath,
+  };
 }

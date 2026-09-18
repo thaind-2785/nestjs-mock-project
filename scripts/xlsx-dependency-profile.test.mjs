@@ -7,25 +7,28 @@ const workerUrl = new URL(
   import.meta.url,
 );
 
-/** The caps the owner accepted in SPEC-009 on 2026-09-17. */
+/** The caps the owner accepted in SPEC-009, as revised by REVIEW-038. */
 const acceptedRows = 10_000;
+const acceptedSnapshotChars = 20_000_000;
 const acceptedOldGenerationMb = 128;
 const acceptedGenerationTimeoutMs = 60_000;
 const acceptedFileBytes = 25 * 1_024 * 1_024;
 
 /**
  * The measured profile must keep real headroom under the cap, not merely fit.
- * ADR-0007 recorded a peak near 53 MiB against 128 MiB; a release that spends three
- * quarters of the heap has changed the profile that decision rests on, even though it
- * has not failed yet.
+ * ADR-0007 records a peak near 68 MiB at the accepted volume; a release that spends
+ * three quarters of the heap has changed the profile that decision rests on, even
+ * though it has not failed yet.
  */
 const peakHeapCeilingBytes = 96 * 1_024 * 1_024;
 
-function profile(resourceLimits) {
+function profile({ resourceLimits, rows, charsPerRow, amenitiesPerRoom }) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(workerUrl, {
       workerData: {
-        rows: acceptedRows,
+        rows,
+        charsPerRow,
+        amenitiesPerRoom,
         maxOldGenerationMb: acceptedOldGenerationMb,
       },
       resourceLimits,
@@ -43,15 +46,22 @@ function profile(resourceLimits) {
   });
 }
 
+const atAcceptedVolume = {
+  resourceLimits: { maxOldGenerationSizeMb: acceptedOldGenerationMb },
+  rows: acceptedRows,
+  charsPerRow: acceptedSnapshotChars / acceptedRows,
+  amenitiesPerRoom: 12,
+};
+
 // One measurement at the accepted maximum, because that is the only point where the
 // caps are actually load-bearing.
-test('the pinned XLSX dependency generates the maximum fixture inside the accepted limits', async () => {
-  const result = await profile({
-    maxOldGenerationSizeMb: acceptedOldGenerationMb,
-  });
+test('the pinned XLSX dependency generates the maximum accepted snapshot inside the limits', async () => {
+  const result = await profile(atAcceptedVolume);
 
   assert.equal(result.appliedOldGenerationMb, acceptedOldGenerationMb);
   assert.equal(result.rows, acceptedRows);
+  // The buffer is retained, not counted and dropped: production transfers it back.
+  assert.equal(result.retainedBytes, result.outputBytes);
   assert.ok(
     result.peakHeapBytes < peakHeapCeilingBytes,
     `peak heap ${(result.peakHeapBytes / 1_048_576).toFixed(1)} MiB left too little headroom under the ${acceptedOldGenerationMb} MiB cap`,
@@ -66,13 +76,33 @@ test('the pinned XLSX dependency generates the maximum fixture inside the accept
   );
 });
 
+// The measurement that makes the character cap load-bearing rather than decorative.
+// REVIEW-038 found the row cap alone does not bound memory: the room contract permits
+// 100 amenities of maximum width, so 10,000 legal rows reach roughly 155 million
+// characters. This is that input, and it must fail rather than produce a workbook.
+test('a snapshot past the accepted character volume exhausts the heap', async () => {
+  await assert.rejects(
+    profile({
+      resourceLimits: { maxOldGenerationSizeMb: acceptedOldGenerationMb },
+      rows: acceptedRows,
+      // 100 amenities at 50-character codes and 100-character names.
+      charsPerRow: 15_500,
+      amenitiesPerRoom: 100,
+    }),
+    /memory limit|out of memory|exited with/i,
+  );
+});
+
 // The guard that makes every number above mean anything. Node ignores an unknown
 // `resourceLimits` key in silence, so this misspelling starts a thread with the
 // default multi-gigabyte heap; the first run of the ADR-0007 benchmark did exactly
 // that and passed a 128 MiB cap while peaking at 151 MiB.
 test('a resource limit that silently did not apply fails instead of measuring', async () => {
   await assert.rejects(
-    profile({ oldGenerationSizeMb: acceptedOldGenerationMb }),
+    profile({
+      ...atAcceptedVolume,
+      resourceLimits: { oldGenerationSizeMb: acceptedOldGenerationMb },
+    }),
     /maxOldGenerationSizeMb/,
   );
 });

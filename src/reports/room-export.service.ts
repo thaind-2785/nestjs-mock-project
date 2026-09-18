@@ -1,12 +1,11 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { IdempotencyKeyStatus } from '../common/idempotency/idempotency.enums';
 import type { ConfigType } from '@nestjs/config';
 import { DataSource, EntityManager } from 'typeorm';
-import { IdempotencyKeyStatus } from '../bookings/entities/booking.enums';
 import { ApplicationException } from '../common/errors/application.exception';
 import { idempotencyKeyPattern } from '../common/idempotency/idempotency.constants';
 import { idempotencyErrors } from '../common/idempotency/idempotency.errors';
 import { IdempotencyRepository } from '../common/idempotency/idempotency.repository';
-import { bookingsConfig } from '../config/bookings.config';
 import { reportsConfig } from '../config/reports.config';
 import { ExportJobStatus } from './entities/export-job.enums';
 import { ExportJobRepository } from './export-job.repository';
@@ -14,7 +13,10 @@ import {
   roomExportCreateOperation,
   roomExportPollPathPrefix,
 } from './room-export.constants';
-import { roomExportCreateFingerprint } from './room-export-create.helpers';
+import {
+  roomExportCreateFingerprint,
+  toRoomExportCreateResponse,
+} from './room-export-create.helpers';
 import { roomExportErrors } from './room-export.errors';
 import type {
   RoomExportCreateInput,
@@ -40,13 +42,14 @@ export class RoomExportService {
     private readonly jobs: ExportJobRepository,
     @Inject(reportsConfig.KEY)
     private readonly configuration: ConfigType<typeof reportsConfig>,
-    @Inject(bookingsConfig.KEY)
-    private readonly bookings: ConfigType<typeof bookingsConfig>,
   ) {}
 
-  async create(
-    input: RoomExportCreateInput,
-  ): Promise<RoomExportCreateResponse> {
+  /**
+   * Returns the replay flag with the response, because the accepted contract puts it in
+   * a header. A service that dropped it would leave the controller unable to tell a
+   * client whether its retry created anything.
+   */
+  async create(input: RoomExportCreateInput): Promise<RoomExportCreateResult> {
     if (!this.configuration.enabled) throw roomExportErrors.createDisabled();
     const { idempotencyKey } = input;
     if (!idempotencyKey || !idempotencyKeyPattern.test(idempotencyKey)) {
@@ -71,7 +74,7 @@ export class RoomExportService {
         jobId: result.response.id,
         replayed: result.replayed,
       });
-      return result.response;
+      return result;
     } catch (error) {
       if (
         error instanceof ApplicationException &&
@@ -99,14 +102,14 @@ export class RoomExportService {
       operation: roomExportCreateOperation,
       idempotencyKey,
       fingerprint,
-      // The retention window is a property of the table, not of the endpoint, so
-      // both operations that write to it agree on how long a key stays claimable.
-      retentionHours: this.bookings.idempotencyRetentionHours,
     });
     if (idempotency.status === IdempotencyKeyStatus.Completed) {
       return {
-        response:
+        // Through the canonical mapper: MySQL returns a JSON object in its own key
+        // order, and the accepted contract is the exact response, not an equivalent one.
+        response: toRoomExportCreateResponse(
           idempotency.responseBody as unknown as RoomExportCreateResponse,
+        ),
         replayed: true,
       };
     }
@@ -115,12 +118,12 @@ export class RoomExportService {
       requestedBy: input.actorUserId,
       filters: input.filters,
     });
-    const response: RoomExportCreateResponse = {
+    const response = toRoomExportCreateResponse({
       id: job.id,
       status: ExportJobStatus.Queued,
       createdAt: job.createdAt.toISOString(),
       pollPath: `${roomExportPollPathPrefix}/${job.id}`,
-    };
+    });
     await this.idempotency.complete(manager, idempotency.id, {
       responseStatus: 202,
       responseBody: response as unknown as Record<string, unknown>,

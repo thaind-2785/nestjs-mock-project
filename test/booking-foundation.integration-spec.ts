@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { OutboxEventStatus } from '../src/common/outbox/outbox.enums';
+import { IdempotencyKeyStatus } from '../src/common/idempotency/idempotency.enums';
 import { Logger } from '@nestjs/common';
 import mysql from 'mysql2/promise';
 import { DataSource, EntityManager, getMetadataArgsStorage } from 'typeorm';
@@ -7,12 +9,10 @@ import { BookingStatusHistory } from '../src/bookings/entities/booking-status-hi
 import {
   BookingActorType,
   BookingStatus,
-  IdempotencyKeyStatus,
-  OutboxEventStatus,
 } from '../src/bookings/entities/booking.enums';
 import { Booking } from '../src/bookings/entities/booking.entity';
-import { IdempotencyKey } from '../src/bookings/entities/idempotency-key.entity';
-import { OutboxEvent } from '../src/bookings/entities/outbox-event.entity';
+import { IdempotencyKey } from '../src/common/idempotency/idempotency-key.entity';
+import { OutboxEvent } from '../src/common/outbox/outbox-event.entity';
 import { BookingsService } from '../src/bookings/bookings.service';
 import { BookingRoomTimeUsageRepository } from '../src/bookings/room-time-usage.repository';
 import { BookingCreateResponse } from '../src/bookings/booking-create.types';
@@ -20,6 +20,7 @@ import { createBookingsConfiguration } from '../src/config/bookings.config';
 import { IdempotencyRepository } from '../src/common/idempotency/idempotency.repository';
 import { applicationEntities } from '../src/database/application-entities';
 import { createDatabaseConfiguration } from '../src/config/database.config';
+import { createIdempotencyConfiguration } from '../src/config/idempotency.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
 import { createTypeOrmOptions } from '../src/database/database.options';
@@ -87,7 +88,7 @@ describe('Phase 4 booking foundation persistence', () => {
     await dataSource.runMigrations();
     bookings = new BookingsService(
       dataSource,
-      new IdempotencyRepository(),
+      new IdempotencyRepository(createIdempotencyConfiguration(environment)),
       createBookingsConfiguration(environment),
     );
     usage = new BookingRoomTimeUsageRepository();

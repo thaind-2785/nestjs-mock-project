@@ -12,17 +12,3 @@ export enum BookingActorType {
   Admin = 'ADMIN',
   System = 'SYSTEM',
 }
-
-export enum IdempotencyKeyStatus {
-  Pending = 'PENDING',
-  Completed = 'COMPLETED',
-}
-
-export enum OutboxEventStatus {
-  Pending = 'PENDING',
-  Processing = 'PROCESSING',
-  Processed = 'PROCESSED',
-  // Phase 5 terminal state: a permanently rejected or retry-exhausted event stays
-  // visible and redrivable instead of being retried forever or disappearing.
-  Failed = 'FAILED',
-}

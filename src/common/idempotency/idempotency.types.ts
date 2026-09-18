@@ -5,7 +5,6 @@ export interface IdempotencyLockInput {
   idempotencyKey: string;
   /** A canonical digest of the request this key is allowed to replay. */
   fingerprint: string;
-  retentionHours: number;
 }
 
 export interface IdempotencyCompletion {

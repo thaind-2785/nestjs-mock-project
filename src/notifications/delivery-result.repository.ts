@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { OutboxEventStatus } from '../common/outbox/outbox.enums';
 import { EntityManager } from 'typeorm';
-import { OutboxEventStatus } from '../bookings/entities/booking.enums';
 import { EmailDeliveryStatus } from './entities/notification.enums';
 import { notificationEventTypes } from './notification-event';
 import type {

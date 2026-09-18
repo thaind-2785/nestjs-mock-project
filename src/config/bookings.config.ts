@@ -10,7 +10,6 @@ export interface BookingsConfiguration {
     max: number;
     windowSeconds: number;
   };
-  idempotencyRetentionHours: number;
 }
 
 export function createBookingsConfiguration(
@@ -22,7 +21,6 @@ export function createBookingsConfiguration(
       max: environment.BOOKING_CREATE_RATE_LIMIT_MAX,
       windowSeconds: environment.BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS,
     },
-    idempotencyRetentionHours: environment.BOOKING_IDEMPOTENCY_RETENTION_HOURS,
   };
 }
 

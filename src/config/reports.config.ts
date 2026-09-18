@@ -37,6 +37,23 @@ export const roomExportQueueConcurrency = 1;
 /** The accepted hard limit. The reader detects limit + 1 and fails rather than truncating. */
 const maxRows = 10_000;
 
+/**
+ * The total characters one snapshot may carry across every cell.
+ *
+ * The row cap alone does not bound memory, and `REVIEW-038` proved it: the accepted
+ * room contract allows 100 amenities per room with a 50-character code and a
+ * 100-character name, so one legal row can carry 15,600 characters and 10,000 of them
+ * reach roughly 155 million. Measured in a real Worker Thread that is an out-of-memory
+ * termination, not a slow export.
+ *
+ * At this bound the same measurement peaks near 68 MiB against the accepted 128 MiB -
+ * about 1.9x headroom - across every shape tested, from 10,000 narrow rows to 1,290
+ * maximum-width ones. It is a third cap rather than a reduction of either accepted one:
+ * a real catalogue of 10,000 rooms with fifteen ordinary amenities carries about 7
+ * million characters, well under it.
+ */
+const maxSnapshotChars = 20_000_000;
+
 /** Keyset page for the snapshot read; bounded against `maxRows`. */
 const queryPageSize = 500;
 
@@ -113,6 +130,7 @@ const secondsPerHour = 3_600;
 
 export interface RoomExportSnapshotConfiguration {
   maxRows: number;
+  maxSnapshotChars: number;
   queryPageSize: number;
   queryTimeoutMs: number;
 }
@@ -181,7 +199,7 @@ export function createReportsConfiguration(
 ): ReportsConfiguration {
   const configuration: ReportsConfiguration = {
     enabled: environment.REPORT_EXPORT_ENABLED,
-    snapshot: { maxRows, queryPageSize, queryTimeoutMs },
+    snapshot: { maxRows, maxSnapshotChars, queryPageSize, queryTimeoutMs },
     worker: {
       maxOldGenerationMb: workerMaxOldGenerationMb,
       generationTimeoutMs,
@@ -279,6 +297,7 @@ export function assertRoomExportBounds(
 export interface ReportsConfigurationSummary {
   enabled: boolean;
   maxRows: number;
+  maxSnapshotChars: number;
   queryPageSize: number;
   queryTimeoutMs: number;
   maxOldGenerationMb: number;
@@ -311,6 +330,7 @@ export function describeReportsConfiguration(
   return {
     enabled: configuration.enabled,
     maxRows: snapshot.maxRows,
+    maxSnapshotChars: snapshot.maxSnapshotChars,
     queryPageSize: snapshot.queryPageSize,
     queryTimeoutMs: snapshot.queryTimeoutMs,
     maxOldGenerationMb: worker.maxOldGenerationMb,

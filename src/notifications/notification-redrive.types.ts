@@ -1,4 +1,4 @@
-import type { OutboxEventStatus } from '../bookings/entities/booking.enums';
+import { OutboxEventStatus } from '../common/outbox/outbox.enums';
 import type { EmailDeliveryStatus } from './entities/notification.enums';
 import type { redriveOutcomeCodes } from './notification-redrive.constants';
 

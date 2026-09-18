@@ -1,4 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { OutboxEventStatus } from '../common/outbox/outbox.enums';
+import { IdempotencyKeyStatus } from '../common/idempotency/idempotency.enums';
 import { randomUUID } from 'node:crypto';
 import type { ConfigType } from '@nestjs/config';
 import {
@@ -14,16 +16,11 @@ import { RoomType } from '../rooms/entities/room-type.entity';
 import { lockRoom, type LockedRoom } from '../rooms/room-lock';
 import { bookingsConfig } from '../config/bookings.config';
 import { ApplicationException } from '../common/errors/application.exception';
-import {
-  BookingActorType,
-  BookingStatus,
-  IdempotencyKeyStatus,
-  OutboxEventStatus,
-} from './entities/booking.enums';
+import { BookingActorType, BookingStatus } from './entities/booking.enums';
 import { BookingStatusHistory } from './entities/booking-status-history.entity';
 import { BookingChangeHistory } from './entities/booking-change-history.entity';
 import { Booking } from './entities/booking.entity';
-import { OutboxEvent } from './entities/outbox-event.entity';
+import { OutboxEvent } from '../common/outbox/outbox-event.entity';
 import {
   bookingCreateFingerprint,
   createMonotonicBookingId,
@@ -960,7 +957,6 @@ export class BookingsService {
       operation: bookingCreateOperation,
       idempotencyKey,
       fingerprint,
-      retentionHours: this.configuration.idempotencyRetentionHours,
     });
     if (idempotency.status === IdempotencyKeyStatus.Completed) {
       return {

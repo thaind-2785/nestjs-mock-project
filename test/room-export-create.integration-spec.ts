@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { IdempotencyKeyStatus } from '../src/common/idempotency/idempotency.enums';
 import mysql from 'mysql2/promise';
 import { DataSource } from 'typeorm';
-import { IdempotencyKeyStatus } from '../src/bookings/entities/booking.enums';
 import { IdempotencyRepository } from '../src/common/idempotency/idempotency.repository';
-import { createBookingsConfiguration } from '../src/config/bookings.config';
 import { createDatabaseConfiguration } from '../src/config/database.config';
+import { createIdempotencyConfiguration } from '../src/config/idempotency.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
 import { createReportsConfiguration } from '../src/config/reports.config';
@@ -69,13 +69,12 @@ describe('Phase 6 export create transaction', () => {
 
     service = new RoomExportService(
       dataSource,
-      new IdempotencyRepository(),
+      new IdempotencyRepository(createIdempotencyConfiguration(environment)),
       new ExportJobRepository(),
       createReportsConfiguration({
         ...environment,
         REPORT_EXPORT_ENABLED: true,
       }),
-      createBookingsConfiguration(environment),
     );
   });
 
@@ -143,11 +142,22 @@ describe('Phase 6 export create transaction', () => {
     expect(stored.response_body).toEqual(response);
   });
 
-  it('replays the stored response byte for byte', async () => {
-    const first = await create('key-replays', { status: RoomStatus.Active });
-    const second = await create('key-replays', { status: RoomStatus.Active });
+  it('replays the stored response byte for byte, and says that it replayed', async () => {
+    const first = await createResult('key-replays', {
+      status: RoomStatus.Active,
+    });
+    const second = await createResult('key-replays', {
+      status: RoomStatus.Active,
+    });
 
-    expect(second).toEqual(first);
+    expect(first.replayed).toBe(false);
+    expect(second.replayed).toBe(true);
+    // Byte for byte, not merely equivalent. MySQL returns a stored JSON object in its
+    // own key order, so without the canonical mapper these two strings differ while
+    // `toEqual` still passes - and the accepted contract is the exact response.
+    expect(JSON.stringify(second.response)).toBe(
+      JSON.stringify(first.response),
+    );
     expect(await countRows('export_jobs')).toBe(1);
     expect(await countRows('outbox_events')).toBe(1);
   });
@@ -208,7 +218,16 @@ describe('Phase 6 export create transaction', () => {
     expect(await countRows('idempotency_keys')).toBe(0);
   });
 
-  function create(idempotencyKey: string, filters: RoomExportFilters) {
+  async function create(idempotencyKey: string, filters: RoomExportFilters) {
+    const { response } = await service.create({
+      actorUserId: adminId,
+      idempotencyKey: `room-export-${idempotencyKey}`,
+      filters,
+    });
+    return response;
+  }
+
+  function createResult(idempotencyKey: string, filters: RoomExportFilters) {
     return service.create({
       actorUserId: adminId,
       idempotencyKey: `room-export-${idempotencyKey}`,

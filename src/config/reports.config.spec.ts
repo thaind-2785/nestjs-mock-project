@@ -16,7 +16,12 @@ describe('createReportsConfiguration', () => {
   it('resolves the accepted Phase 6 bounds and ships disabled', () => {
     expect(baseline()).toEqual({
       enabled: false,
-      snapshot: { maxRows: 10_000, queryPageSize: 500, queryTimeoutMs: 30_000 },
+      snapshot: {
+        maxRows: 10_000,
+        maxSnapshotChars: 20_000_000,
+        queryPageSize: 500,
+        queryTimeoutMs: 30_000,
+      },
       worker: {
         maxOldGenerationMb: 128,
         generationTimeoutMs: 60_000,

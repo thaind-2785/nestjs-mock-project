@@ -40,8 +40,9 @@ timeout rather than a new failure mode.
 **`exceljs@4.4.0` in streaming mode, with styles and shared strings on.** The
 alternatives were measured in a real Worker Thread under the accepted
 `maxOldGenerationSizeMb: 128`, generating the maximum accepted fixture with every
-optional column populated, amenities at a plausible upper bound, and one row in twenty
-carrying a dangerous spreadsheet prefix:
+optional column populated, amenities at what was then taken for a plausible upper bound
+— see the amendment below, which is where that assumption broke — and one row in
+twenty carrying a dangerous spreadsheet prefix:
 
 | Rows    | exceljs in-memory       | exceljs streaming       | SheetJS (`@e965/xlsx`)    |
 | ------- | ----------------------- | ----------------------- | ------------------------- |
@@ -54,9 +55,28 @@ The last column is the third number in each cell: peak used heap. A main-thread 
 sampling every 20 ms observed a maximum event-loop lag of 1.2 ms throughout, which is
 the property the whole Worker Thread design exists to buy.
 
-Streaming wins on the only axis that is scarce. With styles and shared strings enabled
-it peaks near 53 MiB against the 128 MiB cap at the accepted row limit — roughly 2.4x
-headroom — while the in-memory builder is already at 87 MiB and fails at 25,000.
+Streaming wins on the only axis that is scarce, while the in-memory builder is already
+at 87 MiB at the accepted row limit and fails outright at 25,000.
+
+**Amended 2026-09-18 after `REVIEW-038`.** The table above under-measures, twice. Its
+fixture repeated one amenity string across rows, and shared strings store one copy of a
+repeated value, so it measured deduplication rather than input; and it counted the
+output chunks and dropped them, where production must retain the whole buffer to
+transfer it back. With distinct per-row values and the buffer retained, the same shape
+peaks at **70.3 MiB against the 128 MiB cap** with 1.5 MiB of output in 393 ms — still
+comfortable headroom, but not the 2.4x originally claimed.
+
+The revision that matters more is what the corrected fixture exposed: **the row cap does
+not bound memory.** The accepted room contract permits `ArrayMaxSize(100)` amenities per
+room with `code VARCHAR(50)` and `name VARCHAR(100)`, so one legal row can carry about
+15,600 characters and 10,000 of them reach roughly 155 million. Measured, that is an
+out-of-memory termination of the Worker — on an input no validation rejected. A third
+cap is therefore accepted alongside the other two: **20,000,000 characters across every
+cell of one snapshot**, refused before generation with `EXPORT_SNAPSHOT_TOO_LARGE`. It
+is not a reduction of either accepted cap. A real catalogue of 10,000 rooms with fifteen
+ordinary amenities carries about 7 million characters, and every shape measured at the
+new bound — from 10,000 narrow rows to 1,290 maximum-width ones — stays between 55 and
+70 MiB.
 
 Shared strings are enabled although they cost about 20 MiB, because `useSharedStrings:
 false` makes exceljs emit `t="str"`, which OOXML defines as a _cached formula string
@@ -108,11 +128,12 @@ terminated or runs out of memory. Both are recoverable through the lease and the
 safeguard, and neither can publish a result, but both are now part of what operators
 read in the runbook.
 
-The accepted caps are confirmed rather than revised. Every one of them — 10,000 rows,
-128 MiB, 60 seconds, 25 MiB — passes with margin at the measured fixture, so Phase 6
-starts without renegotiating the product limits. Raising the row cap is not a
-configuration change: shared-string memory climbs steeply past roughly 25,000 rows,
-and the measurement would have to be redone.
+The four accepted caps — 10,000 rows, 128 MiB, 60 seconds, 25 MiB — are confirmed
+rather than revised, and a fifth is added: 20,000,000 snapshot characters. None of the
+original four moves, so Phase 6 starts without renegotiating a product limit; what
+changes is that the row cap is no longer claimed to be sufficient on its own. Raising
+either the row cap or the character cap is not a configuration change: shared-string
+memory climbs steeply, and the measurement would have to be redone.
 
 `exceljs@4.4.0` carries a transitive `uuid` advisory (GHSA-w5hq-g745-h8pq, moderate:
 a missing buffer bounds check in v3/v5/v6 when `buf` is supplied). It is accepted with
@@ -122,6 +143,9 @@ remediation downgrades exceljs to 3.4.0, which loses the streaming writer this
 decision depends on. The advisory is recorded here so a future upgrade has a reason
 rather than a surprise.
 
-The benchmark that produced this table is evidence, not a one-off measurement. It
-becomes a repeatable check in `P6-T01` so a dependency upgrade that quietly changes
-the memory profile fails rather than ships.
+The benchmark that produced this table is evidence, not a one-off measurement. It is a
+repeatable check in `npm run test:harness` so a dependency upgrade that quietly changes
+the memory profile fails rather than ships. Since `REVIEW-038` it also measures the
+input the contracts actually permit, retains the output buffer, and carries a second
+case that drives the heap past the character cap and requires the run to fail — because
+a cap whose violation was never observed is a number, not a bound.

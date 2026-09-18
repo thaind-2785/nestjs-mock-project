@@ -35,6 +35,8 @@ const obsoleteVariableReplacements: Readonly<Record<string, string>> = {
   ROOM_IMAGE_UPLOAD_RATE_LIMIT_MAX: 'ATTACHMENT_UPLOAD_RATE_LIMIT_MAX',
   ROOM_IMAGE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS:
     'ATTACHMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS',
+  // Retention belongs to `idempotency_keys`, which two operations now write to.
+  BOOKING_IDEMPOTENCY_RETENTION_HOURS: 'IDEMPOTENCY_RETENTION_HOURS',
 };
 
 export interface EnvironmentVariables extends Record<string, unknown> {
@@ -54,7 +56,7 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   HOTEL_TIMEZONE: string;
   BOOKING_CREATE_RATE_LIMIT_MAX: number;
   BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS: number;
-  BOOKING_IDEMPOTENCY_RETENTION_HOURS: number;
+  IDEMPOTENCY_RETENTION_HOURS: number;
   OBJECT_STORAGE_ENDPOINT?: string;
   OBJECT_STORAGE_REGION: string;
   OBJECT_STORAGE_FORCE_PATH_STYLE: boolean;
@@ -162,7 +164,9 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(1)
     .max(3_600)
     .default(60),
-  BOOKING_IDEMPOTENCY_RETENTION_HOURS: Joi.number()
+  // One table, one window. Both operations that claim a key share it, because two
+  // windows would let one of them expire a row the other still considered claimable.
+  IDEMPOTENCY_RETENTION_HOURS: Joi.number()
     .integer()
     .min(24)
     .max(24 * 30)

@@ -29,6 +29,28 @@ const ExcelJS = require('exceljs');
 /** One row in twenty carries a prefix a spreadsheet would otherwise read as a formula. */
 const dangerousPrefixes = ['=', '+', '-', '@'];
 
+/**
+ * The widest cell, at the width the accepted room contract actually permits:
+ * `ArrayMaxSize(100)` amenities per room, `amenities.code VARCHAR(50)` and
+ * `amenities.name VARCHAR(100)`.
+ *
+ * Every value is distinct per row, which is the part the first version of this
+ * benchmark got wrong. Shared strings store one copy of a repeated value, so a fixture
+ * that reuses one amenity string measures deduplication rather than the input: it
+ * reported 34 MiB where the same shape with distinct values reaches 68.
+ */
+function amenitiesFor(index) {
+  const width = Math.max(
+    1,
+    Math.floor(workerData.charsPerRow / amenitiesPerRoom) - 5,
+  );
+  const half = Math.floor(width / 2);
+  return Array.from({ length: amenitiesPerRoom }, (_unused, slot) => {
+    const seed = `R${index}A${slot}`;
+    return `${seed.padStart(half, 'C')} - ${seed.padStart(width - half, 'N')}`;
+  }).join('; ');
+}
+
 function cellValues(index) {
   const dangerous = index % 20 === 0;
   const prefix = dangerousPrefixes[index % dangerousPrefixes.length];
@@ -41,16 +63,14 @@ function cellValues(index) {
     String(1_000_000 + index * 13),
     'VND',
     index % 7 === 0 ? 'INACTIVE' : 'ACTIVE',
-    // Amenities at a plausible upper bound: this is the widest user-controlled cell.
-    Array.from(
-      { length: 12 },
-      (_unused, slot) => `AMN${slot} - Amenity name ${slot} for room ${index}`,
-    ).join('; '),
+    amenitiesFor(index),
     String((index % 50) + 1),
     new Date(Date.UTC(2026, 0, 1, 0, 0, index % 60)).toISOString(),
     new Date(Date.UTC(2026, 6, 1, 0, 0, index % 60)).toISOString(),
   ];
 }
+
+const amenitiesPerRoom = workerData.amenitiesPerRoom;
 
 const header = [
   'Room ID',
@@ -68,9 +88,14 @@ const header = [
 ];
 
 let outputBytes = 0;
+const chunks = [];
 const sink = new Writable({
   write(chunk, _encoding, done) {
     outputBytes += chunk.length;
+    // Retained, because production must return the whole buffer to the parent by
+    // transfer. Counting the bytes and dropping them measures a shape no deployment
+    // ever runs.
+    chunks.push(chunk);
     done();
   },
 });
@@ -97,6 +122,7 @@ for (let index = 0; index < workerData.rows; index += 1) {
 }
 sheet.commit();
 await workbook.commit();
+const output = Buffer.concat(chunks);
 const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
 
 clearInterval(sampler);
@@ -108,5 +134,6 @@ parentPort.postMessage({
   durationMs,
   peakHeapBytes,
   outputBytes,
+  retainedBytes: output.byteLength,
   appliedOldGenerationMb: resourceLimits.maxOldGenerationSizeMb,
 });

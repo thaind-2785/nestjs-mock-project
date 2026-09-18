@@ -659,6 +659,29 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   `Entity metadata for User#identities was not found`. Naming the transitive graph by
   hand is a puzzle, not a decision.
 
+- 2026-09-18 (`REVIEW-038` closure): the row cap does not bound memory, and the
+  benchmark that said otherwise was measuring the wrong thing twice. Its fixture reused
+  one amenity string per row, which shared strings deduplicate, and it dropped the
+  output chunks instead of retaining the buffer production must transfer. With both
+  corrected, the accepted-volume fixture peaks at 70.3 MiB rather than 34, and the legal
+  worst case the room contract permits - 10,000 rows with 100 maximum-width amenities -
+  is an out-of-memory termination. A third cap is therefore accepted: 20,000,000
+  snapshot characters, refused before generation with `EXPORT_SNAPSHOT_TOO_LARGE`.
+  Neither accepted cap moves. `ADR-0007` and `SPEC-009` are amended, and the gate now
+  carries a case that must fail past the bound.
+- 2026-09-18 (`REVIEW-038` closure): `Idempotency-Replayed: true` was in the accepted
+  contract and missing from the implementation, because the service dropped the flag
+  before the controller could read it. It is emitted on a replay and absent otherwise. A
+  canonical mapper now produces every response, because MySQL returns a stored JSON
+  object in its own key order and the contract promises the exact response - a test
+  comparing parsed objects could never have caught that.
+- 2026-09-18 (`REVIEW-038` closure): the shared boundaries stopped pointing back at
+  bookings. `IdempotencyKey`, `OutboxEvent`, their status enums and the retention window
+  moved into `src/common/idempotency/` and `src/common/outbox/`, and the window became
+  `IDEMPOTENCY_RETENTION_HOURS` with the old name in the obsolete map. Doing it properly
+  removed the `bookingsConfig` import from reports rather than relocating it: the
+  repository reads its own retention, so no caller has to know a window it does not own.
+
 - 2026-09-17 (`P6-T01`, owner direction): the export environment surface is four
   variables, not twenty-two. The first implementation made every accepted cap an
   environment variable by analogy with the Phase 5 notification settings, without

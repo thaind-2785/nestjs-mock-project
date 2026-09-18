@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { idempotencyConfig } from '../../config/idempotency.config';
 import { IdempotencyRepository } from './idempotency.repository';
 
 /**
@@ -8,6 +10,7 @@ import { IdempotencyRepository } from './idempotency.repository';
  * and the symptom would be duplicate durable work under concurrency.
  */
 @Module({
+  imports: [ConfigModule.forFeature(idempotencyConfig)],
   providers: [IdempotencyRepository],
   exports: [IdempotencyRepository],
 })

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { OutboxEventStatus } from '../src/common/outbox/outbox.enums';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Queue } from 'bullmq';
@@ -15,8 +16,7 @@ import {
   GoogleCodeExchange,
   GoogleOAuthClientContract,
 } from '../src/auth/google/google-oauth.client';
-import { OutboxEventStatus } from '../src/bookings/entities/booking.enums';
-import { OutboxEvent } from '../src/bookings/entities/outbox-event.entity';
+import { OutboxEvent } from '../src/common/outbox/outbox-event.entity';
 import { configureApplication } from '../src/bootstrap';
 import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';

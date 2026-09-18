@@ -203,6 +203,9 @@ describe('Phase 6 room export create (e2e)', () => {
       view: 'CITY',
     });
 
+    // A fresh call must not claim to have replayed anything.
+    expect(accepted.headers['idempotency-replayed']).toBeUndefined();
+
     // Same key, same request: the stored response, and still one job.
     const replayed = await adminBrowser
       .post(createPath)
@@ -210,7 +213,12 @@ describe('Phase 6 room export create (e2e)', () => {
       .set('Idempotency-Key', 'room-export-journey-1')
       .send({ beds: 2, status: 'ACTIVE', view: 'CITY' })
       .expect(202);
-    expect(replayed.body).toEqual(accepted.body);
+    // The header is how a client that timed out learns its retry created nothing.
+    expect(replayed.headers['idempotency-replayed']).toBe('true');
+    // Raw text, not the parsed object. MySQL returns a stored JSON object in its own
+    // key order, so comparing parsed bodies would pass while the bytes a client
+    // actually receives - or signs - differ between the two calls.
+    expect(replayed.text).toBe(accepted.text);
     expect(await countJobs()).toBe(1);
 
     // Same key, different request.

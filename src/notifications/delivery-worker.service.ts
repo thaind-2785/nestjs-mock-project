@@ -5,10 +5,10 @@ import {
   OnApplicationBootstrap,
   OnApplicationShutdown,
 } from '@nestjs/common';
+import { OutboxEventStatus } from '../common/outbox/outbox.enums';
 import type { ConfigType } from '@nestjs/config';
 import type Redis from 'ioredis';
 import { EntityManager } from 'typeorm';
-import { OutboxEventStatus } from '../bookings/entities/booking.enums';
 import { notificationsConfig } from '../config/notifications.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import { deliveryPreparationErrorCodes } from './delivery-preparation.constants';

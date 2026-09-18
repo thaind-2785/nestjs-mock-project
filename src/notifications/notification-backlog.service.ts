@@ -5,9 +5,9 @@ import {
   OnApplicationBootstrap,
   OnApplicationShutdown,
 } from '@nestjs/common';
+import { OutboxEventStatus } from '../common/outbox/outbox.enums';
 import type { ConfigType } from '@nestjs/config';
 import { Queue } from 'bullmq';
-import { OutboxEventStatus } from '../bookings/entities/booking.enums';
 import { notificationsConfig } from '../config/notifications.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import { backlogFailureCode } from './notification-backlog.error';

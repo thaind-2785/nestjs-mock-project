@@ -66,8 +66,14 @@ Out of scope:
 ### Create a room export
 
 `POST /api/v1/admin/exports/rooms` requires an authenticated active `ADMIN`, JSON
-content, and an `Idempotency-Key` header of 1-128 visible ASCII characters. An empty
-object exports every room visible to the admin catalogue. The optional body fields
+content, and an `Idempotency-Key` header of 8-128 characters from `[A-Za-z0-9._:-]`.
+This is the shared validator every idempotent endpoint already uses, and it is
+deliberately narrower than "visible ASCII" in both directions: the floor is what makes
+a key worth having, because a one-character key is not a retry token but a collision
+waiting for a second caller, and the character set excludes anything that would need
+escaping in a log line or a header. Revised on 2026-09-18 after `REVIEW-038` found this
+paragraph describing a wider contract than the code accepted. An empty object exports
+every room visible to the admin catalogue. The optional body fields
 match `GET /admin/rooms` after normalization:
 
 ```json
@@ -196,6 +202,15 @@ package is checked to contain no formulas, macros, external links, or embedded f
 - The accepted hard limit is 10,000 matching rooms. The reader detects `limit + 1`
   and fails permanently with `EXPORT_ROW_LIMIT_EXCEEDED`; it never truncates a file
   while presenting it as complete.
+- A second accepted hard limit bounds the volume that row count cannot: 20,000,000
+  characters across every cell of one snapshot, failing permanently with
+  `EXPORT_SNAPSHOT_TOO_LARGE`. It exists because the room contract permits 100
+  amenities per room with a 50-character code and a 100-character name, so 10,000
+  legal rows can carry roughly 155 million characters, which `REVIEW-038` measured as
+  an out-of-memory termination of the Worker rather than a slow export. The reader
+  accumulates the volume as it pages and stops when it is exceeded, so the queue
+  process never holds a snapshot it could not hand over. A real catalogue of 10,000
+  rooms with fifteen ordinary amenities carries about 7 million characters.
 - Valid state transitions are `QUEUED -> PROCESSING -> COMPLETED`,
   `PROCESSING -> QUEUED` for a retryable failure, and
   `QUEUED|PROCESSING -> FAILED` after a permanent error or exhausted budget.
@@ -415,6 +430,9 @@ cleanup without changing the Phase 6 result contract.
 Owner decisions accepted on 2026-09-17:
 
 - Maximum matching rows: 10,000; never truncate.
+- Maximum snapshot volume: 20,000,000 characters across every cell (added 2026-09-18
+  on the measured evidence in `REVIEW-038`; it bounds memory where the row count
+  cannot, and reduces neither of the caps below).
 - Worker Thread old-generation heap: 128 MiB.
 - XLSX generation timeout: 60 seconds.
 - Maximum XLSX bytes: 25 MiB.

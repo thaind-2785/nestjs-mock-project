@@ -35,7 +35,12 @@ function request(overrides: Record<string, unknown> = {}) {
     protocolVersion: roomExportProtocolVersion,
     jobId,
     attempt: 1,
-    limits: { maxRows: 10_000, maxFileBytes: 1_024, maxOldGenerationMb: 128 },
+    limits: {
+      maxRows: 10_000,
+      maxSnapshotChars: 20_000_000,
+      maxFileBytes: 1_024,
+      maxOldGenerationMb: 128,
+    },
     rows: [row()],
     ...overrides,
   };
@@ -56,7 +61,12 @@ describe('parseRoomExportGenerateRequest', () => {
       protocolVersion: roomExportProtocolVersion,
       jobId,
       attempt: 1,
-      limits: { maxRows: 10_000, maxFileBytes: 1_024, maxOldGenerationMb: 128 },
+      limits: {
+        maxRows: 10_000,
+        maxSnapshotChars: 20_000_000,
+        maxFileBytes: 1_024,
+        maxOldGenerationMb: 128,
+      },
       rows: [row()],
     });
   });
@@ -131,6 +141,7 @@ describe('parseRoomExportGenerateRequest', () => {
           request({
             limits: {
               maxRows: 2,
+              maxSnapshotChars: 20_000_000,
               maxFileBytes: 1_024,
               maxOldGenerationMb: 128,
             },
@@ -141,12 +152,57 @@ describe('parseRoomExportGenerateRequest', () => {
     );
   });
 
+  it('refuses a snapshot whose characters exceed the accepted volume', () => {
+    // The bound the row cap cannot express. REVIEW-038 measured it: the room contract
+    // allows 100 amenities of maximum width per room, so 10,000 legal rows reach ~155
+    // million characters, which is an out-of-memory termination rather than a slow
+    // export. A row count inside the cap is therefore not evidence of a bounded job.
+    const wide = row({ amenities: 'x'.repeat(2_000) });
+
+    expect(
+      parseRoomExportGenerateRequest(
+        request({
+          limits: {
+            maxRows: 10,
+            maxSnapshotChars: 4_000,
+            maxFileBytes: 1_024,
+            maxOldGenerationMb: 128,
+          },
+          rows: [wide],
+        }),
+      ).rows,
+    ).toHaveLength(1);
+
+    expectCode(
+      () =>
+        parseRoomExportGenerateRequest(
+          request({
+            limits: {
+              maxRows: 10,
+              maxSnapshotChars: 4_000,
+              maxFileBytes: 1_024,
+              maxOldGenerationMb: 128,
+            },
+            rows: [wide, wide, wide],
+          }),
+        ),
+      roomExportWorkerErrorCodes.snapshotTooLarge,
+    );
+  });
+
   it('refuses an unusable attempt or limit', () => {
     for (const overrides of [
       { attempt: 0 },
       { attempt: 1.5 },
       { jobId: '' },
-      { limits: { maxRows: 0, maxFileBytes: 1_024, maxOldGenerationMb: 128 } },
+      {
+        limits: {
+          maxRows: 0,
+          maxSnapshotChars: 20_000_000,
+          maxFileBytes: 1_024,
+          maxOldGenerationMb: 128,
+        },
+      },
       { limits: { maxRows: 10, maxFileBytes: 1_024 } },
     ]) {
       expectCode(
@@ -158,7 +214,7 @@ describe('parseRoomExportGenerateRequest', () => {
 });
 
 describe('parseRoomExportResult', () => {
-  const expectation = { jobId, attempt: 1, maxFileBytes: 1_024 };
+  const expectation = { jobId, attempt: 1, maxFileBytes: 1_024, rowCount: 1 };
 
   function generated(overrides: Record<string, unknown> = {}) {
     return {
@@ -214,6 +270,18 @@ describe('parseRoomExportResult', () => {
       () => parseRoomExportResult(generated({ attempt: 2 }), expectation),
       roomExportWorkerErrorCodes.protocolInvalid,
     );
+  });
+
+  it('refuses a row count that is not the one this attempt was given', () => {
+    // Plausible is not enough. The parent stores this number as the job's result
+    // metadata, so a Worker that wrote half a workbook and reported a whole one would
+    // publish bytes that do not match the count an administrator reads beside them.
+    for (const rowCount of [0, 2, Number.MAX_SAFE_INTEGER]) {
+      expectCode(
+        () => parseRoomExportResult(generated({ rowCount }), expectation),
+        roomExportWorkerErrorCodes.protocolInvalid,
+      );
+    }
   });
 
   it('refuses a declared length that disagrees with the transferred buffer', () => {

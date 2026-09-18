@@ -21,6 +21,7 @@ export const roomExportWorkerErrorCodes = {
   protocolInvalid: 'EXPORT_WORKER_PROTOCOL_INVALID',
   resourceLimitMismatch: 'EXPORT_WORKER_RESOURCE_LIMIT_MISMATCH',
   rowLimitExceeded: 'EXPORT_ROW_LIMIT_EXCEEDED',
+  snapshotTooLarge: 'EXPORT_SNAPSHOT_TOO_LARGE',
   outputTooLarge: 'EXPORT_OUTPUT_TOO_LARGE',
   generationFailed: 'EXPORT_GENERATION_FAILED',
 } as const;
@@ -67,6 +68,12 @@ export interface RoomExportWorkbookRow {
 
 export interface RoomExportGenerateLimits {
   maxRows: number;
+  /**
+   * Total characters across every cell of the snapshot. The row cap does not bound
+   * memory on its own: one legal row may carry 100 amenities of maximum width, and
+   * 10,000 of those is an out-of-memory termination rather than a slow export.
+   */
+  maxSnapshotChars: number;
   maxFileBytes: number;
   maxOldGenerationMb: number;
 }
@@ -104,6 +111,12 @@ export interface RoomExportResultExpectation {
   jobId: string;
   attempt: number;
   maxFileBytes: number;
+  /**
+   * How many rows the parent actually sent. The Worker reports a count back and the
+   * parent stores it as the job's result metadata, so a count that is merely plausible
+   * would let a partial workbook be published with numbers an administrator trusts.
+   */
+  rowCount: number;
 }
 
 const requestKeys = [
@@ -114,7 +127,12 @@ const requestKeys = [
   'rows',
 ] as const;
 
-const limitKeys = ['maxRows', 'maxFileBytes', 'maxOldGenerationMb'] as const;
+const limitKeys = [
+  'maxRows',
+  'maxSnapshotChars',
+  'maxFileBytes',
+  'maxOldGenerationMb',
+] as const;
 
 const workbookRowKeys = [
   'roomId',
@@ -179,6 +197,16 @@ export function parseRoomExportGenerateRequest(
     );
   }
   const rows = message.rows.map((row, index) => parseWorkbookRow(row, index));
+  // The bound the row cap cannot express. Counted after parsing, because a row that
+  // is not a row has no length worth adding up, and refused before generation for the
+  // same reason the row cap is: this is the point at which the work has not started.
+  const characters = countSnapshotCharacters(rows);
+  if (characters > limits.maxSnapshotChars) {
+    throw new RoomExportProtocolError(
+      roomExportWorkerErrorCodes.snapshotTooLarge,
+      `request.rows carries ${characters} characters against a limit of ${limits.maxSnapshotChars}`,
+    );
+  }
   return {
     protocolVersion: roomExportProtocolVersion,
     jobId,
@@ -251,6 +279,13 @@ function parseGeneratedResult(
   requireProtocolVersion(message.protocolVersion);
   requireExpectedAttempt(message, expectation);
   const rowCount = requireCount(message.rowCount, 'result.rowCount');
+  // Not "a safe integer" but "the number of rows this attempt was given". Anything
+  // else means the Worker wrote a different workbook than the one that was requested.
+  if (rowCount !== expectation.rowCount) {
+    throw invalid(
+      `result.rowCount must be ${expectation.rowCount}, received ${rowCount}`,
+    );
+  }
   const byteLength = requireCount(message.byteLength, 'result.byteLength');
   if (!(message.file instanceof ArrayBuffer)) {
     throw invalid('result.file must be an ArrayBuffer');
@@ -301,6 +336,10 @@ function parseLimits(value: unknown): RoomExportGenerateLimits {
   const limits = requireExactObject(value, limitKeys, 'request.limits');
   return {
     maxRows: requirePositiveInteger(limits.maxRows, 'request.limits.maxRows'),
+    maxSnapshotChars: requirePositiveInteger(
+      limits.maxSnapshotChars,
+      'request.limits.maxSnapshotChars',
+    ),
     maxFileBytes: requirePositiveInteger(
       limits.maxFileBytes,
       'request.limits.maxFileBytes',
@@ -310,6 +349,31 @@ function parseLimits(value: unknown): RoomExportGenerateLimits {
       'request.limits.maxOldGenerationMb',
     ),
   };
+}
+
+/**
+ * Every character a cell will hold. `beds` is excluded because it stays a number, and
+ * a numeric cell costs a fixed amount rather than its digits.
+ */
+function countSnapshotCharacters(
+  rows: readonly RoomExportWorkbookRow[],
+): number {
+  let total = 0;
+  for (const row of rows) {
+    total +=
+      row.roomId.length +
+      row.roomNumber.length +
+      row.roomType.length +
+      (row.view?.length ?? 0) +
+      row.basePriceMinorUnits.length +
+      row.currency.length +
+      row.status.length +
+      row.amenities.length +
+      row.version.length +
+      row.createdAtUtc.length +
+      row.updatedAtUtc.length;
+  }
+  return total;
 }
 
 function parseWorkbookRow(

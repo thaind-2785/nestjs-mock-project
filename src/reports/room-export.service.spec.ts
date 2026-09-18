@@ -1,9 +1,9 @@
 import { EntityManager } from 'typeorm';
+import { IdempotencyKeyStatus } from '../common/idempotency/idempotency.enums';
 import type { DataSource } from 'typeorm';
-import { IdempotencyKeyStatus } from '../bookings/entities/booking.enums';
 import { ApplicationException } from '../common/errors/application.exception';
+import type { IdempotencyRepository } from '../common/idempotency/idempotency.repository';
 import { createReportsConfiguration } from '../config/reports.config';
-import { createBookingsConfiguration } from '../config/bookings.config';
 import { validateEnvironment } from '../config/environment.validation';
 import { ExportJobStatus } from './entities/export-job.enums';
 import { RoomExportService } from './room-export.service';
@@ -52,10 +52,9 @@ function harness(
         transaction: (callback: (transaction: EntityManager) => unknown) =>
           callback(manager),
       } as unknown as DataSource,
-      idempotency,
+      idempotency as unknown as IdempotencyRepository,
       jobs,
       createReportsConfiguration(environment),
-      createBookingsConfiguration(environment),
     ),
     jobs,
     idempotency,
@@ -79,7 +78,10 @@ describe('RoomExportService.create', () => {
   it('accepts a request and stores the exact response a replay returns', async () => {
     const { service, jobs, idempotency } = harness();
 
-    await expect(service.create(request())).resolves.toEqual(storedResponse);
+    await expect(service.create(request())).resolves.toEqual({
+      response: storedResponse,
+      replayed: false,
+    });
     expect(jobs.create).toHaveBeenCalledWith(expect.anything(), {
       requestedBy: '7',
       filters: { beds: 2 },
@@ -95,7 +97,11 @@ describe('RoomExportService.create', () => {
       locked: { status: IdempotencyKeyStatus.Completed },
     });
 
-    await expect(service.create(request())).resolves.toEqual(storedResponse);
+    // The flag reaches the caller, because the accepted contract puts it in a header.
+    await expect(service.create(request())).resolves.toEqual({
+      response: storedResponse,
+      replayed: true,
+    });
     expect(jobs.create).not.toHaveBeenCalled();
     expect(idempotency.complete).not.toHaveBeenCalled();
   });

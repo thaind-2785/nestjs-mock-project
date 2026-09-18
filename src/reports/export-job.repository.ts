@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { OutboxEventStatus } from '../common/outbox/outbox.enums';
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
-import { OutboxEventStatus } from '../bookings/entities/booking.enums';
-import { OutboxEvent } from '../bookings/entities/outbox-event.entity';
+import { OutboxEvent } from '../common/outbox/outbox-event.entity';
 import { ExportJob } from './entities/export-job.entity';
 import { ExportJobStatus } from './entities/export-job.enums';
 import {

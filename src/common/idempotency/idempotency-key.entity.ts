@@ -9,7 +9,7 @@ import {
 } from 'typeorm';
 import { MutableEntity } from '../../database/entities/base.entity';
 import { User } from '../../users/entities/user.entity';
-import { IdempotencyKeyStatus } from './booking.enums';
+import { IdempotencyKeyStatus } from './idempotency.enums';
 
 @Entity({ name: 'idempotency_keys' })
 @Index(

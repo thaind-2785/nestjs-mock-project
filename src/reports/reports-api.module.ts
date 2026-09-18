@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { IdempotencyKey } from '../bookings/entities/idempotency-key.entity';
-import { OutboxEvent } from '../bookings/entities/outbox-event.entity';
+import { IdempotencyKey } from '../common/idempotency/idempotency-key.entity';
+import { OutboxEvent } from '../common/outbox/outbox-event.entity';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
 import { bookingsConfig } from '../config/bookings.config';

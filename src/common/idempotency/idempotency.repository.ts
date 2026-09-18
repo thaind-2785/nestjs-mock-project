@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
-import { IdempotencyKeyStatus } from '../../bookings/entities/booking.enums';
-import { IdempotencyKey } from '../../bookings/entities/idempotency-key.entity';
+import type { ConfigType } from '@nestjs/config';
+import { Inject } from '@nestjs/common';
+import { idempotencyConfig } from '../../config/idempotency.config';
+import { IdempotencyKey } from './idempotency-key.entity';
+import { IdempotencyKeyStatus } from './idempotency.enums';
 import { idempotencyErrors } from './idempotency.errors';
 import type {
   IdempotencyCompletion,
@@ -25,6 +28,11 @@ import type {
  */
 @Injectable()
 export class IdempotencyRepository {
+  constructor(
+    @Inject(idempotencyConfig.KEY)
+    private readonly configuration: ConfigType<typeof idempotencyConfig>,
+  ) {}
+
   /**
    * Claims the row and returns it locked.
    *
@@ -47,7 +55,7 @@ export class IdempotencyRepository {
         input.operation,
         input.idempotencyKey,
         input.fingerprint,
-        new Date(Date.now() + input.retentionHours * 3_600_000),
+        new Date(Date.now() + this.configuration.retentionHours * 3_600_000),
       ],
     );
     const row = await manager.findOneOrFail(IdempotencyKey, {

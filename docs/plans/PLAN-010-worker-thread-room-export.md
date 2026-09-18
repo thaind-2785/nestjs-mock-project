@@ -84,7 +84,7 @@
 | `P6-T02` | Export state persists and outbox consumers are type-isolated            | Phase 6 export schema/index   | Real-MySQL migration, claim concurrency, `EXPLAIN`  | Done    |
 | `P6-T03` | Admin creates exactly one durable, rate-limited export request          | Use P6-T02 schema             | Controller/service/idempotency integration + E2E    | Done    |
 | `P6-T04` | A bounded room snapshot becomes a safe XLSX in a Worker Thread          | None                          | Query-shape, XLSX package, resource/process tests   | Done    |
-| `P6-T05` | BullMQ attempts recover, upload privately, and finalize exactly one key | Use P6-T02 and cleanup schema | MySQL/Redis/MinIO crash/concurrency integration     | Pending |
+| `P6-T05` | BullMQ attempts recover, upload privately, and finalize exactly one key | Use P6-T02 and cleanup schema | MySQL/Redis/MinIO crash/concurrency integration     | Done    |
 | `P6-T06` | Requester polls status and downloads only an unexpired private result   | Use P6-T02 schema             | Ownership/expiry/presign API integration + E2E      | Pending |
 | `P6-T07` | Operations, full journey, docs, and Phase 6 handoff are complete        | Revert/reapply proof          | Process E2E, Compose, full gate, independent review | Pending |
 
@@ -492,6 +492,27 @@ gate is not the checklist disposition.
 - **Observability:** One `room_export_generated` carrying job, attempt, row count, byte
   count and duration. No filters, no room values, no object key.
 
+### `P6-T05` evidence
+
+- **Constants/contracts:** Job name, queue-unavailable code, claim-lost code, object
+  key prefix, content type and download filename are named; the attempt, dispatch and
+  failure contracts have their own types files.
+- **Projection/indexes:** The claim reads `id, payload` from the outbox and
+  `id, filters` from the job, both by primary key under `FOR UPDATE`. No new index.
+- **Batching/N+1:** N/A beyond the snapshot reader, which `P6-T04` covers.
+- **Responsibility/reuse:** The poll loop, the claim protocol and the object-storage
+  adapter are shared with notifications and attachments rather than copied. The export
+  keeps only its own policy: which key, which bounds, which stable error.
+- **Concurrency:** Lock order is outbox then job in every path, and every write carries
+  the claim predicate. Proven against real MySQL: a duplicate job whose claim moved on
+  changes nothing, a claim lost after upload leaves the object covered and unpublished,
+  and a stale second attempt cannot overwrite the winner's key. The lock-timeout probe
+  shows no row is held during the Worker Thread or the upload.
+- **Observability:** `room_export_completed`, `room_export_retry_scheduled`,
+  `room_export_failed`, `room_export_attempt_skipped`, plus dispatcher and consumer
+  errors. Job, attempt, counts and a stable code only - never the object key, the
+  filters, the provider text or a stack.
+
 ## Documentation / OpenAPI impact
 
 - Add both export routes and every stable status/error/ownership/idempotency field to
@@ -678,6 +699,35 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   resolves relations across the whole registered set, so it fails at `initialize` with
   `Entity metadata for User#identities was not found`. Naming the transitive graph by
   hand is a puzzle, not a decision.
+
+- 2026-09-18 (`P6-T05`): the attempt runs as four stages with two short transactions
+  and the expensive work between them, and the claim is revalidated before each stage
+  rather than once at the start. A lease sized for the whole attempt would still expire
+  under a slow but legal run; renewing between stages means each one runs under a full
+  lease and an attempt that lost its claim stops before doing anything another worker
+  would have to undo.
+- 2026-09-18 (`P6-T05`): losing the claim after a successful upload is a designed
+  outcome, not an error. The bytes are stored, the finalize matches zero rows, nothing
+  points at them, and the safeguard this attempt inserted before uploading is still
+  there for the cleanup runner. It is recorded as `skipped` rather than retried,
+  because retrying would upload a second object for a job another worker may already
+  have completed.
+- 2026-09-18 (`P6-T05`): the poll loop moved to `src/common/outbox/outbox-poll-loop.ts`
+  and both dispatchers use it. The two properties worth having in one place are that a
+  cycle is scheduled only after the previous one settles, so no process runs two cycles
+  claiming against each other, and that `stop` awaits the in-flight cycle rather than
+  abandoning claims it has already committed.
+- 2026-09-18 (`P6-T05`): the no-open-transaction evidence is a lock-timeout probe
+  rather than a count of open transactions. `information_schema.innodb_trx` needs the
+  `PROCESS` privilege the application user deliberately does not have, and the probe
+  asks the question that actually matters anyway: from another connection, with a
+  two-second lock wait, can the outbox and job rows be locked while the Worker Thread
+  and the upload are running? They can, at both boundaries.
+- 2026-09-18 (`P6-T05`): the attempt suite hooks its boundaries with subclasses rather
+  than by spying on the consumer's private fields. Lint rejects both `bind` and an
+  unbound method for good reasons, and the subclasses turned out to read better: the
+  consumer keeps its real collaborators, so what runs is the production sequence rather
+  than a rearranged one.
 
 - 2026-09-18 (`P6-T04`, follow-up): the worker is loaded by path rather than imported,
   so nothing type-checks its existence and no static analysis links it to its only

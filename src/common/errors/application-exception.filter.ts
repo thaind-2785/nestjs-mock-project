@@ -43,6 +43,7 @@ interface ErrorTranslations {
     exportCreateUnavailable: string;
     exportRowLimitExceeded: string;
     exportSnapshotTooLarge: string;
+    exportStorageUnavailable: string;
     forbidden: string;
     identityConflict: string;
     idempotencyKeyInvalid: string;

@@ -33,6 +33,7 @@
   "exportCreateUnavailable": "Room export creation is temporarily unavailable.",
   "exportRowLimitExceeded": "The export matches too many rooms. Narrow the filters and try again.",
   "exportSnapshotTooLarge": "The export data is too large. Narrow the filters and try again.",
+  "exportStorageUnavailable": "Export storage is temporarily unavailable.",
   "forbidden": "You do not have permission to perform this action.",
   "idempotencyKeyInvalid": "Send a valid Idempotency-Key header.",
   "idempotencyKeyReused": "This Idempotency-Key was already used for another request.",

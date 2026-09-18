@@ -36,6 +36,7 @@ export const errorMessageKeys = {
   exportCreateUnavailable: 'errors.exportCreateUnavailable',
   exportRowLimitExceeded: 'errors.exportRowLimitExceeded',
   exportSnapshotTooLarge: 'errors.exportSnapshotTooLarge',
+  exportStorageUnavailable: 'errors.exportStorageUnavailable',
   forbidden: 'errors.forbidden',
   idempotencyKeyInvalid: 'errors.idempotencyKeyInvalid',
   idempotencyKeyReused: 'errors.idempotencyKeyReused',

@@ -37,6 +37,18 @@ export const roomExportErrors = {
       'EXPORT_SNAPSHOT_TOO_LARGE',
       errorMessageKeys.exportSnapshotTooLarge,
     ),
+  /**
+   * Retryable. The object store being unreachable says nothing about whether this
+   * export can ever succeed, so the attempt returns to the queue with its budget.
+   */
+  storageUnavailable: (cause?: unknown) =>
+    new ApplicationException(
+      HttpStatus.SERVICE_UNAVAILABLE,
+      'EXPORT_STORAGE_UNAVAILABLE',
+      errorMessageKeys.exportStorageUnavailable,
+      undefined,
+      cause,
+    ),
   /** Returned while the export boundary is disabled, so the rollout has a closed door. */
   createDisabled: () =>
     new ApplicationException(

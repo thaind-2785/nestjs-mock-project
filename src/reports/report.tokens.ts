@@ -13,3 +13,6 @@ export const ROOM_EXPORT_QUEUE = Symbol('ROOM_EXPORT_QUEUE');
  * worker keeps a live socket after shutdown and only `process.exit` ends it.
  */
 export const ROOM_EXPORT_QUEUE_CLIENT = Symbol('ROOM_EXPORT_QUEUE_CLIENT');
+
+/** The consumer's own blocking connection; BullMQ workers may not share one. */
+export const ROOM_EXPORT_WORKER_CLIENT = Symbol('ROOM_EXPORT_WORKER_CLIENT');

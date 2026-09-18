@@ -33,6 +33,7 @@
   "exportCreateUnavailable": "Chức năng xuất danh mục phòng tạm thời không sẵn sàng.",
   "exportRowLimitExceeded": "Bản xuất khớp quá nhiều phòng. Hãy thu hẹp bộ lọc rồi thử lại.",
   "exportSnapshotTooLarge": "Dữ liệu xuất quá lớn. Hãy thu hẹp bộ lọc rồi thử lại.",
+  "exportStorageUnavailable": "Kho lưu trữ bản xuất tạm thời không sẵn sàng.",
   "forbidden": "Bạn không có quyền thực hiện thao tác này.",
   "idempotencyKeyInvalid": "Hãy gửi header Idempotency-Key hợp lệ.",
   "idempotencyKeyReused": "Idempotency-Key này đã được dùng cho một yêu cầu khác.",

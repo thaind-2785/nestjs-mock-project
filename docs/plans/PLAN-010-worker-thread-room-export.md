@@ -717,6 +717,21 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   `Entity metadata for User#identities was not found`. Naming the transitive graph by
   hand is a puzzle, not a decision.
 
+- 2026-09-18 (`P6-T06`, found by running it): the worker failed every attempt with
+  `EntityMetadataNotFoundError`. The snapshot reader queries `Room` and joins
+  `roomType`, `autoLoadEntities` only knows about entities some module registered, and
+  `ReportsWorkerModule` registered neither. Nothing caught it: the worker starts
+  cleanly, and both integration suites built their `DataSource` from
+  `applicationEntities` - every entity in the application - so they could not notice one
+  the worker was missing. The registration list is now named in
+  `reports-worker.entities.ts` and both suites build from exactly it; commenting `Room`
+  out turns them red with the same error production gave.
+- 2026-09-18 (`P6-T06`, found by running it): the failure log carried only
+  `EXPORT_ATTEMPT_FAILED`, which is the classifier's catch-all, so a failure nobody had
+  classified was also a failure nobody could diagnose - the cause was captured and then
+  dropped. It now logs the cause's class name beside the code. That is a type, not
+  content: no provider body, no SQL, no stack, no object key.
+
 - 2026-09-18 (`P6-T06`): expiry is decided at read time against `NOW(6)` returned by
   the same query as the row, not against the API host's clock. A host drifting fast
   would shorten every result's life; one drifting slow would hand out URLs for results

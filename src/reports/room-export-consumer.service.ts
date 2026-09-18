@@ -209,8 +209,13 @@ export class RoomExportConsumerService
       event: terminal ? 'room_export_failed' : 'room_export_retry_scheduled',
       jobId,
       attempt: data.attempt,
-      // The stable classification, never the provider text or the stack behind it.
+      // The stable classification is what an administrator reads.
       errorCode: failure.errorCode,
+      // The fault's class is what an operator needs, and the code alone does not give
+      // it: `EXPORT_ATTEMPT_FAILED` is the catch-all, so without this a failure nobody
+      // classified is a failure nobody can diagnose either. The name is a type, not
+      // content - no provider body, no SQL, no stack, no object key.
+      reason: failure.cause instanceof Error ? failure.cause.name : 'UNKNOWN',
       ...(terminal ? { exhausted } : {}),
     });
     return {

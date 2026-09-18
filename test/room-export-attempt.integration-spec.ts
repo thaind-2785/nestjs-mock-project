@@ -13,7 +13,7 @@ import {
   createReportsConfiguration,
   type ReportsConfiguration,
 } from '../src/config/reports.config';
-import { applicationEntities } from '../src/database/application-entities';
+import { reportsWorkerEntities } from '../src/reports/reports-worker.entities';
 import { DatabaseConnectionService } from '../src/database/database-connection.service';
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { ExportJobStatus } from '../src/reports/entities/export-job.enums';
@@ -132,7 +132,13 @@ describe('Phase 6 room export attempt', () => {
           ...environment,
           MYSQL_DATABASE: disposableDatabase,
         }),
-        { entities: applicationEntities, migrations: applicationMigrations },
+        {
+          // Exactly what `ReportsWorkerModule` registers, not every entity in the
+          // application: a suite that registers more cannot notice one the worker is
+          // missing, which is how `Room` reached production unregistered.
+          entities: reportsWorkerEntities,
+          migrations: applicationMigrations,
+        },
       ),
     );
     await dataSource.initialize();

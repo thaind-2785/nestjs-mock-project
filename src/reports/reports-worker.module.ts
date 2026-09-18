@@ -9,9 +9,7 @@ import { reportsConfig } from '../config/reports.config';
 import { DatabaseModule } from '../database/database.module';
 import { OutboxClaimRepository } from '../common/outbox/outbox-claim.repository';
 import { ObjectStorageModule } from '../common/storage/object-storage.module';
-import { OutboxEvent } from '../common/outbox/outbox-event.entity';
-import { StorageCleanupTask } from '../files/entities/storage-cleanup-task.entity';
-import { ExportJob } from './entities/export-job.entity';
+import { reportsWorkerEntities } from './reports-worker.entities';
 import { RoomExportAttemptRepository } from './room-export-attempt.repository';
 import { RoomExportConsumerService } from './room-export-consumer.service';
 import { RoomExportDispatcherService } from './room-export-dispatcher.service';
@@ -44,10 +42,10 @@ import {
     ConfigModule.forFeature(reportsConfig),
     DatabaseModule,
     ObjectStorageModule,
-    // The worker reads the outbox the API writes, owns the export job, and inserts the
-    // cleanup safeguard that covers its uploads. Registering all three here keeps the
-    // worker context independent of the API module graph.
-    TypeOrmModule.forFeature([OutboxEvent, ExportJob, StorageCleanupTask]),
+    // The list is named in `reports-worker.entities.ts` so the integration suites can
+    // build their `DataSource` from exactly what this module registers, rather than
+    // from every entity in the application.
+    TypeOrmModule.forFeature(reportsWorkerEntities),
   ],
   providers: [
     {

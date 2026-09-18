@@ -854,7 +854,11 @@ lifetime)`, rounded down. Without the cap a job expiring in thirty seconds would
   while no consumer exists, and the lease and upload safeguard make an interrupted
   attempt recoverable either way, but `P6-T05` owns reconciling the two - most likely
   by making the process bound the larger of the families it hosts rather than the mail
-  family's alone.
+  family's alone. Closed on 2026-09-18 (`P6-T05`, `REVIEW-039` `R39-02`):
+  `workerDrainMs` in
+  `worker-bootstrap.ts` is that reconciliation, and it takes the export bound only
+  while `REPORT_EXPORT_ENABLED` is on, so a mail-only worker still restarts on thirty
+  seconds rather than waiting for work it cannot be doing.
 - 2026-09-17 (`P6-T01`): the `ADR-0007` benchmark is now
   `scripts/xlsx-dependency-profile.test.mjs` inside `npm run test:harness`, so it runs
   in the gate. It measures the pinned library rather than the production generator,
@@ -866,6 +870,20 @@ lifetime)`, rounded down. Without the cap a job expiring in thirty seconds would
   though it has not failed yet. Its second case starts a thread with the misspelled
   `oldGenerationSizeMb` and requires the run to fail, which is what keeps every other
   number in the check meaningful.
+- 2026-09-18 (`REVIEW-039` closure, `R39-01`): `RoomExportQueueLifecycle` is gone and
+  the dispatcher closes the producer queue and its client itself. Two owners of one handle is not redundancy
+  here: Nest runs a module's shutdown hooks concurrently, so the second `quit` reached
+  a socket the first had already ended, rejected, and failed `context.close()` - every
+  clean deploy would have reported an undrained worker and exited non-zero. The
+  dispatcher is the owner rather than the lifecycle because the order is load-bearing:
+  the poll loop has to stop before the queue closes, or a handoff in flight is refused
+  and a perfectly good claim is handed back with a retry time.
+- 2026-09-18 (`REVIEW-039` closure, `R39-10`): a protocol _version_ the running
+  release cannot read now has its own code, `EXPORT_WORKER_PROTOCOL_VERSION`, and is
+  retryable. It is the one protocol fault a later attempt can resolve by itself - a rolling restart between the
+  release that queued a job and the one that picked it up - while a malformed message
+  stays `EXPORT_WORKER_PROTOCOL_INVALID` and stays permanent, which is the invalid
+  snapshot data `SPEC-009` accepts as terminal. One code could not be both.
 
 [`ADR-0007`](../decisions/ADR-0007-worker-thread-export-boundary.md) is accepted as
 of 2026-09-17 and records the Worker Thread boundary, the measured XLSX dependency

@@ -14,6 +14,16 @@ import type { RoomExportFailure } from './room-export-failure.types';
  * and the administrator's move is to narrow the filters. Everything else - a database
  * that timed out, a thread that ran out of heap, an object store that would not answer
  * - is a statement about this moment, and a later attempt may find a different one.
+ *
+ * `EXPORT_WORKER_PROTOCOL_VERSION` is the one protocol fault that is deliberately not
+ * here. A malformed message is invalid snapshot data, which `SPEC-009` accepts as
+ * permanent; an unreadable *version* is a statement about the deployment instead. A
+ * queue job outlives a release, so a worker started from the previous one can receive a
+ * message from the next, and `room-export.protocol.ts` refuses it precisely so the
+ * lease recovers the attempt - which only happens if a later one is allowed to run. The
+ * resource-limit mismatch stays permanent for the opposite reason: it is one artifact
+ * disagreeing with itself, and the same code on the same runtime reaches the same
+ * refusal however many times it runs.
  */
 const permanentCodes = new Set<string>([
   'EXPORT_ROW_LIMIT_EXCEEDED',

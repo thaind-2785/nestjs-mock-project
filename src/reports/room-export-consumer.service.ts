@@ -113,7 +113,14 @@ export class RoomExportConsumerService
     const { result, storage } = this.configuration;
 
     // Stage one: the snapshot. Its own transaction, opened and closed by the reader.
-    const snapshot = await this.snapshots.read(filters);
+    //
+    // Mapped as it arrives and never bound to a name of its own. The snapshot may carry
+    // 20 million characters, the mapped rows are a second copy of it, and constructing
+    // the Worker structured-clones a third into the thread; the thread's heap is capped
+    // and this process's is not, so holding all three at once - and then holding the
+    // snapshot through a 25 MiB upload it is not used for - is the one unbounded thing
+    // in a design built entirely out of bounds.
+    const rows = toWorkbookRows((await this.snapshots.read(filters)).rows);
     if (!(await this.renew(dataSource, data))) {
       return { result: 'skipped', errorCode: roomExportClaimLostCode };
     }
@@ -122,7 +129,7 @@ export class RoomExportConsumerService
     const generated = await this.generator.generate({
       jobId,
       attempt: data.attempt,
-      rows: toWorkbookRows(snapshot.rows),
+      rows,
     });
     if (!(await this.renew(dataSource, data))) {
       return { result: 'skipped', errorCode: roomExportClaimLostCode };

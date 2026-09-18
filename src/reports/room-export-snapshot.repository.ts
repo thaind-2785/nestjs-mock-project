@@ -42,38 +42,58 @@ export class RoomExportSnapshotRepository {
       await manager.query('SET SESSION MAX_EXECUTION_TIME = ?', [
         snapshot.queryTimeoutMs,
       ]);
-
-      const rows: RoomSnapshotRow[] = [];
-      let characters = 0;
-      let after: string | undefined;
-
-      for (;;) {
-        const page = await this.readPage(manager, filters, after);
-        if (page.length === 0) break;
-
-        const amenities = await this.readAmenities(
-          manager,
-          page.map((room) => room.id),
-        );
-        for (const room of page) {
-          const row = { ...room, amenities: amenities.get(room.id) ?? [] };
-          rows.push(row);
-          characters += countRowCharacters(row);
-          // Both caps are checked as the rows arrive rather than after the read
-          // completes. Detecting an over-limit snapshot by first holding all of it
-          // would be a bound that costs what it was meant to prevent.
-          if (rows.length > snapshot.maxRows) {
-            throw roomExportErrors.rowLimitExceeded();
-          }
-          if (characters > snapshot.maxSnapshotChars) {
-            throw roomExportErrors.snapshotTooLarge();
-          }
-        }
-        after = page[page.length - 1].id;
-        if (page.length < snapshot.queryPageSize) break;
+      try {
+        return await this.readPages(manager, filters);
+      } finally {
+        // The bound belongs to this read, not to the connection it borrowed. A session
+        // variable outlives the transaction and the connection goes back to a shared
+        // pool, so without this the next query to draw it - a notification backlog
+        // sample, any unrelated read - would silently inherit a 30-second ceiling and,
+        // when it hit one, fail as the wrong feature. `DEFAULT` is the global value,
+        // which is what the connection had before this statement ran.
+        await manager.query('SET SESSION MAX_EXECUTION_TIME = DEFAULT');
       }
-      return { rows, characters };
     });
+  }
+
+  private async readPages(
+    manager: EntityManager,
+    filters: RoomExportFilters,
+  ): Promise<RoomExportSnapshot> {
+    const { snapshot } = this.configuration;
+    const rows: RoomSnapshotRow[] = [];
+    let characters = 0;
+    let after: string | undefined;
+
+    for (;;) {
+      const page = await this.readPage(manager, filters, after);
+      if (page.length === 0) break;
+
+      const amenities = await this.readAmenities(
+        manager,
+        page.map((room) => room.id),
+      );
+      for (const room of page) {
+        const row = { ...room, amenities: amenities.get(room.id) ?? [] };
+        rows.push(row);
+        characters += countRowCharacters(row);
+        // Both caps are checked as the rows arrive rather than after the read
+        // completes. Detecting an over-limit snapshot by first holding all of it
+        // would be a bound that costs what it was meant to prevent.
+        if (rows.length > snapshot.maxRows) {
+          throw roomExportErrors.rowLimitExceeded();
+        }
+        if (characters > snapshot.maxSnapshotChars) {
+          throw roomExportErrors.snapshotTooLarge();
+        }
+      }
+      after = page[page.length - 1].id;
+      // A short page is the last one. The page is read at exactly the batch size
+      // rather than one over it, so this - not a second count query over the same
+      // filters - is what ends the loop.
+      if (page.length < snapshot.queryPageSize) break;
+    }
+    return { rows, characters };
   }
 
   /**
@@ -106,14 +126,10 @@ export class RoomExportSnapshotRepository {
     if (after !== undefined) {
       builder.andWhere('room.id > :after', { after });
     }
-    return (
-      builder
-        .orderBy('room.id', 'ASC')
-        // One more than the page, so the caller can tell a full page from the last one
-        // without a second count query over the same filters.
-        .limit(this.configuration.snapshot.queryPageSize)
-        .getRawMany()
-    );
+    return builder
+      .orderBy('room.id', 'ASC')
+      .limit(this.configuration.snapshot.queryPageSize)
+      .getRawMany();
   }
 
   /**

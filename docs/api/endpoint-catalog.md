@@ -180,7 +180,10 @@ room_times.room_id=:roomId`; mismatch returns the same not-found response. Windo
   `expires_at` has passed, compared against database time rather than the API host's
   clock. An expired job keeps its row and file metadata and loses only the download. The
   URL's lifetime is the lesser of the configured presign TTL and the result's remaining
-  life, so a URL can never outlive the result it points at.
+  life, rounded down, so a URL can never outlive the result it points at. A result with
+  less than one whole second left is already `EXPIRED` for the same reason: a signed
+  URL's lifetime is whole seconds, so the shortest one that could be issued would
+  outlive it.
 - Payment webhooks first insert `(provider, provider_event_id)` into the optional
   `payment_provider_events` ledger. Its unique key makes retries return success
   without applying the payment transition twice.

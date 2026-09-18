@@ -236,7 +236,11 @@ package is checked to contain no formulas, macros, external links, or embedded f
 - Worker crash and ordinary generation errors are retryable until the three-attempt
   budget is exhausted. A proven memory/row/file limit violation and invalid snapshot
   data are permanent because retrying unchanged bounded work would only consume
-  resources again.
+  resources again. A message whose _protocol version_ this release cannot read is
+  retryable rather than permanent: it is what a rolling restart produces between the
+  deployment that queued a job and the one that picked it up, and nothing about the
+  request is wrong. Added on 2026-09-18 after `REVIEW-039` found one error code
+  carrying both meanings.
 - Each upload attempt uses a unique server-generated staging key containing the job
   ID and opaque claim token. Before upload, the queue process inserts an existing
   storage-cleanup safeguard whose due time exceeds the bounded provider call and

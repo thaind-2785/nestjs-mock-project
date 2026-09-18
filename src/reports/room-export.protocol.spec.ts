@@ -92,7 +92,11 @@ describe('parseRoomExportGenerateRequest', () => {
     );
   });
 
-  it('refuses a message from another protocol version', () => {
+  it('refuses a message from another protocol version, recoverably', () => {
+    // Its own code, not the malformed-message one: a version this release cannot read
+    // is what a rolling restart produces between the deployment that queued a job and
+    // the one that picked it up, and it is the only protocol fault a later attempt can
+    // resolve by itself. `classifyRoomExportFailure` retries it for that reason.
     for (const protocolVersion of [
       undefined,
       0,
@@ -101,7 +105,7 @@ describe('parseRoomExportGenerateRequest', () => {
     ]) {
       expectCode(
         () => parseRoomExportGenerateRequest(request({ protocolVersion })),
-        roomExportWorkerErrorCodes.protocolInvalid,
+        roomExportWorkerErrorCodes.versionUnsupported,
       );
     }
   });
@@ -318,7 +322,7 @@ describe('parseRoomExportResult', () => {
     expectCode(
       () =>
         parseRoomExportResult(generated({ protocolVersion: 2 }), expectation),
-      roomExportWorkerErrorCodes.protocolInvalid,
+      roomExportWorkerErrorCodes.versionUnsupported,
     );
     expectCode(
       () =>

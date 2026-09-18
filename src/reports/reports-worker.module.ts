@@ -16,7 +16,6 @@ import { RoomExportDispatcherService } from './room-export-dispatcher.service';
 import { RoomExportGeneratorService } from './room-export-generator.service';
 import { RoomExportStorageService } from './room-export-storage.service';
 import { RoomExportSnapshotRepository } from './room-export-snapshot.repository';
-import { RoomExportQueueLifecycle } from './room-export-queue.lifecycle';
 import {
   ROOM_EXPORT_QUEUE,
   ROOM_EXPORT_QUEUE_CLIENT,
@@ -36,6 +35,13 @@ import {
  * that has not enabled exports yet opens no socket and registers no consumer. It is
  * not a disabled feature flag checked at the edge of live machinery; there is no
  * machinery.
+ *
+ * Neither factory closes what it built, so each connection has exactly one owner among
+ * the providers below: the dispatcher closes the producer queue and its client, the
+ * consumer closes the worker client. One owner rather than a lifecycle provider each,
+ * because Nest runs a module's shutdown hooks concurrently - a second owner would
+ * either race the first's ordering or `quit` a socket the first has already ended,
+ * which rejects and fails the whole drain.
  */
 @Module({
   imports: [
@@ -86,7 +92,6 @@ import {
               prefix: configuration.queue.prefix,
             }),
     },
-    RoomExportQueueLifecycle,
     RoomExportSnapshotRepository,
     RoomExportGeneratorService,
     RoomExportStorageService,

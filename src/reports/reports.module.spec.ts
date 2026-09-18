@@ -12,7 +12,7 @@ import { notificationEventTypes } from '../notifications/notification-event';
 import { roomExportEventTypes } from './room-export.constants';
 import { ReportsApiModule } from './reports-api.module';
 import { ReportsWorkerModule } from './reports-worker.module';
-import { RoomExportQueueLifecycle } from './room-export-queue.lifecycle';
+import { RoomExportDispatcherService } from './room-export-dispatcher.service';
 import { ROOM_EXPORT_QUEUE, ROOM_EXPORT_QUEUE_CLIENT } from './report.tokens';
 
 function importsOf(module: object): unknown[] {
@@ -82,6 +82,28 @@ describe('report export module boundaries', () => {
     expect(importsOf(ReportsWorkerModule)).not.toContain(ReportsApiModule);
   });
 
+  it('gives every export connection exactly one thing that closes it', () => {
+    // Nest runs a module's shutdown hooks concurrently, so a second owner of the same
+    // handle is not redundancy: `quit` on a socket the first owner has already ended
+    // rejects, `context.close()` rejects with it, and the drain reports an undrained
+    // worker on every clean deploy. The dispatcher owns the producer queue and its
+    // client because it must stop polling before either closes; the consumer owns the
+    // worker client for the same reason.
+    const closers = providersOf(ReportsWorkerModule)
+      .filter(
+        (provider): provider is new (...args: never[]) => object =>
+          typeof provider === 'function' &&
+          'onApplicationShutdown' in provider.prototype,
+      )
+      .map((provider) => provider.name)
+      .sort();
+
+    expect(closers).toEqual([
+      'RoomExportConsumerService',
+      'RoomExportDispatcherService',
+    ]);
+  });
+
   it('claims an event family no notification dispatcher can also claim', () => {
     // Two independent consumers now read one outbox table. P6-T02 puts these
     // allowlists inside the claiming statement, before LIMIT; overlapping families
@@ -109,7 +131,7 @@ describe('ReportsWorkerModule while the export boundary is disabled', () => {
       // Nothing to close is the point: a deployment that has not enabled exports
       // holds no socket a drain would have to wait on.
       await expect(
-        moduleRef.get(RoomExportQueueLifecycle).onApplicationShutdown(),
+        moduleRef.get(RoomExportDispatcherService).onApplicationShutdown(),
       ).resolves.toBeUndefined();
     } finally {
       await moduleRef.close();

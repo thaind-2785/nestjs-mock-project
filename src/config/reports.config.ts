@@ -91,9 +91,14 @@ const backoffInitialMs = 30_000;
 const backoffMaxMs = 900_000;
 
 /**
- * The export consumer's own drain. The process-level bound is separate and currently
- * comes from the notification configuration; `P6-T05` owns reconciling the two when
- * the consumer exists.
+ * The drain an export attempt needs, and the one the worker process takes while it
+ * hosts exports.
+ *
+ * `workerDrainMs` in `worker-bootstrap.ts` reads it and takes the larger of the
+ * families the process hosts, so this bound and the mail family's
+ * `NOTIFICATION_SHUTDOWN_DRAIN_MS` reconcile there rather than one silently winning.
+ * It is checked against `generationTimeoutMs` below because a shorter drain would
+ * `SIGKILL` a Worker Thread that was about to succeed on every ordinary restart.
  */
 const shutdownDrainMs = 90_000;
 

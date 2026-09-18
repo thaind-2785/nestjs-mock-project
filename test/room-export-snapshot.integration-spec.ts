@@ -289,6 +289,29 @@ describe('Phase 6 room export snapshot', () => {
     expect(Number(after.total)).toBe(6);
   });
 
+  it('leaves the statement bound on no connection it borrowed', async () => {
+    const [{ value: global }]: Array<{ value: number }> =
+      await dataSource.query('SELECT @@GLOBAL.max_execution_time AS value');
+    await read({});
+
+    // Every connection the pool can hand out, not just the next one: the bound is set
+    // at session scope inside a transaction, and the connection goes back to a pool
+    // the notification consumer and every other read share. Asking concurrently makes
+    // the pool produce the connection the snapshot just released before it opens any
+    // new one, so a bound that survived the read is caught here rather than surfacing
+    // later as an unrelated query killed by the export's timeout.
+    const sessions = await Promise.all(
+      Array.from({ length: 5 }, async () => {
+        const [row]: Array<{ value: number }> = await dataSource.query(
+          'SELECT @@SESSION.max_execution_time AS value',
+        );
+        return Number(row.value);
+      }),
+    );
+
+    expect(sessions).toEqual(Array.from({ length: 5 }, () => Number(global)));
+  });
+
   it('reads a page of rooms and their amenities in two statements', async () => {
     const typeId = await insertRoomType('Deluxe');
     const amenity = await insertAmenity('AC', 'Air');

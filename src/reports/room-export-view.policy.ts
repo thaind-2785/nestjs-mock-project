@@ -24,11 +24,25 @@ export function toViewStatus(job: RoomExportJobView): RoomExportViewStatus {
     : RoomExportViewStatus.Completed;
 }
 
+/**
+ * The shortest lifetime an object store will sign. A URL's expiry is expressed in whole
+ * seconds, so this is also the smallest amount of result life that can be handed out
+ * without rounding it up.
+ */
+const minimumSignableSeconds = 1;
+
 export function hasExpired(job: RoomExportJobView): boolean {
-  // `<=` rather than `<`: the row is expired at its expiry instant, not after it. The
-  // boundary has to belong to one side, and handing out a URL at exactly the moment
-  // cleanup is entitled to delete the object is the wrong side.
-  return job.expiresAt !== null && job.expiresAt <= job.databaseNow;
+  if (job.expiresAt === null) return false;
+  // The boundary has to belong to one side, and handing out a URL at the moment cleanup
+  // is entitled to delete the object is the wrong side. So is the last fraction of a
+  // second before it: a signed URL cannot live for less than a whole second, so a result
+  // with 400 milliseconds left could only be signed for a URL that outlives it. A result
+  // is therefore expired once it has less than one signable second remaining, which is
+  // what lets `downloadTtl` round down without a floor that would undo the rounding.
+  return (
+    job.expiresAt.getTime() - job.databaseNow.getTime() <
+    minimumSignableSeconds * 1_000
+  );
 }
 
 /**
@@ -64,8 +78,11 @@ export function downloadTtl(
 ): RoomExportDownloadTtl {
   const remainingMs = job.expiresAt.getTime() - job.databaseNow.getTime();
   // Rounded down, so the URL can never outlive the result by a fraction of a second.
+  // There is no floor under this: `isDownloadable` has already refused anything with
+  // less than one signable second left, so rounding down cannot reach zero here, and a
+  // floor would be the one thing able to round a lifetime back up past the result's.
   const remainingSeconds = Math.floor(remainingMs / 1_000);
-  const seconds = Math.max(1, Math.min(configuredTtlSeconds, remainingSeconds));
+  const seconds = Math.min(configuredTtlSeconds, remainingSeconds);
   return {
     seconds,
     expiresAt: new Date(job.databaseNow.getTime() + seconds * 1_000),

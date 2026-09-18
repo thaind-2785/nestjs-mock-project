@@ -93,7 +93,9 @@ export class ObjectStorageProvider implements OnApplicationShutdown {
           Key: request.objectKey,
           ...(request.downloadFilename
             ? {
-                ResponseContentDisposition: `attachment; filename="${request.downloadFilename}"`,
+                ResponseContentDisposition: contentDisposition(
+                  request.downloadFilename,
+                ),
               }
             : {}),
           ...(request.contentType
@@ -125,8 +127,12 @@ export class ObjectStorageProvider implements OnApplicationShutdown {
       return await call(abortController.signal);
     } catch (error) {
       // A missing object is the delete contract's success, not a provider failure, so
-      // it travels untouched for `deleteObject` to interpret.
-      if (isMissingObjectError(error)) throw error;
+      // it travels untouched for `deleteObject` to interpret. Only for `delete`: a 404
+      // on a put is a missing *bucket*, which is a failure like any other, and letting
+      // it past here would hand a caller a raw SDK error carrying provider text in
+      // place of the stable unavailable one - unlogged, and unmapped by every
+      // translation layer above.
+      if (operation === 'delete' && isMissingObjectError(error)) throw error;
       this.report(operation);
       throw new ObjectStorageUnavailableError(error);
     } finally {
@@ -142,6 +148,34 @@ export class ObjectStorageProvider implements OnApplicationShutdown {
       errorCode: 'STORAGE_UNAVAILABLE',
     });
   }
+}
+
+/**
+ * The download filename, as a header value rather than as text pasted into one.
+ *
+ * Nothing constrains `downloadFilename` at this boundary - it is whatever a feature
+ * decided a browser should save its object as, and the next one to derive it from a
+ * room name or a report title would otherwise be able to close the quoted string, add
+ * a parameter, or break the header in two with a CRLF. The ASCII form is the fallback
+ * every client understands and the RFC 5987 form carries the real name, which is also
+ * what makes a non-ASCII filename arrive intact rather than mangled.
+ */
+function contentDisposition(filename: string): string {
+  // An allowlist rather than a list of characters to escape: the fallback is the name
+  // a client uses when it cannot read the extended form, and being unable to end the
+  // quoted string, start a parameter, or break the header in two is worth more than
+  // reproducing a character exactly. The extended form below carries the real name.
+  const fallback = filename.replace(/[^A-Za-z0-9._ -]/g, '_');
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeExtendedValue(filename)}`;
+}
+
+/** RFC 5987 `ext-value`: percent-encoded, including the characters `encodeURIComponent` leaves. */
+function encodeExtendedValue(value: string): string {
+  return encodeURIComponent(value).replace(
+    /['()*!]/g,
+    (character) =>
+      `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`,
+  );
 }
 
 function isMissingObjectError(error: unknown): boolean {

@@ -62,6 +62,16 @@ export class RoomExportDispatcherService
     this.loop.start();
   }
 
+  /**
+   * The only place the producer and its socket are closed.
+   *
+   * It has to be this one rather than a lifecycle provider beside it, because the order
+   * is load-bearing and Nest runs every shutdown hook of a module concurrently: a
+   * second owner closing the queue would do it while a poll was still mid-handoff, and
+   * an `add` against a closing queue is reported as a refusal that hands a perfectly
+   * good claim back with a retry time. Stopping the loop first means there is no
+   * in-flight handoff left to refuse.
+   */
   async onApplicationShutdown(): Promise<void> {
     await this.loop.stop();
     await this.queue?.close();
@@ -114,9 +124,15 @@ export class RoomExportDispatcherService
     };
     try {
       await this.queue?.add(roomExportJobName, data, {
-        // One job per claim. A retry is a new attempt and so a new id, while a repeat
-        // of this exact handoff is deduplicated by BullMQ.
-        jobId: `${claim.id}-${claim.attempt}`,
+        // One job per claim, identified by the token that claim was taken under rather
+        // than by the attempt alone. The attempt is not unique across claims: a refused
+        // handoff is released with `attempts = attempts - 1`, so the next claim of the
+        // same event carries the same number. Without the token, an `add` that reached
+        // Redis but lost its reply would be deduplicated against its own earlier job -
+        // one still carrying the previous token, which no consumer can claim - and the
+        // dispatcher would count a handoff that never happened as queued. With it, a
+        // repeat of this exact handoff is still deduplicated and a new claim is not.
+        jobId: `${claim.id}-${claim.attempt}-${claimToken}`,
         // MySQL owns the attempt budget. A second retry mechanism would multiply the
         // work rather than space it out.
         attempts: 1,

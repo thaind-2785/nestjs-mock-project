@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { StorageCleanupReason } from '../files/entities/attachment.enums';
-import { StorageCleanupTask } from '../files/entities/storage-cleanup-task.entity';
 import { OutboxEventStatus } from '../common/outbox/outbox.enums';
 import { ExportJobStatus } from './entities/export-job.enums';
 import { roomExportEventType } from './room-export.constants';
@@ -128,16 +127,24 @@ export class RoomExportAttemptRepository {
     manager: EntityManager,
     input: { objectKey: string; graceMs: number },
   ): Promise<void> {
-    await manager.insert(StorageCleanupTask, {
-      id: randomUUID(),
-      objectKey: input.objectKey,
-      reason: StorageCleanupReason.UploadSafeguard,
-      availableAt: new Date(Date.now() + input.graceMs),
-      lockedAt: null,
-      lockExpiresAt: null,
-      lockedBy: null,
-      attempts: 0,
-    });
+    await manager.query(
+      `INSERT INTO storage_cleanup_tasks
+         (id, object_key, reason, available_at, locked_at, lock_expires_at,
+          locked_by, attempts)
+       VALUES (?, ?, ?, NOW(6) + INTERVAL ? MICROSECOND, NULL, NULL, NULL, 0)`,
+      [
+        randomUUID(),
+        input.objectKey,
+        StorageCleanupReason.UploadSafeguard,
+        // The database's clock, like every other time this module decides. The grace
+        // is the window in which the winning attempt still has to point the job at
+        // this key and delete this row; computed from the worker's own clock, a host
+        // running behind MySQL would insert a safeguard that is already due, and
+        // cleanup would be entitled to delete the object while the upload it covers
+        // was still in flight.
+        input.graceMs * 1_000,
+      ],
+    );
   }
 
   /**
@@ -159,7 +166,8 @@ export class RoomExportAttemptRepository {
     });
     if (!held) return false;
 
-    await manager.query(
+    await this.moveJob(
+      manager,
       `UPDATE export_jobs
        SET status = ?,
            object_key = ?,
@@ -181,6 +189,7 @@ export class RoomExportAttemptRepository {
         input.jobId,
         ExportJobStatus.Processing,
       ],
+      input.jobId,
     );
     // Only this attempt's safeguard, addressed by the key only this attempt could have
     // generated. A blanket delete by job would remove a losing attempt's cover too.
@@ -206,7 +215,8 @@ export class RoomExportAttemptRepository {
       parameters: [input.retryInMs * 1_000, input.errorCode],
     });
     if (!held) return false;
-    await manager.query(
+    await this.moveJob(
+      manager,
       `UPDATE export_jobs
        SET status = ?, last_error_code = ?
        WHERE id = ? AND status = ?`,
@@ -216,6 +226,7 @@ export class RoomExportAttemptRepository {
         input.jobId,
         ExportJobStatus.Processing,
       ],
+      input.jobId,
     );
     return true;
   }
@@ -231,7 +242,8 @@ export class RoomExportAttemptRepository {
       parameters: [input.errorCode],
     });
     if (!held) return false;
-    await manager.query(
+    await this.moveJob(
+      manager,
       `UPDATE export_jobs
        SET status = ?, failed_at = NOW(6), last_error_code = ?
        WHERE id = ? AND status = ?`,
@@ -241,8 +253,38 @@ export class RoomExportAttemptRepository {
         input.jobId,
         ExportJobStatus.Processing,
       ],
+      input.jobId,
     );
     return true;
+  }
+
+  /**
+   * Moves the job row that belongs to an outbox event this attempt has just finished,
+   * and refuses to let the two disagree.
+   *
+   * Every one of these statements carries `AND status = PROCESSING`, and until this
+   * check the result was discarded: a job row that did not match would leave the outbox
+   * event terminal while the job kept a status nothing can move it out of, with no
+   * event left to drive it and nothing logged. Throwing rolls the whole transaction
+   * back - including the outbox row the caller has already written in it - so the
+   * attempt stays exactly as recoverable as it was before, which is the only state in
+   * which the two rows still agree.
+   */
+  private async moveJob(
+    manager: EntityManager,
+    statement: string,
+    parameters: unknown[],
+    jobId: string,
+  ): Promise<void> {
+    const result: { affectedRows?: number } = await manager.query(
+      statement,
+      parameters,
+    );
+    if ((result.affectedRows ?? 0) === 0) {
+      throw new RoomExportJobStateError(
+        `export job ${jobId} was not PROCESSING when its outbox event finished`,
+      );
+    }
   }
 
   private async finishEvent(
@@ -277,5 +319,21 @@ export class RoomExportAttemptRepository {
       ],
     );
     return (result.affectedRows ?? 0) > 0;
+  }
+}
+
+/**
+ * The job row and its outbox event went out of step.
+ *
+ * A distinct name rather than a bare `Error` because it is what the consumer logs as
+ * the failure's `reason`, and an invariant nobody expected to break is exactly the one
+ * an operator needs named. It carries no stable `errorCode` of its own: this is not a
+ * state an administrator can act on, so it classifies as `EXPORT_ATTEMPT_FAILED` like
+ * any other unrecognised fault and is retried on that basis.
+ */
+export class RoomExportJobStateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RoomExportJobStateError';
   }
 }

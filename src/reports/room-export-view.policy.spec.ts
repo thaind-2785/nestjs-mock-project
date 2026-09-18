@@ -51,13 +51,21 @@ describe('toViewStatus', () => {
 });
 
 describe('hasExpired', () => {
-  it('treats the expiry instant itself as expired', () => {
+  it('treats the expiry instant, and the unsignable second before it, as expired', () => {
     // The boundary has to belong to one side. Handing out a URL at exactly the moment
-    // cleanup is entitled to delete the object is the wrong side.
+    // cleanup is entitled to delete the object is the wrong side, and so is the last
+    // fraction of a second before it: a signed URL's lifetime is whole seconds, so a
+    // result with 400 milliseconds left could only be signed for one that outlives it.
     expect(hasExpired(job({ expiresAt: now }))).toBe(true);
-    expect(hasExpired(job({ expiresAt: new Date(now.getTime() + 1) }))).toBe(
-      false,
+    expect(hasExpired(job({ expiresAt: new Date(now.getTime() + 400) }))).toBe(
+      true,
     );
+    expect(hasExpired(job({ expiresAt: new Date(now.getTime() + 999) }))).toBe(
+      true,
+    );
+    expect(
+      hasExpired(job({ expiresAt: new Date(now.getTime() + 1_000) })),
+    ).toBe(false);
   });
 
   it('compares against the database clock, not this process', () => {
@@ -81,6 +89,9 @@ describe('isDownloadable', () => {
     expect(isDownloadable(job({ objectKey: null }))).toBe(false);
     expect(isDownloadable(job({ expiresAt: null }))).toBe(false);
     expect(isDownloadable(job({ expiresAt: now }))).toBe(false);
+    expect(
+      isDownloadable(job({ expiresAt: new Date(now.getTime() + 400) })),
+    ).toBe(false);
   });
 });
 
@@ -105,6 +116,23 @@ describe('downloadTtl', () => {
     const expiring = job({ expiresAt: new Date(now.getTime() + 30_900) });
 
     expect(downloadTtl(expiring as never, 300).seconds).toBe(30);
+  });
+
+  it('never rounds a lifetime back up past the result it points at', () => {
+    // The shortest URL that can be signed is one second, and the shortest result
+    // `isDownloadable` still lets through has exactly one second left. Those are the
+    // same number on purpose: a floor of one under a rounded-down remainder would hand
+    // out a URL that outlives its result by up to 999 milliseconds - exactly the window
+    // in which cleanup is entitled to delete the object.
+    const last = job({ expiresAt: new Date(now.getTime() + 1_000) });
+
+    const ttl = downloadTtl(last as never, 300);
+
+    expect(isDownloadable(last)).toBe(true);
+    expect(ttl.seconds).toBe(1);
+    expect(ttl.expiresAt.getTime()).toBeLessThanOrEqual(
+      last.expiresAt?.getTime() ?? 0,
+    );
   });
 });
 

@@ -93,6 +93,10 @@ describe('Phase 6 room export attempt', () => {
   let disposableDatabase: string;
   let dataSource: DataSource;
   let s3: S3Client;
+  // One provider for the whole suite, over the one client `afterAll` destroys. Built
+  // per helper call it would leave an HTTP agent and its sockets open on every case,
+  // which is what keeps a Jest run alive after the last assertion.
+  let objectStorage: ObjectStorageProvider;
   let bucket: string;
   let adminId: string;
   let probe: mysql.Connection;
@@ -126,6 +130,7 @@ describe('Phase 6 room export attempt', () => {
     const storage = createObjectStorageConfiguration(environment);
     bucket = storage.bucket;
     s3 = new S3Client(createObjectStorageClientOptions(storage));
+    objectStorage = new ObjectStorageProvider(s3, storage);
     dataSource = new DataSource(
       createTypeOrmOptions(
         createDatabaseConfiguration({
@@ -461,14 +466,9 @@ describe('Phase 6 room export attempt', () => {
       ...environment,
       REPORT_EXPORT_ENABLED: true,
     });
-    const storage = createObjectStorageConfiguration(environment);
-    const provider = new ObjectStorageProvider(
-      new S3Client(createObjectStorageClientOptions(storage)),
-      storage,
-    );
     return new RoomExportViewService(
       new RoomExportViewRepository(dataSource),
-      new RoomExportStorageService(provider, configuration),
+      new RoomExportStorageService(objectStorage, configuration),
       configuration,
     );
   }
@@ -488,11 +488,6 @@ describe('Phase 6 room export attempt', () => {
       REPORT_EXPORT_ENABLED: true,
     });
     probes.mutate?.(configuration);
-    const storage = createObjectStorageConfiguration(environment);
-    const provider = new ObjectStorageProvider(
-      new S3Client(createObjectStorageClientOptions(storage)),
-      storage,
-    );
     const noop = () => Promise.resolve();
     return new RoomExportConsumerService(
       new DatabaseConnectionService(dataSource),
@@ -500,7 +495,7 @@ describe('Phase 6 room export attempt', () => {
       new RoomExportSnapshotRepository(dataSource, configuration),
       new ProbingGenerator(configuration, probes.beforeGenerate ?? noop),
       new ProbingStorage(
-        provider,
+        objectStorage,
         configuration,
         probes.beforeUpload ?? noop,
         probes.uploadFails,

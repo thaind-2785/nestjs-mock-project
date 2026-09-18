@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { ObjectStorageUnavailableError } from '../common/storage/object-storage.errors';
@@ -37,11 +37,6 @@ export class RoomExportStorageService {
    */
   stagingObjectKey(jobId: string, claimToken: string): string {
     return `${roomExportObjectKeyPrefix}/${jobId}/${claimToken}.xlsx`;
-  }
-
-  /** Opaque, and generated per attempt rather than derived from anything guessable. */
-  createClaimToken(): string {
-    return randomUUID();
   }
 
   async upload(upload: RoomExportUpload): Promise<void> {

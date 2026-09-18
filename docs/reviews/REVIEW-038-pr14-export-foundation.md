@@ -10,8 +10,9 @@
 - Date: 2026-09-18
 - Verdict: **Block** — one High, three Medium, and two Low findings are open
 - Author disposition: 2026-09-18 — all six findings fixed; awaiting reviewer
-  confirmation. The `R38-01` fix revises `SPEC-009` and `ADR-0007` and needs the
-  owner's acknowledgement of the added cap.
+  confirmation. The `R38-01` fix revises `SPEC-009` and `ADR-0007`; the owner accepted
+  the added snapshot character cap on 2026-09-18, including that a request inside every
+  other limit can now be refused.
 
 ## Verification performed
 
@@ -90,8 +91,8 @@ and 70 MiB, from 10,000 narrow rows to 1,290 maximum-width ones, and a real cata
 benchmark now measures the input the contracts permit, retains the buffer, and carries a
 second case that drives the heap past the cap and requires the run to fail - because a
 cap whose violation was never observed is a number, not a bound. `SPEC-009` and
-`ADR-0007` record the addition; the owner should acknowledge it, since a legal request
-can now be refused.
+`ADR-0007` record the addition, and the owner accepted it on 2026-09-18 having been
+told explicitly that a legal request can now be refused.
 
 **`R38-02`** is fixed on both halves. `RoomExportService.create` returns
 `RoomExportCreateResult`, the controller emits `Idempotency-Replayed: true` on a replay

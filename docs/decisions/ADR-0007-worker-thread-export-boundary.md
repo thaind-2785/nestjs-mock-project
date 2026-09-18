@@ -4,7 +4,8 @@
 - Date: 2026-09-17
 - Authority: Owner decisions of 2026-09-17 recorded in `SPEC-009`; Phase 6 slice
   `P6-T01`; the XLSX dependency pin confirmed by the owner on 2026-09-17 against the
-  benchmark below.
+  benchmark below. Amended 2026-09-18 after `REVIEW-038`, with the added snapshot
+  character cap accepted by the owner on the same day.
 
 ## Context
 
@@ -71,8 +72,9 @@ not bound memory.** The accepted room contract permits `ArrayMaxSize(100)` ameni
 room with `code VARCHAR(50)` and `name VARCHAR(100)`, so one legal row can carry about
 15,600 characters and 10,000 of them reach roughly 155 million. Measured, that is an
 out-of-memory termination of the Worker — on an input no validation rejected. A third
-cap is therefore accepted alongside the other two: **20,000,000 characters across every
-cell of one snapshot**, refused before generation with `EXPORT_SNAPSHOT_TOO_LARGE`. It
+cap is therefore accepted alongside the other two, by the owner on 2026-09-18:
+**20,000,000 characters across every cell of one snapshot**, refused before generation
+with `EXPORT_SNAPSHOT_TOO_LARGE`. It
 is not a reduction of either accepted cap. A real catalogue of 10,000 rooms with fifteen
 ordinary amenities carries about 7 million characters, and every shape measured at the
 new bound — from 10,000 narrow rows to 1,290 maximum-width ones — stays between 55 and

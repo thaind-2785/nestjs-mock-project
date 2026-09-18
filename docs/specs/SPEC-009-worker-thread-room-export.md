@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Owner: Project owner
-- Last updated: 2026-09-17
+- Last updated: 2026-09-18
 - Scope: Selected optional
 - Related endpoints / ADRs: `ADMIN-EXP-01`, `ADMIN-EXP-02`, `JOB-01`,
   `ADR-0003`, `ADR-0005`, `ADR-0006`,
@@ -39,8 +39,9 @@ In scope:
   capture a repeatable-read database snapshot when the worker begins the attempt.
 - Generate one deterministic-column XLSX workbook in a resource-limited Worker
   Thread, then upload it under a server-generated private object key.
-- Bound row count, query time, Worker Thread heap/time, output bytes, queue
-  concurrency, attempts, backoff, rate, storage calls, and shutdown drain.
+- Bound row count, snapshot character volume, query time, Worker Thread heap/time,
+  output bytes, queue concurrency, attempts, backoff, rate, storage calls, and
+  shutdown drain.
 - Recover from Redis loss, queue handoff failure, expired claims, process crashes,
   Worker Thread errors, and transient object-storage failures without exposing a
   corrupt or foreign result.
@@ -430,9 +431,10 @@ cleanup without changing the Phase 6 result contract.
 Owner decisions accepted on 2026-09-17:
 
 - Maximum matching rows: 10,000; never truncate.
-- Maximum snapshot volume: 20,000,000 characters across every cell (added 2026-09-18
-  on the measured evidence in `REVIEW-038`; it bounds memory where the row count
-  cannot, and reduces neither of the caps below).
+- Maximum snapshot volume: 20,000,000 characters across every cell. Accepted by the
+  owner on 2026-09-18 on the measured evidence in `REVIEW-038`, which showed the row
+  cap alone does not bound memory. It reduces none of the caps below, and the owner
+  accepted that a request inside every other limit can now be refused.
 - Worker Thread old-generation heap: 128 MiB.
 - XLSX generation timeout: 60 seconds.
 - Maximum XLSX bytes: 25 MiB.

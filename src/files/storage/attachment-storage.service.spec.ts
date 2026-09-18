@@ -1,6 +1,7 @@
 import { S3Client } from '@aws-sdk/client-s3';
 import { ApplicationException } from '../../common/errors/application.exception';
 import { createObjectStorageClientOptions } from '../../common/storage/object-storage-client';
+import { ObjectStorageProvider } from '../../common/storage/object-storage.provider';
 import { createAttachmentsConfiguration } from '../../config/attachments.config';
 import { validateEnvironment } from '../../config/environment.validation';
 import { createObjectStorageConfiguration } from '../../config/object-storage.config';
@@ -20,18 +21,25 @@ interface StubClient {
   destroy: jest.Mock;
 }
 
+/**
+ * The provider now owns the S3 mechanics, so it sits between the stub client and the
+ * attachment policy under test. Every assertion below is still about the command that
+ * reaches the client, which is the part that must not change.
+ */
 function createService(send: jest.Mock): {
   service: AttachmentStorageService;
   client: StubClient;
+  provider: ObjectStorageProvider;
 } {
   const client: StubClient = { send, destroy: jest.fn() };
+  const provider = new ObjectStorageProvider(
+    client as unknown as S3Client,
+    storage,
+  );
   return {
-    service: new AttachmentStorageService(
-      client as unknown as S3Client,
-      storage,
-      attachments,
-    ),
+    service: new AttachmentStorageService(provider, attachments),
     client,
+    provider,
   };
 }
 
@@ -148,7 +156,10 @@ describe('AttachmentStorageService', () => {
 
   it('signs a short-lived read of the private object', async () => {
     const client = new S3Client(createObjectStorageClientOptions(storage));
-    const service = new AttachmentStorageService(client, storage, attachments);
+    const service = new AttachmentStorageService(
+      new ObjectStorageProvider(client, storage),
+      attachments,
+    );
 
     try {
       const url = new URL(
@@ -169,9 +180,12 @@ describe('AttachmentStorageService', () => {
   });
 
   it('releases the client on shutdown', () => {
-    const { service, client } = createService(jest.fn());
+    // The lifecycle moved to the provider with the client it owns. Attachments and the
+    // room export share one connection pool, so one of them closing it on shutdown
+    // would have closed it for the other.
+    const { provider, client } = createService(jest.fn());
 
-    service.onApplicationShutdown();
+    provider.onApplicationShutdown();
 
     expect(client.destroy).toHaveBeenCalledTimes(1);
   });

@@ -1,139 +1,75 @@
-import {
-  Inject,
-  Injectable,
-  Logger,
-  OnApplicationShutdown,
-} from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
-import {
-  DeleteObjectCommand,
-  GetObjectCommand,
-  PutObjectCommand,
-  S3Client,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { ObjectStorageUnavailableError } from '../../common/storage/object-storage.errors';
+import { ObjectStorageProvider } from '../../common/storage/object-storage.provider';
 import { attachmentsConfig } from '../../config/attachments.config';
-import { objectStorageConfig } from '../../config/object-storage.config';
 import { filesErrors } from '../files.errors';
-import { ATTACHMENT_STORAGE_CLIENT } from './attachment-storage.tokens';
 import type { AttachmentUpload } from './attachment-storage.types';
 
 /**
- * The only path from the application to object storage. Every call is bounded by
- * the configured timeout so no request or database transaction can wait on the
- * provider indefinitely, and provider failures surface as one stable error.
+ * Attachment policy over the shared storage adapter.
+ *
+ * What is left here after the provider extraction is exactly what is specific to
+ * attachments: which timeout bounds their calls, how long their presigned URLs live,
+ * and which stable error the API returns when the provider cannot answer. The
+ * mechanics - the client, the abort, the shutdown, what a missing object means - are
+ * shared with the room export, because both upload to the same bucket with the same
+ * credentials and a second implementation would drift from this one.
  */
 @Injectable()
-export class AttachmentStorageService implements OnApplicationShutdown {
-  private readonly logger = new Logger(AttachmentStorageService.name);
-
+export class AttachmentStorageService {
   public constructor(
-    @Inject(ATTACHMENT_STORAGE_CLIENT) private readonly client: S3Client,
-    @Inject(objectStorageConfig.KEY)
-    private readonly storage: ConfigType<typeof objectStorageConfig>,
+    private readonly storage: ObjectStorageProvider,
     @Inject(attachmentsConfig.KEY)
     private readonly attachments: ConfigType<typeof attachmentsConfig>,
   ) {}
 
   public async putObject(upload: AttachmentUpload): Promise<void> {
-    // ContentLength is sent explicitly so the provider rejects a truncated body
-    // instead of storing a partial object under a key metadata will point at.
-    await this.execute('put', (abortSignal) =>
-      this.client.send(
-        new PutObjectCommand({
-          Bucket: this.storage.bucket,
-          Key: upload.objectKey,
-          Body: upload.body,
-          ContentType: upload.contentType,
-          ContentLength: upload.body.byteLength,
-        }),
-        { abortSignal },
-      ),
+    await this.translate(() =>
+      this.storage.putObject({
+        objectKey: upload.objectKey,
+        body: upload.body,
+        contentType: upload.contentType,
+        timeoutMs: this.attachments.storageTimeoutMs,
+      }),
+    );
+  }
+
+  /** Idempotent: an absent object already satisfies the caller's request. */
+  public async deleteObject(objectKey: string): Promise<void> {
+    await this.translate(() =>
+      this.storage.deleteObject({
+        objectKey,
+        timeoutMs: this.attachments.storageTimeoutMs,
+      }),
+    );
+  }
+
+  public async createPresignedGetUrl(objectKey: string): Promise<string> {
+    return this.translate(() =>
+      this.storage.createPresignedGetUrl({
+        objectKey,
+        ttlSeconds: this.attachments.presignTtlSeconds,
+      }),
     );
   }
 
   /**
-   * Idempotent by contract: the caller asks for the object to be absent, so a
-   * provider that reports it missing has already satisfied that. Cleanup retries
-   * and crash recovery depend on this.
+   * The provider raises one neutral failure; the API answers with its own. Keeping the
+   * mapping here rather than in the adapter is what lets the export path answer
+   * differently for the same underlying fault.
    */
-  public async deleteObject(objectKey: string): Promise<void> {
+  private async translate<T>(call: () => Promise<T>): Promise<T> {
     try {
-      await this.execute('delete', (abortSignal) =>
-        this.client.send(
-          new DeleteObjectCommand({
-            Bucket: this.storage.bucket,
-            Key: objectKey,
-          }),
-          { abortSignal },
-        ),
-      );
+      return await call();
     } catch (error) {
-      if (isMissingObjectError(error)) return;
+      if (error instanceof ObjectStorageUnavailableError) {
+        // The provider's own wrapper is unwrapped rather than nested. The adapter
+        // boundary is an implementation detail; what a developer needs from the cause
+        // is the provider's fault, and a chain that grows a link per layer buries it.
+        throw filesErrors.storageUnavailable(error.cause ?? error);
+      }
       throw error;
     }
   }
-
-  /** Private bucket: reads are short-lived presigned GETs, never public URLs. */
-  public async createPresignedGetUrl(objectKey: string): Promise<string> {
-    try {
-      return await getSignedUrl(
-        this.client,
-        new GetObjectCommand({
-          Bucket: this.storage.bucket,
-          Key: objectKey,
-        }),
-        { expiresIn: this.attachments.presignTtlSeconds },
-      );
-    } catch (error) {
-      this.logger.error({
-        event: 'attachment_storage_failure',
-        operation: 'presign',
-        errorCode: 'STORAGE_UNAVAILABLE',
-      });
-      throw filesErrors.storageUnavailable(error);
-    }
-  }
-
-  public onApplicationShutdown(): void {
-    this.client.destroy();
-  }
-
-  private async execute<T>(
-    operationName: 'put' | 'delete',
-    operation: (abortSignal: AbortSignal) => Promise<T>,
-  ): Promise<T> {
-    const abortController = new AbortController();
-    const timeout = setTimeout(
-      () => abortController.abort(),
-      this.attachments.storageTimeoutMs,
-    );
-    timeout.unref();
-    try {
-      return await operation(abortController.signal);
-    } catch (error) {
-      if (isMissingObjectError(error)) throw error;
-      this.logger.error({
-        event: 'attachment_storage_failure',
-        operation: operationName,
-        errorCode: 'STORAGE_UNAVAILABLE',
-      });
-      throw filesErrors.storageUnavailable(error);
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-}
-
-function isMissingObjectError(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  const candidate = error as {
-    name?: unknown;
-    $metadata?: { httpStatusCode?: unknown };
-  };
-  return (
-    candidate.name === 'NoSuchKey' ||
-    candidate.name === 'NotFound' ||
-    candidate.$metadata?.httpStatusCode === 404
-  );
 }

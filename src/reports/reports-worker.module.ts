@@ -1,12 +1,26 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import type { ConfigType } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import { reportRedisClientErrors } from '../common/redis/redis-client-errors';
 import { reportsConfig } from '../config/reports.config';
-import { RoomExportQueueLifecycle } from './room-export-queue.lifecycle';
-import { ROOM_EXPORT_QUEUE, ROOM_EXPORT_QUEUE_CLIENT } from './report.tokens';
+import { DatabaseModule } from '../database/database.module';
+import { OutboxClaimRepository } from '../common/outbox/outbox-claim.repository';
+import { ObjectStorageModule } from '../common/storage/object-storage.module';
+import { reportsWorkerEntities } from './reports-worker.entities';
+import { RoomExportAttemptRepository } from './room-export-attempt.repository';
+import { RoomExportConsumerService } from './room-export-consumer.service';
+import { RoomExportDispatcherService } from './room-export-dispatcher.service';
+import { RoomExportGeneratorService } from './room-export-generator.service';
+import { RoomExportStorageService } from './room-export-storage.service';
+import { RoomExportSnapshotRepository } from './room-export-snapshot.repository';
+import {
+  ROOM_EXPORT_QUEUE,
+  ROOM_EXPORT_QUEUE_CLIENT,
+  ROOM_EXPORT_WORKER_CLIENT,
+} from './report.tokens';
 
 /**
  * The worker half of the export boundary: a dedicated queue and its own Redis
@@ -21,9 +35,24 @@ import { ROOM_EXPORT_QUEUE, ROOM_EXPORT_QUEUE_CLIENT } from './report.tokens';
  * that has not enabled exports yet opens no socket and registers no consumer. It is
  * not a disabled feature flag checked at the edge of live machinery; there is no
  * machinery.
+ *
+ * Neither factory closes what it built, so each connection has exactly one owner among
+ * the providers below: the dispatcher closes the producer queue and its client, the
+ * consumer closes the worker client. One owner rather than a lifecycle provider each,
+ * because Nest runs a module's shutdown hooks concurrently - a second owner would
+ * either race the first's ordering or `quit` a socket the first has already ended,
+ * which rejects and fails the whole drain.
  */
 @Module({
-  imports: [ConfigModule.forFeature(reportsConfig)],
+  imports: [
+    ConfigModule.forFeature(reportsConfig),
+    DatabaseModule,
+    ObjectStorageModule,
+    // The list is named in `reports-worker.entities.ts` so the integration suites can
+    // build their `DataSource` from exactly what this module registers, rather than
+    // from every entity in the application.
+    TypeOrmModule.forFeature(reportsWorkerEntities),
+  ],
   providers: [
     {
       provide: ROOM_EXPORT_QUEUE_CLIENT,
@@ -63,8 +92,44 @@ import { ROOM_EXPORT_QUEUE, ROOM_EXPORT_QUEUE_CLIENT } from './report.tokens';
               prefix: configuration.queue.prefix,
             }),
     },
-    RoomExportQueueLifecycle,
+    RoomExportSnapshotRepository,
+    RoomExportGeneratorService,
+    RoomExportStorageService,
+    RoomExportAttemptRepository,
+    OutboxClaimRepository,
+    RoomExportDispatcherService,
+    RoomExportConsumerService,
+    {
+      // The consumer needs a connection of its own: BullMQ workers hold a blocking
+      // command open, which would stall every producer command sharing the socket.
+      provide: ROOM_EXPORT_WORKER_CLIENT,
+      inject: [reportsConfig.KEY],
+      useFactory: (configuration: ConfigType<typeof reportsConfig>) => {
+        if (!configuration.enabled) return null;
+        const { connection } = configuration.queue;
+        const client = new Redis({
+          host: connection.host,
+          port: connection.port,
+          lazyConnect: true,
+          maxRetriesPerRequest: null,
+          connectTimeout: connection.timeoutMs,
+        });
+        reportRedisClientErrors(client, 'room-export-worker');
+        return client;
+      },
+    },
   ],
-  exports: [ConfigModule, ROOM_EXPORT_QUEUE, ROOM_EXPORT_QUEUE_CLIENT],
+  exports: [
+    ConfigModule,
+    TypeOrmModule,
+    ROOM_EXPORT_QUEUE,
+    ROOM_EXPORT_QUEUE_CLIENT,
+    RoomExportSnapshotRepository,
+    RoomExportGeneratorService,
+    RoomExportStorageService,
+    RoomExportAttemptRepository,
+    RoomExportDispatcherService,
+    RoomExportConsumerService,
+  ],
 })
 export class ReportsWorkerModule {}

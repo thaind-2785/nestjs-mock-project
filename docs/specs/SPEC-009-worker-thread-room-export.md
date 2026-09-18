@@ -236,7 +236,11 @@ package is checked to contain no formulas, macros, external links, or embedded f
 - Worker crash and ordinary generation errors are retryable until the three-attempt
   budget is exhausted. A proven memory/row/file limit violation and invalid snapshot
   data are permanent because retrying unchanged bounded work would only consume
-  resources again.
+  resources again. A message whose _protocol version_ this release cannot read is
+  retryable rather than permanent: it is what a rolling restart produces between the
+  deployment that queued a job and the one that picked it up, and nothing about the
+  request is wrong. Added on 2026-09-18 after `REVIEW-039` found one error code
+  carrying both meanings.
 - Each upload attempt uses a unique server-generated staging key containing the job
   ID and opaque claim token. Before upload, the queue process inserts an existing
   storage-cleanup safeguard whose due time exceeds the bounded provider call and
@@ -321,8 +325,13 @@ rollback or forward fix so object references and idempotency evidence are not lo
 - Workbook strings are formula-safe. Numeric database identifiers and money remain
   text where spreadsheet numeric precision could change them.
 - Object keys are generated from trusted fixed prefixes, job UUIDs, and random claim
-  tokens. They are never accepted from or returned to clients and are absent from
-  logs and queue payloads.
+  tokens. They are never accepted from a client, never returned as a field, and absent
+  from logs and queue payloads. One qualification, found while implementing `P6-T06`:
+  an S3 presigned URL is a signature over a path, so the key is necessarily inside the
+  URL itself - there is no way to sign a read of an object without naming it. What the
+  rule forbids is handing a client the key as data it could reuse; the URL is a
+  short-lived credential for one object, and the token inside it grants nothing through
+  this API.
 - Presigned URLs are bearer secrets: they are short lived, generated only after an
   ownership/expiry check, returned with `no-store`, and never logged.
 - Worker inputs contain only the selected room fields. No user email, auth/session

@@ -170,6 +170,20 @@ room_times.room_id=:roomId`; mismatch returns the same not-found response. Windo
   create. It fails closed: a limiter that cannot decide returns
   `503 EXPORT_CREATE_UNAVAILABLE` rather than admitting an unbounded number of exports.
   While the boundary is disabled the same status carries `EXPORT_CREATE_DISABLED`.
+- `ADMIN-EXP-02` answers only the administrator who created the job. Ownership is part
+  of the same query as the id, so a missing job, a job belonging to someone else, and a
+  well-formed id nobody owns all return the same `404 EXPORT_NOT_FOUND` - identical but
+  for the per-request id. A malformed id fails parameter validation with `400` instead.
+  Every response sets `Cache-Control: no-store`, because a completed one carries a
+  presigned URL.
+- `EXPIRED` is a read-time view rather than a stored status: a completed result whose
+  `expires_at` has passed, compared against database time rather than the API host's
+  clock. An expired job keeps its row and file metadata and loses only the download. The
+  URL's lifetime is the lesser of the configured presign TTL and the result's remaining
+  life, rounded down, so a URL can never outlive the result it points at. A result with
+  less than one whole second left is already `EXPIRED` for the same reason: a signed
+  URL's lifetime is whole seconds, so the shortest one that could be issued would
+  outlive it.
 - Payment webhooks first insert `(provider, provider_event_id)` into the optional
   `payment_provider_events` ledger. Its unique key makes retries return success
   without applying the payment transition twice.

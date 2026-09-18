@@ -24,7 +24,7 @@ import {
   toAmenityResponse,
   toRoomTypeResponse,
 } from './reference-catalog.service';
-import { applyRoomAttributeFilters } from './room-filters';
+import { applyRoomCatalogFilters } from './room-filters';
 import { RoomImagesService } from './room-images.service';
 import type { RoomImageSet } from './room-images.types';
 import { lockRoom } from './room-lock';
@@ -80,15 +80,7 @@ export class RoomsService {
       .getRepository(Room)
       .createQueryBuilder('room')
       .innerJoinAndSelect('room.roomType', 'roomType');
-    if (query.query?.trim()) {
-      builder.andWhere(
-        "(LOWER(room.room_number) LIKE :term ESCAPE '\\\\' OR LOWER(roomType.name) LIKE :term ESCAPE '\\\\')",
-        { term: `%${escapeLike(query.query.trim().toLowerCase())}%` },
-      );
-    }
-    if (query.status)
-      builder.andWhere('room.status = :status', { status: query.status });
-    applyRoomAttributeFilters(builder, query);
+    applyRoomCatalogFilters(builder, query);
     const [rooms, total] = await builder
       .orderBy('room.id', 'ASC')
       .skip((query.page - 1) * query.pageSize)
@@ -326,8 +318,4 @@ function toAdminRoomResponse(
     createdAt: room.createdAt.toISOString(),
     updatedAt: room.updatedAt.toISOString(),
   };
-}
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, '\\$&');
 }

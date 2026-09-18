@@ -20,6 +20,7 @@ import {
   AttachmentObjectType,
 } from '../src/files/entities/attachment.enums';
 import { buildAttachmentObjectKey } from '../src/files/storage/attachment-object-key';
+import { ObjectStorageProvider } from '../src/common/storage/object-storage.provider';
 import { AttachmentStorageService } from '../src/files/storage/attachment-storage.service';
 
 jest.setTimeout(30_000);
@@ -47,7 +48,10 @@ describe('Phase 3 attachment storage against MinIO', () => {
     storage = createObjectStorageConfiguration(environment);
     attachments = createAttachmentsConfiguration(environment);
     client = new S3Client(createObjectStorageClientOptions(storage));
-    service = new AttachmentStorageService(client, storage, attachments);
+    service = new AttachmentStorageService(
+      new ObjectStorageProvider(client, storage),
+      attachments,
+    );
     albumPolicy = new AttachmentPolicyRegistry(attachments).resolve(
       AttachmentObjectType.Room,
       AttachmentAssociationType.Album,
@@ -130,10 +134,10 @@ describe('Phase 3 attachment storage against MinIO', () => {
         endpoint: 'http://192.0.2.1:9000',
       }),
     );
-    const boundedService = new AttachmentStorageService(unreachable, storage, {
-      ...attachments,
-      storageTimeoutMs: 250,
-    });
+    const boundedService = new AttachmentStorageService(
+      new ObjectStorageProvider(unreachable, storage),
+      { ...attachments, storageTimeoutMs: 250 },
+    );
 
     try {
       const started = Date.now();

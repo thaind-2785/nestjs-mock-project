@@ -19,6 +19,7 @@ import type { DatabaseConnectionService } from '../../src/database/database-conn
 import { AttachmentPolicyRegistry } from '../../src/files/attachment-policy';
 import { AttachmentsService } from '../../src/files/attachments.service';
 import { StorageCleanupService } from '../../src/files/storage-cleanup.service';
+import { ObjectStorageProvider } from '../../src/common/storage/object-storage.provider';
 import { AttachmentStorageService } from '../../src/files/storage/attachment-storage.service';
 import { RoomImagesService } from '../../src/rooms/room-images.service';
 
@@ -76,8 +77,7 @@ export function createRoomImageFixture(
     createObjectStorageClientOptions(storageConfiguration),
   );
   const storage = new AttachmentStorageService(
-    client,
-    storageConfiguration,
+    new ObjectStorageProvider(client, storageConfiguration),
     configuration,
   );
   // Every fixture owns its own limiter namespace, so a suite never spends or

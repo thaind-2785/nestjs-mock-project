@@ -26,6 +26,7 @@ import {
   NOTIFICATION_QUEUE_CLIENT,
 } from './notification.tokens';
 import { claimBatchIsolation } from '../common/outbox/outbox-claim.constants';
+import { OutboxPollLoop } from '../common/outbox/outbox-poll-loop';
 import { OutboxClaimRepository } from '../common/outbox/outbox-claim.repository';
 import type { OutboxClaim } from '../common/outbox/outbox-claim.types';
 
@@ -43,9 +44,10 @@ export class OutboxDispatcherService
   implements OnApplicationBootstrap, OnApplicationShutdown
 {
   private readonly logger = new Logger(OutboxDispatcherService.name);
-  private timer: NodeJS.Timeout | undefined;
-  private cycle: Promise<void> | undefined;
-  private stopping = false;
+  private readonly loop = new OutboxPollLoop(
+    () => this.pollOnce(),
+    () => this.configuration.relay.pollIntervalMs,
+  );
 
   constructor(
     private readonly database: DatabaseConnectionService,
@@ -68,21 +70,12 @@ export class OutboxDispatcherService
     await this.queueClient.quit();
   }
 
-  /** The poll loop also holds the worker process open; it owns no other timer. */
   start(): void {
-    if (this.timer || this.cycle || this.stopping) return;
-    this.schedule(0);
+    this.loop.start();
   }
 
   async stop(): Promise<void> {
-    this.stopping = true;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = undefined;
-    }
-    // An in-flight cycle finishes rather than being abandoned mid-batch: its claims
-    // are already committed and its handoffs are already bounded.
-    await this.cycle;
+    await this.loop.stop();
   }
 
   async runOnce(): Promise<DispatchResult> {
@@ -178,20 +171,6 @@ export class OutboxDispatcherService
       });
       return false;
     }
-  }
-
-  private schedule(delayMs: number): void {
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      this.cycle = this.pollOnce().finally(() => {
-        this.cycle = undefined;
-        // Scheduled only after the previous cycle settles, so two cycles can never
-        // claim against each other inside one process.
-        if (!this.stopping) {
-          this.schedule(this.configuration.relay.pollIntervalMs);
-        }
-      });
-    }, delayMs);
   }
 
   private async pollOnce(): Promise<void> {

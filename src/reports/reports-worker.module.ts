@@ -5,6 +5,9 @@ import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import { reportRedisClientErrors } from '../common/redis/redis-client-errors';
 import { reportsConfig } from '../config/reports.config';
+import { DatabaseModule } from '../database/database.module';
+import { RoomExportGeneratorService } from './room-export-generator.service';
+import { RoomExportSnapshotRepository } from './room-export-snapshot.repository';
 import { RoomExportQueueLifecycle } from './room-export-queue.lifecycle';
 import { ROOM_EXPORT_QUEUE, ROOM_EXPORT_QUEUE_CLIENT } from './report.tokens';
 
@@ -23,7 +26,7 @@ import { ROOM_EXPORT_QUEUE, ROOM_EXPORT_QUEUE_CLIENT } from './report.tokens';
  * machinery.
  */
 @Module({
-  imports: [ConfigModule.forFeature(reportsConfig)],
+  imports: [ConfigModule.forFeature(reportsConfig), DatabaseModule],
   providers: [
     {
       provide: ROOM_EXPORT_QUEUE_CLIENT,
@@ -64,7 +67,15 @@ import { ROOM_EXPORT_QUEUE, ROOM_EXPORT_QUEUE_CLIENT } from './report.tokens';
             }),
     },
     RoomExportQueueLifecycle,
+    RoomExportSnapshotRepository,
+    RoomExportGeneratorService,
   ],
-  exports: [ConfigModule, ROOM_EXPORT_QUEUE, ROOM_EXPORT_QUEUE_CLIENT],
+  exports: [
+    ConfigModule,
+    ROOM_EXPORT_QUEUE,
+    ROOM_EXPORT_QUEUE_CLIENT,
+    RoomExportSnapshotRepository,
+    RoomExportGeneratorService,
+  ],
 })
 export class ReportsWorkerModule {}

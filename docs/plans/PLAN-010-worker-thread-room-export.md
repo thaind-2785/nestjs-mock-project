@@ -83,7 +83,7 @@
 | `P6-T01` | Decisions, limits, modules, and Worker protocol are fixed               | None                          | Config/module/Worker protocol unit and benchmark    | Done    |
 | `P6-T02` | Export state persists and outbox consumers are type-isolated            | Phase 6 export schema/index   | Real-MySQL migration, claim concurrency, `EXPLAIN`  | Done    |
 | `P6-T03` | Admin creates exactly one durable, rate-limited export request          | Use P6-T02 schema             | Controller/service/idempotency integration + E2E    | Done    |
-| `P6-T04` | A bounded room snapshot becomes a safe XLSX in a Worker Thread          | None                          | Query-shape, XLSX package, resource/process tests   | Pending |
+| `P6-T04` | A bounded room snapshot becomes a safe XLSX in a Worker Thread          | None                          | Query-shape, XLSX package, resource/process tests   | Done    |
 | `P6-T05` | BullMQ attempts recover, upload privately, and finalize exactly one key | Use P6-T02 and cleanup schema | MySQL/Redis/MinIO crash/concurrency integration     | Pending |
 | `P6-T06` | Requester polls status and downloads only an unexpired private result   | Use P6-T02 schema             | Ownership/expiry/presign API integration + E2E      | Pending |
 | `P6-T07` | Operations, full journey, docs, and Phase 6 handoff are complete        | Revert/reapply proof          | Process E2E, Compose, full gate, independent review | Pending |
@@ -472,6 +472,26 @@ gate is not the checklist disposition.
   the replayed flag, and a separate warning for an idempotency conflict. Filters, the
   key, the requester's email and the outbox payload are all absent.
 
+### `P6-T04` evidence
+
+- **Constants/contracts:** The twelve columns, worksheet name, amenity separator,
+  formula prefixes and quote prefix are named constants; the snapshot row and the
+  generate command have their own contract files.
+- **Projection/indexes:** The reader selects only the eleven columns the workbook
+  prints plus the join it needs, keyset-pages by numeric room ID with no `OFFSET`, and
+  bounds the statement with `MAX_EXECUTION_TIME` inside the database rather than in the
+  driver. An integration test asserts the exact projected row.
+- **Batching/N+1:** One amenity set query per page, proven by counting statements
+  through TypeORM's logger: ten rooms cost one amenity read, not ten.
+- **Responsibility/reuse:** The search term, status and attribute filters are now one
+  `applyRoomCatalogFilters`, used by the admin list and the export alike, so the two
+  surfaces cannot drift on `LIKE` shape, escaping or lowercasing.
+- **Concurrency:** `REPEATABLE READ` isolation is proven by committing an update from a
+  second connection between two pages of the same read and asserting every page still
+  describes the same instant - and that the update really landed.
+- **Observability:** One `room_export_generated` carrying job, attempt, row count, byte
+  count and duration. No filters, no room values, no object key.
+
 ## Documentation / OpenAPI impact
 
 - Add both export routes and every stable status/error/ownership/idempotency field to
@@ -658,6 +678,26 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   resolves relations across the whole registered set, so it fails at `initialize` with
   `Entity metadata for User#identities was not found`. Naming the transitive graph by
   hand is a puzzle, not a decision.
+
+- 2026-09-18 (`P6-T04`): the Worker Thread runs under `ts-node/register/transpile-only`
+  in development, and that is not a shortcut. Plain `ts-node/register` type-checks the
+  whole project inside the thread, which needs more heap than the entire accepted
+  generation budget - measured, it terminates a three-row export at 128 MiB before any
+  workbook exists. The gate already type-checks with `tsc --noEmit`, so doing it again
+  in a memory-capped isolate buys nothing and costs the cap. Production runs `dist`,
+  where the thread loads no compiler at all and the measured profile is roughly 27 MiB
+  lower.
+- 2026-09-18 (`P6-T04`): a failure the thread can name is reported through the protocol
+  as a `FAILED` result; a failure it cannot name - out of memory, `terminate()`, a
+  crash - is classified by the parent from the exit. Both reach one settled outcome and
+  only one of them can carry a reason, which is why the worker no longer exits silently
+  on an output-size refusal the parent would otherwise have read as a bare exit code.
+- 2026-09-18 (`P6-T04`): the out-of-memory case sets a heap far below anything workable
+  rather than just below what its fixture needs. A bound near the requirement made the
+  test depend on when a garbage collector ran - it failed roughly one run in three under
+  `--runInBand` - and a test that passes four times in five is worse than none. It pins
+  the classification; where the real threshold sits is measured by the dependency
+  profile check.
 
 - 2026-09-18 (`REVIEW-038` closure): the row cap does not bound memory, and the
   benchmark that said otherwise was measuring the wrong thing twice. Its fixture reused

@@ -41,6 +41,8 @@ interface ErrorTranslations {
     exportCreateDisabled: string;
     exportCreateRateLimited: string;
     exportCreateUnavailable: string;
+    exportRowLimitExceeded: string;
+    exportSnapshotTooLarge: string;
     forbidden: string;
     identityConflict: string;
     idempotencyKeyInvalid: string;

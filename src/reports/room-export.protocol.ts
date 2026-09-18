@@ -22,6 +22,11 @@ export const roomExportWorkerErrorCodes = {
   resourceLimitMismatch: 'EXPORT_WORKER_RESOURCE_LIMIT_MISMATCH',
   rowLimitExceeded: 'EXPORT_ROW_LIMIT_EXCEEDED',
   snapshotTooLarge: 'EXPORT_SNAPSHOT_TOO_LARGE',
+  // Parent-side classifications. A thread that timed out, exceeded its heap, or exited
+  // without answering cannot report its own failure, so these are decided from the exit.
+  timedOut: 'EXPORT_WORKER_TIMEOUT',
+  outOfMemory: 'EXPORT_WORKER_OUT_OF_MEMORY',
+  exited: 'EXPORT_WORKER_EXITED',
   outputTooLarge: 'EXPORT_OUTPUT_TOO_LARGE',
   generationFailed: 'EXPORT_GENERATION_FAILED',
 } as const;

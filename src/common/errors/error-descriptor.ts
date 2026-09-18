@@ -34,6 +34,8 @@ export const errorMessageKeys = {
   exportCreateDisabled: 'errors.exportCreateDisabled',
   exportCreateRateLimited: 'errors.exportCreateRateLimited',
   exportCreateUnavailable: 'errors.exportCreateUnavailable',
+  exportRowLimitExceeded: 'errors.exportRowLimitExceeded',
+  exportSnapshotTooLarge: 'errors.exportSnapshotTooLarge',
   forbidden: 'errors.forbidden',
   idempotencyKeyInvalid: 'errors.idempotencyKeyInvalid',
   idempotencyKeyReused: 'errors.idempotencyKeyReused',

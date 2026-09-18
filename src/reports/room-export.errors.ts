@@ -20,6 +20,23 @@ export const roomExportErrors = {
       'EXPORT_CREATE_UNAVAILABLE',
       errorMessageKeys.exportCreateUnavailable,
     ),
+  /**
+   * Permanent, not retryable. Retrying an unchanged bounded read would consume the
+   * same resources to reach the same refusal, and the administrator's answer is to
+   * narrow the filters rather than to wait.
+   */
+  rowLimitExceeded: () =>
+    new ApplicationException(
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      'EXPORT_ROW_LIMIT_EXCEEDED',
+      errorMessageKeys.exportRowLimitExceeded,
+    ),
+  snapshotTooLarge: () =>
+    new ApplicationException(
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      'EXPORT_SNAPSHOT_TOO_LARGE',
+      errorMessageKeys.exportSnapshotTooLarge,
+    ),
   /** Returned while the export boundary is disabled, so the rollout has a closed door. */
   createDisabled: () =>
     new ApplicationException(

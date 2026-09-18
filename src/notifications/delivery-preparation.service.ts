@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { isEmail } from 'class-validator';
 import { EntityManager } from 'typeorm';
-import { OutboxEvent } from '../bookings/entities/outbox-event.entity';
+import { OutboxEvent } from '../common/outbox/outbox-event.entity';
 import { EmailDelivery } from './entities/email-delivery.entity';
 import { EmailDeliveryStatus } from './entities/notification.enums';
 import {

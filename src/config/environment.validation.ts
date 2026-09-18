@@ -35,6 +35,8 @@ const obsoleteVariableReplacements: Readonly<Record<string, string>> = {
   ROOM_IMAGE_UPLOAD_RATE_LIMIT_MAX: 'ATTACHMENT_UPLOAD_RATE_LIMIT_MAX',
   ROOM_IMAGE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS:
     'ATTACHMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS',
+  // Retention belongs to `idempotency_keys`, which two operations now write to.
+  BOOKING_IDEMPOTENCY_RETENTION_HOURS: 'IDEMPOTENCY_RETENTION_HOURS',
 };
 
 export interface EnvironmentVariables extends Record<string, unknown> {
@@ -54,7 +56,7 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   HOTEL_TIMEZONE: string;
   BOOKING_CREATE_RATE_LIMIT_MAX: number;
   BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS: number;
-  BOOKING_IDEMPOTENCY_RETENTION_HOURS: number;
+  IDEMPOTENCY_RETENTION_HOURS: number;
   OBJECT_STORAGE_ENDPOINT?: string;
   OBJECT_STORAGE_REGION: string;
   OBJECT_STORAGE_FORCE_PATH_STYLE: boolean;
@@ -104,6 +106,10 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   NOTIFICATION_WORKER_CONCURRENCY: number;
   NOTIFICATION_SHUTDOWN_DRAIN_MS: number;
   NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS: number;
+  REPORT_EXPORT_ENABLED: boolean;
+  REPORT_EXPORT_QUEUE_PREFIX: string;
+  REPORT_EXPORT_CREATE_RATE_LIMIT_MAX: number;
+  REPORT_EXPORT_CREATE_RATE_LIMIT_WINDOW_SECONDS: number;
 }
 
 const environmentSchema = Joi.object<EnvironmentVariables>({
@@ -158,7 +164,9 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(1)
     .max(3_600)
     .default(60),
-  BOOKING_IDEMPOTENCY_RETENTION_HOURS: Joi.number()
+  // One table, one window. Both operations that claim a key share it, because two
+  // windows would let one of them expire a row the other still considered claimable.
+  IDEMPOTENCY_RETENTION_HOURS: Joi.number()
     .integer()
     .min(24)
     .max(24 * 30)
@@ -445,6 +453,37 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(5_000)
     .max(3_600_000)
     .default(60_000),
+  // Room export is selected optional scope and ships disabled. The flag is read per
+  // process, which is what makes the documented rollout possible: the worker enables
+  // its consumer and a fixture job is observed end to end while the API process still
+  // refuses to create one.
+  REPORT_EXPORT_ENABLED: Joi.boolean().default(false),
+  // Required in production for the reason the other two prefixes are: a second
+  // deployment sharing one Redis must not consume this one's export jobs.
+  REPORT_EXPORT_QUEUE_PREFIX: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.string()
+      .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
+      .required(),
+    otherwise: Joi.string()
+      .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
+      .default('hotel:reports'),
+  }),
+  // The one export bound an operator genuinely spends: tightening an administrator's
+  // creation budget is an incident response, and it sits beside the three other
+  // request budgets rather than inside the export code. Its ceiling is the rate
+  // SPEC-009 accepted. Every other export limit is fixed in `reports.config.ts`,
+  // where the reason for the number lives next to it.
+  REPORT_EXPORT_CREATE_RATE_LIMIT_MAX: Joi.number()
+    .integer()
+    .min(1)
+    .max(5)
+    .default(5),
+  REPORT_EXPORT_CREATE_RATE_LIMIT_WINDOW_SECONDS: Joi.number()
+    .integer()
+    .min(60)
+    .max(3_600)
+    .default(3_600),
 }).unknown(true);
 
 export function validateEnvironment(

@@ -4,8 +4,8 @@ import type Redis from 'ioredis';
 import { validateEnvironment } from '../config/environment.validation';
 import { createNotificationsConfiguration } from '../config/notifications.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
-import { OutboxClaimRepository } from './outbox-claim.repository';
-import type { OutboxClaim } from './outbox-claim.types';
+import { OutboxClaimRepository } from '../common/outbox/outbox-claim.repository';
+import type { OutboxClaim } from '../common/outbox/outbox-claim.types';
 import {
   notificationJobName,
   notificationQueueUnavailableCode,

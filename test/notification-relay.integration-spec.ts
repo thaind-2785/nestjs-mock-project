@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { OutboxEventStatus } from '../src/common/outbox/outbox.enums';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import mysql from 'mysql2/promise';
 import { DataSource } from 'typeorm';
-import { OutboxEventStatus } from '../src/bookings/entities/booking.enums';
-import { OutboxEvent } from '../src/bookings/entities/outbox-event.entity';
+import { OutboxEvent } from '../src/common/outbox/outbox-event.entity';
 import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
@@ -12,8 +12,9 @@ import { createNotificationsConfiguration } from '../src/config/notifications.co
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { DatabaseConnectionService } from '../src/database/database-connection.service';
 import { EmailDelivery } from '../src/notifications/entities/email-delivery.entity';
-import { claimBatchIsolation } from '../src/notifications/outbox-claim.constants';
-import { OutboxClaimRepository } from '../src/notifications/outbox-claim.repository';
+import { claimBatchIsolation } from '../src/common/outbox/outbox-claim.constants';
+import { notificationEventTypes } from '../src/notifications/notification-event';
+import { OutboxClaimRepository } from '../src/common/outbox/outbox-claim.repository';
 import { OutboxDispatcherService } from '../src/notifications/outbox-dispatcher.service';
 import { applicationMigrations } from './fixtures/application-migrations';
 
@@ -195,6 +196,7 @@ describe('Phase 5 outbox relay', () => {
     try {
       expect(
         await claims.claimBatch(holder.manager, {
+          eventTypes: notificationEventTypes,
           batchSize: 1,
           leaseMs: 120_000,
           claimToken: 'token-holding',
@@ -211,6 +213,7 @@ describe('Phase 5 outbox relay', () => {
         async (manager) => {
           await manager.query('SET innodb_lock_wait_timeout = 2');
           return claims.claimBatch(manager, {
+            eventTypes: notificationEventTypes,
             batchSize: 2,
             leaseMs: 120_000,
             claimToken: 'token-passing',
@@ -239,6 +242,7 @@ describe('Phase 5 outbox relay', () => {
       // locks it takes on rows the filter rejected are held to commit, and the worker
       // that legitimately owns this row cannot finish its own send.
       await claims.claimBatch(scanner.manager, {
+        eventTypes: notificationEventTypes,
         batchSize: 10,
         leaseMs: 120_000,
         claimToken: 'token-scanner',
@@ -314,6 +318,7 @@ describe('Phase 5 outbox relay', () => {
       expect(
         await dataSource.transaction((manager) =>
           claims.release(manager, {
+            eventTypes: notificationEventTypes,
             id,
             retryInMs: 30_000,
             errorCode: 'NOTIFICATION_QUEUE_UNAVAILABLE',
@@ -326,6 +331,7 @@ describe('Phase 5 outbox relay', () => {
 
     const released = await dataSource.transaction((manager) =>
       claims.release(manager, {
+        eventTypes: notificationEventTypes,
         id,
         claimToken: 'token-owner',
         attempt: held.attempt,
@@ -391,7 +397,11 @@ describe('Phase 5 outbox relay', () => {
     claimToken: string;
   }): Promise<Array<{ id: string; attempt: number }>> {
     return dataSource.transaction(claimBatchIsolation, (manager) =>
-      claims.claimBatch(manager, { ...input, leaseMs: 120_000 }),
+      claims.claimBatch(manager, {
+        eventTypes: notificationEventTypes,
+        ...input,
+        leaseMs: 120_000,
+      }),
     );
   }
 

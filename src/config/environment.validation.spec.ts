@@ -23,9 +23,16 @@ const productionMailEnvironment = {
   NOTIFICATION_QUEUE_PREFIX: 'hotel:production-notifications',
 };
 
+const productionReportEnvironment = {
+  // Exports namespace their own queue for the same reason mail does: a second
+  // deployment sharing one Redis must not consume this one's export jobs.
+  REPORT_EXPORT_QUEUE_PREFIX: 'hotel:production-reports',
+};
+
 const productionRequiredEnvironment = {
   ...productionAuthEnvironment,
   ...productionMailEnvironment,
+  ...productionReportEnvironment,
 };
 
 describe('validateEnvironment', () => {
@@ -48,7 +55,7 @@ describe('validateEnvironment', () => {
     expect(environment.HOTEL_TIMEZONE).toBe('Asia/Ho_Chi_Minh');
     expect(environment.BOOKING_CREATE_RATE_LIMIT_MAX).toBe(10);
     expect(environment.BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
-    expect(environment.BOOKING_IDEMPOTENCY_RETENTION_HOURS).toBe(24);
+    expect(environment.IDEMPOTENCY_RETENTION_HOURS).toBe(24);
     expect(environment.OBJECT_STORAGE_ENDPOINT).toBe('http://127.0.0.1:9000');
     expect(environment.OBJECT_STORAGE_REGION).toBe('us-east-1');
     expect(environment.OBJECT_STORAGE_FORCE_PATH_STYLE).toBe(true);

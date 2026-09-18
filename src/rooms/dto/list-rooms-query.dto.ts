@@ -1,21 +1,8 @@
-import { ApiPropertyOptional, IntersectionType } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IntersectionType } from '@nestjs/swagger';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
-import { RoomStatus } from '../entities/room.enums';
-import { RoomAttributeFilterQueryDto } from './room-filter-query.dto';
+import { RoomCatalogFilterDto } from './room-catalog-filter.dto';
 
 export class ListRoomsQueryDto extends IntersectionType(
-  RoomAttributeFilterQueryDto,
+  RoomCatalogFilterDto,
   PaginationQueryDto,
-) {
-  @ApiPropertyOptional({ maxLength: 100, example: 'A-2' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  query?: string;
-
-  @ApiPropertyOptional({ enum: RoomStatus })
-  @IsOptional()
-  @IsEnum(RoomStatus)
-  status?: RoomStatus;
-}
+) {}

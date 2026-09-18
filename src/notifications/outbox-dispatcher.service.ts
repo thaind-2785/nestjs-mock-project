@@ -12,6 +12,7 @@ import type Redis from 'ioredis';
 import { notificationsConfig } from '../config/notifications.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import { notificationBackoffMs } from './notification-backoff';
+import { notificationEventTypes } from './notification-event';
 import {
   notificationJobName,
   notificationQueueUnavailableCode,
@@ -24,9 +25,9 @@ import {
   NOTIFICATION_QUEUE,
   NOTIFICATION_QUEUE_CLIENT,
 } from './notification.tokens';
-import { claimBatchIsolation } from './outbox-claim.constants';
-import { OutboxClaimRepository } from './outbox-claim.repository';
-import type { OutboxClaim } from './outbox-claim.types';
+import { claimBatchIsolation } from '../common/outbox/outbox-claim.constants';
+import { OutboxClaimRepository } from '../common/outbox/outbox-claim.repository';
+import type { OutboxClaim } from '../common/outbox/outbox-claim.types';
 
 /**
  * Moves durable outbox events onto the delivery queue.
@@ -92,6 +93,10 @@ export class OutboxDispatcherService
       claimBatchIsolation,
       (manager) =>
         this.claims.claimBatch(manager, {
+          // This dispatcher delivers mail and claims mail. The export dispatcher
+          // reads the same table with its own allowlist, and neither can lease the
+          // other's rows because the restriction is in the claiming statement.
+          eventTypes: notificationEventTypes,
           batchSize: relay.claimBatchSize,
           leaseMs: relay.claimLeaseMs,
           claimToken,
@@ -151,6 +156,7 @@ export class OutboxDispatcherService
       const dataSource = await this.database.ensureInitialized();
       return await dataSource.transaction((manager) =>
         this.claims.release(manager, {
+          eventTypes: notificationEventTypes,
           id: claim.id,
           claimToken,
           attempt: claim.attempt,

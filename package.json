@@ -46,7 +46,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
     "harness:check": "node scripts/harness-check-all.mjs",
     "harness:eval": "node scripts/harness-eval.mjs",
-    "test:harness": "node --test scripts/harness-check.test.mjs scripts/harness-runtime.test.mjs scripts/harness-eval.test.mjs scripts/harness-v02-closure.test.mjs scripts/eslint-conventions.test.mjs scripts/source-encoding.test.mjs",
+    "test:harness": "node --test scripts/harness-check.test.mjs scripts/harness-runtime.test.mjs scripts/harness-eval.test.mjs scripts/harness-v02-closure.test.mjs scripts/eslint-conventions.test.mjs scripts/source-encoding.test.mjs scripts/migration-registration.test.mjs scripts/xlsx-dependency-profile.test.mjs",
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
@@ -65,6 +65,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "cookie-parser": "1.4.7",
+    "exceljs": "4.4.0",
     "google-auth-library": "11.0.2",
     "ioredis": "5.11.1",
     "joi": "^18.2.5",

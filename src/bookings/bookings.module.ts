@@ -1,14 +1,15 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
 import { bookingsConfig } from '../config/bookings.config';
 import { DatabaseModule } from '../database/database.module';
 import { BookingChangeHistory } from './entities/booking-change-history.entity';
 import { BookingStatusHistory } from './entities/booking-status-history.entity';
 import { Booking } from './entities/booking.entity';
-import { IdempotencyKey } from './entities/idempotency-key.entity';
-import { OutboxEvent } from './entities/outbox-event.entity';
+import { IdempotencyKey } from '../common/idempotency/idempotency-key.entity';
+import { OutboxEvent } from '../common/outbox/outbox-event.entity';
 import { BookingCreateRateLimitGuard } from './booking-create-rate-limit.guard';
 import { BookingsController } from './bookings.controller';
 import { AdminBookingsController } from './admin-bookings.controller';
@@ -19,6 +20,7 @@ import { BookingsService } from './bookings.service';
   imports: [
     ConfigModule.forFeature(bookingsConfig),
     DatabaseModule,
+    IdempotencyModule,
     RateLimitModule,
     TypeOrmModule.forFeature([
       Booking,

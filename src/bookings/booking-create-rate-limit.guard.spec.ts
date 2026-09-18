@@ -18,7 +18,6 @@ describe('BookingCreateRateLimitGuard', () => {
       {
         hotelTimezone: 'Asia/Ho_Chi_Minh',
         createRateLimit: { max: 10, windowSeconds: 60 },
-        idempotencyRetentionHours: 24,
       },
     );
   }

@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { OutboxEventStatus } from '../src/common/outbox/outbox.enums';
 import mysql from 'mysql2/promise';
 import { DataSource, IsNull } from 'typeorm';
-import { OutboxEventStatus } from '../src/bookings/entities/booking.enums';
-import { OutboxEvent } from '../src/bookings/entities/outbox-event.entity';
+import { OutboxEvent } from '../src/common/outbox/outbox-event.entity';
 import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
@@ -70,8 +70,10 @@ describe('Phase 5 notification delivery persistence', () => {
     await dataSource.query('DELETE FROM email_deliveries');
     await dataSource.query('DELETE FROM outbox_events');
     // This suite is about the delivery migration and calls `undoLastMigration` expecting
-    // to get it. Two migrations now sit on top - the backlog index, then the acceptance
-    // schema - so peel both and leave the stack these tests were written against.
+    // to get it. Three migrations now sit on top - the Phase 6 export schema, the
+    // backlog index, then the acceptance schema - so peel all three and leave the
+    // stack these tests were written against.
+    await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
   });

@@ -5,10 +5,10 @@ import {
   OnApplicationBootstrap,
   OnApplicationShutdown,
 } from '@nestjs/common';
+import { OutboxEventStatus } from '../common/outbox/outbox.enums';
 import type { ConfigType } from '@nestjs/config';
 import type Redis from 'ioredis';
 import { EntityManager } from 'typeorm';
-import { OutboxEventStatus } from '../bookings/entities/booking.enums';
 import { notificationsConfig } from '../config/notifications.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import { deliveryPreparationErrorCodes } from './delivery-preparation.constants';
@@ -19,13 +19,20 @@ import { DeliveryResultRepository } from './delivery-result.repository';
 import type { ClaimedWork, DeliveryOutcome } from './delivery-worker.types';
 import { EMAIL_SENDER } from './email-sender';
 import type { EmailSender, EmailSendResult } from './email-sender';
-import { NotificationEventError } from './notification-event';
+import {
+  NotificationEventError,
+  notificationEventTypes,
+} from './notification-event';
 import { notificationBackoffMs } from './notification-backoff';
 import { NOTIFICATION_WORKER_CLIENT } from './notification.tokens';
 import { NotificationWorkerLifecycle } from './notification-worker-lifecycle';
 import type { NotificationJobData } from './outbox-dispatcher.types';
 import { SendAttemptRepository } from './send-attempt.repository';
 import { classifySmtpFailure } from './smtp-error';
+
+const notificationEventTypePlaceholders = notificationEventTypes
+  .map(() => '?')
+  .join(', ');
 
 /**
  * Consumes one delivery job.
@@ -165,6 +172,7 @@ export class DeliveryWorkerService
         `SELECT id, event_type AS eventType, payload
        FROM outbox_events
        WHERE id = ?
+         AND event_type IN (${notificationEventTypePlaceholders})
          AND status = ?
          AND locked_by = ?
          AND attempts = ?
@@ -172,6 +180,7 @@ export class DeliveryWorkerService
        FOR UPDATE`,
         [
           data.outboxEventId,
+          ...notificationEventTypes,
           OutboxEventStatus.Processing,
           data.claimToken,
           data.attempt,
@@ -189,10 +198,13 @@ export class DeliveryWorkerService
     await manager.query(
       `UPDATE outbox_events
        SET lock_expires_at = NOW(6) + INTERVAL ? MICROSECOND
-       WHERE id = ? AND locked_by = ?`,
+       WHERE id = ?
+         AND event_type IN (${notificationEventTypePlaceholders})
+         AND locked_by = ?`,
       [
         this.configuration.relay.claimLeaseMs * 1_000,
         data.outboxEventId,
+        ...notificationEventTypes,
         data.claimToken,
       ],
     );

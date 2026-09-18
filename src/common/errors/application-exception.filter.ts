@@ -38,6 +38,9 @@ interface ErrorTranslations {
     bookingVersionRequired: string;
     conflict: string;
     databaseOverloaded: string;
+    exportCreateDisabled: string;
+    exportCreateRateLimited: string;
+    exportCreateUnavailable: string;
     forbidden: string;
     identityConflict: string;
     idempotencyKeyInvalid: string;

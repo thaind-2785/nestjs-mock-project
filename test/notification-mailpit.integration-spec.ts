@@ -1,13 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { OutboxEventStatus } from '../src/common/outbox/outbox.enums';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import mysql from 'mysql2/promise';
 import { DataSource } from 'typeorm';
-import {
-  BookingStatus,
-  OutboxEventStatus,
-} from '../src/bookings/entities/booking.enums';
-import { OutboxEvent } from '../src/bookings/entities/outbox-event.entity';
+import { BookingStatus } from '../src/bookings/entities/booking.enums';
+import { OutboxEvent } from '../src/common/outbox/outbox-event.entity';
 import { createDatabaseConfiguration } from '../src/config/database.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
@@ -24,7 +22,7 @@ import {
   EmailDeliveryStatus,
 } from '../src/notifications/entities/notification.enums';
 import { EmailTemplateService } from '../src/notifications/email-template.service';
-import { OutboxClaimRepository } from '../src/notifications/outbox-claim.repository';
+import { OutboxClaimRepository } from '../src/common/outbox/outbox-claim.repository';
 import { OutboxDispatcherService } from '../src/notifications/outbox-dispatcher.service';
 import type { NotificationJobData } from '../src/notifications/outbox-dispatcher.types';
 import { SmtpEmailSender } from '../src/notifications/smtp-email-sender';

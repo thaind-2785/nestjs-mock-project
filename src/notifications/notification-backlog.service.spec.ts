@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
+import { OutboxEventStatus } from '../common/outbox/outbox.enums';
 import type { ConfigType } from '@nestjs/config';
 import type { Queue } from 'bullmq';
-import { OutboxEventStatus } from '../bookings/entities/booking.enums';
 import type { notificationsConfig } from '../config/notifications.config';
 import type { DatabaseConnectionService } from '../database/database-connection.service';
 import { EmailDeliveryStatus } from './entities/notification.enums';

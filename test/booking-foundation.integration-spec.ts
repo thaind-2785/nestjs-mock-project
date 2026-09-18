@@ -1,30 +1,29 @@
 import { randomUUID } from 'node:crypto';
+import { OutboxEventStatus } from '../src/common/outbox/outbox.enums';
+import { IdempotencyKeyStatus } from '../src/common/idempotency/idempotency.enums';
 import { Logger } from '@nestjs/common';
 import mysql from 'mysql2/promise';
 import { DataSource, EntityManager, getMetadataArgsStorage } from 'typeorm';
-import { AuthIdentity } from '../src/auth/entities/auth-identity.entity';
-import { AuthSession } from '../src/auth/entities/auth-session.entity';
 import { BookingChangeHistory } from '../src/bookings/entities/booking-change-history.entity';
 import { BookingStatusHistory } from '../src/bookings/entities/booking-status-history.entity';
 import {
   BookingActorType,
   BookingStatus,
-  IdempotencyKeyStatus,
-  OutboxEventStatus,
 } from '../src/bookings/entities/booking.enums';
 import { Booking } from '../src/bookings/entities/booking.entity';
-import { IdempotencyKey } from '../src/bookings/entities/idempotency-key.entity';
-import { OutboxEvent } from '../src/bookings/entities/outbox-event.entity';
+import { IdempotencyKey } from '../src/common/idempotency/idempotency-key.entity';
+import { OutboxEvent } from '../src/common/outbox/outbox-event.entity';
 import { BookingsService } from '../src/bookings/bookings.service';
 import { BookingRoomTimeUsageRepository } from '../src/bookings/room-time-usage.repository';
 import { BookingCreateResponse } from '../src/bookings/booking-create.types';
 import { createBookingsConfiguration } from '../src/config/bookings.config';
+import { IdempotencyRepository } from '../src/common/idempotency/idempotency.repository';
+import { applicationEntities } from '../src/database/application-entities';
 import { createDatabaseConfiguration } from '../src/config/database.config';
+import { createIdempotencyConfiguration } from '../src/config/idempotency.config';
 import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
 import { createTypeOrmOptions } from '../src/database/database.options';
-import { Amenity } from '../src/rooms/entities/amenity.entity';
-import { RoomAmenity } from '../src/rooms/entities/room-amenity.entity';
 import { RoomTime } from '../src/rooms/entities/room-time.entity';
 import { RoomType } from '../src/rooms/entities/room-type.entity';
 import { Room } from '../src/rooms/entities/room.entity';
@@ -32,8 +31,6 @@ import { RoomStatus, RoomTimeStatus } from '../src/rooms/entities/room.enums';
 import { lockRoom } from '../src/rooms/room-lock';
 import { RoomTimesService } from '../src/rooms/room-times.service';
 import { DatabaseConnectionService } from '../src/database/database-connection.service';
-import { UserRoleHistory } from '../src/users/entities/user-role-history.entity';
-import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
 import { UserRole, UserStatus } from '../src/users/entities/user.enums';
 import { applicationMigrations } from './fixtures/application-migrations';
@@ -82,23 +79,7 @@ describe('Phase 4 booking foundation persistence', () => {
           MYSQL_DATABASE: disposableDatabase,
         }),
         {
-          entities: [
-            User,
-            AuthIdentity,
-            AuthSession,
-            UserStatusHistory,
-            UserRoleHistory,
-            RoomType,
-            Amenity,
-            Room,
-            RoomAmenity,
-            RoomTime,
-            Booking,
-            BookingStatusHistory,
-            BookingChangeHistory,
-            IdempotencyKey,
-            OutboxEvent,
-          ],
+          entities: applicationEntities,
           migrations: applicationMigrations,
         },
       ),
@@ -107,6 +88,7 @@ describe('Phase 4 booking foundation persistence', () => {
     await dataSource.runMigrations();
     bookings = new BookingsService(
       dataSource,
+      new IdempotencyRepository(createIdempotencyConfiguration(environment)),
       createBookingsConfiguration(environment),
     );
     usage = new BookingRoomTimeUsageRepository();
@@ -1409,12 +1391,14 @@ describe('Phase 4 booking foundation persistence', () => {
   });
 
   it('reverts only the Phase 4 schema and reapplies it cleanly', async () => {
-    // Three Phase 5 migrations are stacked on this one and come off first: the backlog
-    // index, then the acceptance record, then the delivery schema. The two schemas
-    // each refuse their own revert once the evidence they protect exists, which this
-    // suite never writes; the index guards nothing and always reverts. The count is
-    // deliberately explicit - a new migration should make a maintainer look at this
-    // test rather than let a loop quietly absorb it.
+    // Four later migrations are stacked on this one and come off first: the Phase 6
+    // export schema, the backlog index, the acceptance record, then the delivery
+    // schema. The two delivery schemas each refuse their own revert once the evidence
+    // they protect exists, which this suite never writes; the index and the export
+    // schema guard nothing here and always revert. The count is deliberately explicit
+    // - a new migration should make a maintainer look at this test rather than let a
+    // loop quietly absorb it.
+    await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();

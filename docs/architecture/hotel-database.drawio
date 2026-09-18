@@ -189,8 +189,8 @@
         <mxCell id="email-deliveries" value="&lt;b&gt;email_deliveries&lt;/b&gt;&lt;br&gt;PK id BIGINT&lt;br&gt;FK outbox_event_id -&amp;gt; outbox_events.id&lt;br&gt;recipient VARCHAR(255)&lt;br&gt;template_key VARCHAR(100)&lt;br&gt;locale ENUM(en, vi)&lt;br&gt;status ENUM(PENDING, SENT, FAILED)&lt;br&gt;attempts SMALLINT&lt;br&gt;provider_message_id VARCHAR(255) NULL&lt;br&gt;last_error_code VARCHAR(64) NULL&lt;br&gt;sent_at DATETIME NULL&lt;br&gt;failed_at DATETIME NULL&lt;br&gt;created_at, updated_at&lt;br&gt;UK(outbox_event_id, template_key)" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="o1">
           <mxGeometry x="850" y="120" width="350" height="320" as="geometry" />
         </mxCell>
-        <mxCell id="export-jobs" value="&lt;b&gt;export_jobs&lt;/b&gt;&lt;br&gt;PK id CHAR(36)&lt;br&gt;FK requested_by -&amp;gt; users.id&lt;br&gt;status ENUM&lt;br&gt;filters JSON&lt;br&gt;object_key VARCHAR(1024) NULL&lt;br&gt;expires_at DATETIME NULL&lt;br&gt;created_at, updated_at" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="o1">
-          <mxGeometry x="850" y="450" width="330" height="210" as="geometry" />
+        <mxCell id="export-jobs" value="&lt;b&gt;export_jobs&lt;/b&gt;&lt;br&gt;PK id CHAR(36)&lt;br&gt;FK requested_by -&amp;gt; users.id&lt;br&gt;UK FK outbox_event_id -&amp;gt; outbox_events.id&lt;br&gt;status ENUM(QUEUED, PROCESSING, COMPLETED, FAILED)&lt;br&gt;filters JSON&lt;br&gt;object_key VARCHAR(512) NULL&lt;br&gt;row_count BIGINT NULL&lt;br&gt;file_size_bytes BIGINT NULL&lt;br&gt;content_sha256 CHAR(64) NULL&lt;br&gt;started_at DATETIME NULL&lt;br&gt;completed_at DATETIME NULL&lt;br&gt;expires_at DATETIME NULL&lt;br&gt;failed_at DATETIME NULL&lt;br&gt;last_error_code VARCHAR(64) NULL&lt;br&gt;created_at, updated_at" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="o1">
+          <mxGeometry x="850" y="470" width="350" height="330" as="geometry" />
         </mxCell>
         <mxCell id="schedule-runs" value="&lt;b&gt;schedule_runs&lt;/b&gt;&lt;br&gt;PK id BIGINT&lt;br&gt;job_key VARCHAR(100)&lt;br&gt;period_key VARCHAR(100)&lt;br&gt;status ENUM&lt;br&gt;started_at DATETIME&lt;br&gt;completed_at DATETIME NULL&lt;br&gt;UK(job_key, period_key)" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="o1">
           <mxGeometry x="1350" y="120" width="320" height="210" as="geometry" />
@@ -214,6 +214,9 @@
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="oe-outbox-email" value="1 : N" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="o1" source="outbox" target="email-deliveries">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="oe-outbox-export" value="1 : 1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=ERone;startFill=0;endArrow=ERone;endFill=0;exitX=1;exitY=0.75;entryX=0;entryY=0.25;" edge="1" parent="o1" source="outbox" target="export-jobs">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="oe-user-export" value="1 : N" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;exitX=1;exitY=0.9;entryX=0;entryY=0.9;" edge="1" parent="o1" source="ops-users" target="export-jobs">

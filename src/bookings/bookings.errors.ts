@@ -9,18 +9,6 @@ export const bookingsErrors = {
       'BOOKING_CHANGE_EMPTY',
       errorMessageKeys.bookingChangeEmpty,
     ),
-  idempotencyKeyInvalid: () =>
-    new ApplicationException(
-      HttpStatus.BAD_REQUEST,
-      'IDEMPOTENCY_KEY_INVALID',
-      errorMessageKeys.idempotencyKeyInvalid,
-    ),
-  idempotencyKeyReused: () =>
-    new ApplicationException(
-      HttpStatus.CONFLICT,
-      'IDEMPOTENCY_KEY_REUSED',
-      errorMessageKeys.idempotencyKeyReused,
-    ),
   createRateLimited: () =>
     new ApplicationException(
       HttpStatus.TOO_MANY_REQUESTS,

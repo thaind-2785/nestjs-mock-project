@@ -1,15 +1,20 @@
 import { Injectable } from '@nestjs/common';
+import { OutboxEventStatus } from '../common/outbox/outbox.enums';
 import { EntityManager } from 'typeorm';
-import { OutboxEventStatus } from '../bookings/entities/booking.enums';
 import { EmailDeliveryStatus } from './entities/notification.enums';
 import { redriveOutcomeCodes } from './notification-redrive.constants';
 import { SendAttemptRepository } from './send-attempt.repository';
+import { notificationEventTypes } from './notification-event';
 import type {
   LockedDeliveryRow,
   LockedOutboxRow,
   RedriveRequest,
   RedriveResult,
 } from './notification-redrive.types';
+
+const notificationEventTypePlaceholders = notificationEventTypes
+  .map(() => '?')
+  .join(', ');
 
 /**
  * Returns one terminally failed event to the pipeline, and refuses every other state.
@@ -105,13 +110,20 @@ export class NotificationRedriveRepository {
     };
   }
 
+  /**
+   * Scoped to the mail families, so an operator who pastes an export job's outbox id
+   * into the redrive CLI gets `EVENT_NOT_FOUND` rather than a `PENDING` export event
+   * with its attempts reset and no delivery rows to match it.
+   */
   private async lockEvent(
     manager: EntityManager,
     id: string,
   ): Promise<LockedOutboxRow | undefined> {
     const rows: LockedOutboxRow[] = await manager.query(
-      `SELECT status FROM outbox_events WHERE id = ? FOR UPDATE`,
-      [id],
+      `SELECT status FROM outbox_events
+       WHERE id = ? AND event_type IN (${notificationEventTypePlaceholders})
+       FOR UPDATE`,
+      [id, ...notificationEventTypes],
     );
     return rows[0];
   }
@@ -148,8 +160,15 @@ export class NotificationRedriveRepository {
            lock_expires_at = NULL,
            locked_by = NULL,
            attempts = 0
-       WHERE id = ? AND status = ?`,
-      [OutboxEventStatus.Pending, id, OutboxEventStatus.Failed],
+       WHERE id = ?
+         AND event_type IN (${notificationEventTypePlaceholders})
+         AND status = ?`,
+      [
+        OutboxEventStatus.Pending,
+        id,
+        ...notificationEventTypes,
+        OutboxEventStatus.Failed,
+      ],
     );
     return result.affectedRows ?? 0;
   }

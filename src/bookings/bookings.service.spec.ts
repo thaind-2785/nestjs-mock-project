@@ -1,6 +1,7 @@
 import { DataSource, EntityManager } from 'typeorm';
+import { IdempotencyKeyStatus } from '../common/idempotency/idempotency.enums';
+import { IdempotencyRepository } from '../common/idempotency/idempotency.repository';
 import { BookingsService } from './bookings.service';
-import { IdempotencyKeyStatus } from './entities/booking.enums';
 
 describe('BookingsService', () => {
   it('replays a completed request before applying today-date policy again', async () => {
@@ -35,10 +36,10 @@ describe('BookingsService', () => {
         transaction: (callback: (transaction: EntityManager) => unknown) =>
           callback(manager),
       } as unknown as DataSource,
+      new IdempotencyRepository({ retentionHours: 24 }),
       {
         hotelTimezone: 'Asia/Ho_Chi_Minh',
         createRateLimit: { max: 10, windowSeconds: 60 },
-        idempotencyRetentionHours: 24,
       },
     );
     const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();
@@ -83,10 +84,10 @@ describe('BookingsService', () => {
         transaction: (callback: (transaction: EntityManager) => unknown) =>
           callback(manager),
       } as unknown as DataSource,
+      new IdempotencyRepository({ retentionHours: 24 }),
       {
         hotelTimezone: 'Asia/Ho_Chi_Minh',
         createRateLimit: { max: 10, windowSeconds: 60 },
-        idempotencyRetentionHours: 24,
       },
     );
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();

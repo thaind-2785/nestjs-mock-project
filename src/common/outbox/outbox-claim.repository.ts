@@ -1,13 +1,34 @@
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
-import { OutboxEventStatus } from '../bookings/entities/booking.enums';
+import { OutboxEventStatus } from './outbox.enums';
 import type {
   ClaimedRow,
   EligibleRow,
   OutboxClaim,
   OutboxClaimInput,
+  OutboxEventTypeAllowlist,
   OutboxReleaseInput,
 } from './outbox-claim.types';
+
+/**
+ * Builds the event-type restriction every statement in this protocol carries.
+ *
+ * An empty allowlist throws rather than producing `IN ()`, which MySQL rejects, and
+ * rather than being quietly dropped, which would produce a dispatcher that claims
+ * everything - the exact failure this whole mechanism exists to prevent.
+ */
+function eventTypePredicate(eventTypes: OutboxEventTypeAllowlist): {
+  predicate: string;
+  parameters: string[];
+} {
+  if (eventTypes.length === 0) {
+    throw new Error('An outbox claim requires at least one event type');
+  }
+  return {
+    predicate: `event_type IN (${eventTypes.map(() => '?').join(', ')})`,
+    parameters: [...eventTypes],
+  };
+}
 
 /**
  * Orders the rows one batch claimed. SQL sorts only by `available_at`, because that
@@ -31,6 +52,12 @@ function compareEligible(left: EligibleRow, right: EligibleRow): number {
  * steps over rows the first already holds instead of blocking behind them, and the
  * whole claim commits before any Redis call: a dispatcher that dies mid-handoff must
  * leave a lease that expires, not a row nobody can find.
+ *
+ * Every statement is scoped to the caller's own event types, in SQL, before `LIMIT`.
+ * That placement is the invariant: a dispatcher that filtered a claimed batch in Node
+ * would already hold leases on the other family's rows, making them unavailable to
+ * their real owner until expiry. Filtering before the lock means the other family is
+ * never touched at all.
  *
  * `claimBatchIsolation` is load-bearing, not decoration. The recovery statement can
  * only use the `status` part of the claim index and filters `lock_expires_at` per
@@ -56,17 +83,18 @@ export class OutboxClaimRepository {
     // new arrivals every time would never look at them, and a steady stream of
     // arrivals - exactly what a recovering provider produces - would strand a crashed
     // worker's events in PROCESSING for as long as the backlog lasted.
+    const types = eventTypePredicate(input.eventTypes);
     const expired = await this.selectEligible(manager, {
-      predicate: 'status = ? AND lock_expires_at <= NOW(6)',
-      parameters: [OutboxEventStatus.Processing],
+      predicate: `${types.predicate} AND status = ? AND lock_expires_at <= NOW(6)`,
+      parameters: [...types.parameters, OutboxEventStatus.Processing],
       limit: input.batchSize,
     });
     const remaining = input.batchSize - expired.length;
     const due =
       remaining > 0
         ? await this.selectEligible(manager, {
-            predicate: 'status = ? AND available_at <= NOW(6)',
-            parameters: [OutboxEventStatus.Pending],
+            predicate: `${types.predicate} AND status = ? AND available_at <= NOW(6)`,
+            parameters: [...types.parameters, OutboxEventStatus.Pending],
             limit: remaining,
           })
         : [];
@@ -75,6 +103,10 @@ export class OutboxClaimRepository {
 
     const ids = eligible.map((row) => row.id);
     const placeholders = ids.map(() => '?').join(', ');
+    // The allowlist is repeated here although these ids came from a select that
+    // already applied it. The two statements are what a reviewer reads as the claim,
+    // and a predicate that is true only because of another statement further up is
+    // one edit away from not being true at all.
     await manager.query(
       `UPDATE outbox_events
        SET status = ?,
@@ -82,12 +114,14 @@ export class OutboxClaimRepository {
            lock_expires_at = NOW(6) + INTERVAL ? MICROSECOND,
            locked_by = ?,
            attempts = attempts + 1
-       WHERE id IN (${placeholders})`,
+       WHERE id IN (${placeholders})
+         AND ${types.predicate}`,
       [
         OutboxEventStatus.Processing,
         input.leaseMs * 1_000,
         input.claimToken,
         ...ids,
+        ...types.parameters,
       ],
     );
 
@@ -138,6 +172,7 @@ export class OutboxClaimRepository {
     manager: EntityManager,
     input: OutboxReleaseInput,
   ): Promise<boolean> {
+    const releaseTypes = eventTypePredicate(input.eventTypes);
     const result: { affectedRows?: number } = await manager.query(
       `UPDATE outbox_events
        SET status = ?,
@@ -148,6 +183,7 @@ export class OutboxClaimRepository {
            last_error_code = ?,
            attempts = attempts - 1
        WHERE id = ?
+         AND ${releaseTypes.predicate}
          AND status = ?
          AND locked_by = ?
          AND attempts = ?`,
@@ -156,6 +192,7 @@ export class OutboxClaimRepository {
         input.retryInMs * 1_000,
         input.errorCode,
         input.id,
+        ...releaseTypes.parameters,
         OutboxEventStatus.Processing,
         input.claimToken,
         input.attempt,

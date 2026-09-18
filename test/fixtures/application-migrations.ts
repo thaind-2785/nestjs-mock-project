@@ -4,6 +4,7 @@ import { CreateBookingCoreSchema1788580000000 } from '../../src/database/migrati
 import { CreateNotificationDeliverySchema1789370000000 } from '../../src/database/migrations/1789370000000-CreateNotificationDeliverySchema';
 import { CreateEmailSendAttemptSchema1789460000000 } from '../../src/database/migrations/1789460000000-CreateEmailSendAttemptSchema';
 import { AddDeliveryBacklogIndex1789550000000 } from '../../src/database/migrations/1789550000000-AddDeliveryBacklogIndex';
+import { CreateRoomExportSchema1789640000000 } from '../../src/database/migrations/1789640000000-CreateRoomExportSchema';
 
 /**
  * The ordered migration list every suite that builds a disposable database runs.
@@ -22,4 +23,5 @@ export const applicationMigrations = [
   CreateNotificationDeliverySchema1789370000000,
   CreateEmailSendAttemptSchema1789460000000,
   AddDeliveryBacklogIndex1789550000000,
+  CreateRoomExportSchema1789640000000,
 ];

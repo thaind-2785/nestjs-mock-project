@@ -85,7 +85,7 @@
 | `P6-T03` | Admin creates exactly one durable, rate-limited export request          | Use P6-T02 schema             | Controller/service/idempotency integration + E2E    | Done    |
 | `P6-T04` | A bounded room snapshot becomes a safe XLSX in a Worker Thread          | None                          | Query-shape, XLSX package, resource/process tests   | Done    |
 | `P6-T05` | BullMQ attempts recover, upload privately, and finalize exactly one key | Use P6-T02 and cleanup schema | MySQL/Redis/MinIO crash/concurrency integration     | Done    |
-| `P6-T06` | Requester polls status and downloads only an unexpired private result   | Use P6-T02 schema             | Ownership/expiry/presign API integration + E2E      | Pending |
+| `P6-T06` | Requester polls status and downloads only an unexpired private result   | Use P6-T02 schema             | Ownership/expiry/presign API integration + E2E      | Done    |
 | `P6-T07` | Operations, full journey, docs, and Phase 6 handoff are complete        | Revert/reapply proof          | Process E2E, Compose, full gate, independent review | Pending |
 
 ## Pull request sequence
@@ -513,6 +513,23 @@ gate is not the checklist disposition.
   errors. Job, attempt, counts and a stable code only - never the object key, the
   filters, the provider text or a stack.
 
+### `P6-T06` evidence
+
+- **Constants/contracts:** `RoomExportViewStatus` is its own enum because `EXPIRED` is
+  a view rather than a stored state; the projected row and the TTL contract live in
+  `room-export-view.types.ts`.
+- **Projection/indexes:** The read selects only the columns the mapper uses plus
+  `NOW(6)`, addressed by `(id, requested_by)` - which the `idx_export_jobs_owner` index
+  leads on. `outbox_event_id` and `content_sha256` are never selected.
+- **Batching/N+1:** One query and at most one provider call per poll.
+- **Responsibility/reuse:** The controller translates HTTP; status, expiry, TTL and the
+  response shape are four separate pure functions, each testable without a database.
+  Presigning reuses the shared storage adapter.
+- **Concurrency:** N/A - the read takes no lock and mutates nothing. A presign failure
+  deliberately leaves the completed job untouched, so an outage cannot become data loss.
+- **Observability:** Nothing is logged on the read path. The response carries no object
+  key as a field, no content hash, and no error cause.
+
 ## Documentation / OpenAPI impact
 
 - Add both export routes and every stable status/error/ownership/idempotency field to
@@ -699,6 +716,23 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   resolves relations across the whole registered set, so it fails at `initialize` with
   `Entity metadata for User#identities was not found`. Naming the transitive graph by
   hand is a puzzle, not a decision.
+
+- 2026-09-18 (`P6-T06`): expiry is decided at read time against `NOW(6)` returned by
+  the same query as the row, not against the API host's clock. A host drifting fast
+  would shorten every result's life; one drifting slow would hand out URLs for results
+  Phase 7 cleanup is already entitled to delete. The expiry instant itself counts as
+  expired, because the boundary has to belong to one side and that is the safe one.
+- 2026-09-18 (`P6-T06`): the download URL is capped at `min(configured TTL, remaining
+lifetime)`, rounded down. Without the cap a job expiring in thirty seconds would still
+  hand out a five-minute URL, and that URL keeps working after the result is gone - a
+  presigned URL is checked by the object store, not by this application.
+- 2026-09-18 (`P6-T06`): a presigned URL necessarily contains the object key, because
+  it is a signature over a path. `SPEC-009` said keys are "never returned to clients",
+  which the implementation cannot satisfy literally while also issuing presigned URLs.
+  The spec now states the rule it actually means: the key is never a field a client can
+  reuse, and never in a log or a queue payload. The claim token inside the key grants
+  nothing through this API - no route accepts one - so the residual exposure is a value
+  the owner of the job could not act on.
 
 - 2026-09-18 (`P6-T05`): the attempt runs as four stages with two short transactions
   and the expensive work between them, and the claim is revalidated before each stage

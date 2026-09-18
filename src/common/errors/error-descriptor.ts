@@ -34,6 +34,7 @@ export const errorMessageKeys = {
   exportCreateDisabled: 'errors.exportCreateDisabled',
   exportCreateRateLimited: 'errors.exportCreateRateLimited',
   exportCreateUnavailable: 'errors.exportCreateUnavailable',
+  exportNotFound: 'errors.exportNotFound',
   exportRowLimitExceeded: 'errors.exportRowLimitExceeded',
   exportSnapshotTooLarge: 'errors.exportSnapshotTooLarge',
   exportStorageUnavailable: 'errors.exportStorageUnavailable',

@@ -6,6 +6,7 @@ import { ObjectStorageProvider } from '../common/storage/object-storage.provider
 import { reportsConfig } from '../config/reports.config';
 import {
   roomExportContentType,
+  roomExportDownloadFilename,
   roomExportObjectKeyPrefix,
 } from './room-export.constants';
 import { roomExportErrors } from './room-export.errors';
@@ -55,6 +56,26 @@ export class RoomExportStorageService {
         checksumSha256: Buffer.from(upload.contentSha256, 'hex').toString(
           'base64',
         ),
+      }),
+    );
+  }
+
+  /**
+   * A short-lived read of a private object, with the filename a browser should save it
+   * as and the spreadsheet content type. The TTL is decided by the caller because it
+   * is capped by the result's remaining life, not by configuration alone.
+   */
+  async createDownloadUrl(input: {
+    objectKey: string;
+    jobId: string;
+    ttlSeconds: number;
+  }): Promise<string> {
+    return this.translate(() =>
+      this.storage.createPresignedGetUrl({
+        objectKey: input.objectKey,
+        ttlSeconds: input.ttlSeconds,
+        downloadFilename: roomExportDownloadFilename(input.jobId),
+        contentType: roomExportContentType,
       }),
     );
   }

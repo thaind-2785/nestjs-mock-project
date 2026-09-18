@@ -49,6 +49,17 @@ export const roomExportErrors = {
       undefined,
       cause,
     ),
+  /**
+   * A missing job, a job owned by another administrator, and a well-formed id nobody
+   * owns all answer with this. One response for three states is the point: a requester
+   * must not be able to learn that someone else's export exists.
+   */
+  notFound: () =>
+    new ApplicationException(
+      HttpStatus.NOT_FOUND,
+      'EXPORT_NOT_FOUND',
+      errorMessageKeys.exportNotFound,
+    ),
   /** Returned while the export boundary is disabled, so the rollout has a closed door. */
   createDisabled: () =>
     new ApplicationException(

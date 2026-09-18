@@ -31,6 +31,7 @@
   "exportCreateDisabled": "Room export creation is currently disabled.",
   "exportCreateRateLimited": "Too many export requests. Please try again later.",
   "exportCreateUnavailable": "Room export creation is temporarily unavailable.",
+  "exportNotFound": "Export job not found.",
   "exportRowLimitExceeded": "The export matches too many rooms. Narrow the filters and try again.",
   "exportSnapshotTooLarge": "The export data is too large. Narrow the filters and try again.",
   "exportStorageUnavailable": "Export storage is temporarily unavailable.",

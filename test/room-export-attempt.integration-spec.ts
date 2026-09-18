@@ -22,6 +22,8 @@ import { RoomExportConsumerService } from '../src/reports/room-export-consumer.s
 import { RoomExportGeneratorService } from '../src/reports/room-export-generator.service';
 import { RoomExportSnapshotRepository } from '../src/reports/room-export-snapshot.repository';
 import { RoomExportStorageService } from '../src/reports/room-export-storage.service';
+import { RoomExportViewRepository } from '../src/reports/room-export-view.repository';
+import { RoomExportViewService } from '../src/reports/room-export-view.service';
 import { roomExportEventType } from '../src/reports/room-export.constants';
 import { RoomStatus } from '../src/rooms/entities/room.enums';
 import { applicationMigrations } from './fixtures/application-migrations';
@@ -211,6 +213,68 @@ describe('Phase 6 room export attempt', () => {
     expect(await countSafeguards()).toBe(0);
   });
 
+  it('hands the requester a signed URL that actually downloads the workbook', async () => {
+    const claimed = await seedClaimedJob();
+    await consumer().process(claimed.job);
+
+    const view = await viewService().getOwned(claimed.jobId, adminId);
+
+    expect(view.status).toBe('COMPLETED');
+    expect(view.rowCount).toBe(3);
+    expect(view.download).toBeDefined();
+    // The URL is the only way in: the bucket is private, so the same object without a
+    // signature must be refused.
+    const signed = view.download?.url ?? '';
+    const response = await fetch(signed);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    expect(response.headers.get('content-disposition')).toContain(
+      `rooms-export-${claimed.jobId}.xlsx`,
+    );
+    const body = Buffer.from(await response.arrayBuffer());
+    // A real XLSX is a ZIP; `PK` is its signature.
+    expect(body.subarray(0, 2).toString()).toBe('PK');
+    expect(body.byteLength).toBe(view.fileSizeBytes);
+
+    const unsigned = await fetch(signed.split('?')[0]);
+    expect(unsigned.status).toBe(403);
+
+    // The key is never a field of its own. It does appear inside the signed URL,
+    // because an S3 presigned URL is a signature over a path - there is no way to sign
+    // a read of an object without naming it. What the contract forbids is returning the
+    // key as data a client could reuse, and putting it in logs or queue payloads.
+    expect(view).not.toHaveProperty('objectKey');
+    const withoutDownload = { ...view, download: undefined };
+    expect(JSON.stringify(withoutDownload)).not.toContain('exports/rooms');
+  });
+
+  it('caps the URL at what remains of the result, and refuses once it lapses', async () => {
+    const claimed = await seedClaimedJob();
+    await consumer().process(claimed.job);
+
+    // Thirty seconds left against a five-minute configured lifetime.
+    await dataSource.query(
+      'UPDATE export_jobs SET expires_at = NOW(6) + INTERVAL 30 SECOND WHERE id = ?',
+      [claimed.jobId],
+    );
+    const nearExpiry = await viewService().getOwned(claimed.jobId, adminId);
+    const expiresAt = new Date(nearExpiry.download?.expiresAt ?? 0).getTime();
+    expect(expiresAt - Date.now()).toBeLessThanOrEqual(31_000);
+
+    // Past its expiry: the metadata survives so the requester can see what happened,
+    // and the one field that would still have worked is gone.
+    await dataSource.query(
+      'UPDATE export_jobs SET expires_at = NOW(6) - INTERVAL 1 SECOND WHERE id = ?',
+      [claimed.jobId],
+    );
+    const expired = await viewService().getOwned(claimed.jobId, adminId);
+    expect(expired.status).toBe('EXPIRED');
+    expect(expired.download).toBeUndefined();
+    expect(expired.rowCount).toBe(3);
+  });
+
   it('does nothing for a duplicate job whose claim has moved on', async () => {
     const claimed = await seedClaimedJob();
     // Another dispatcher recovered the lease and issued a new token.
@@ -384,6 +448,24 @@ describe('Phase 6 room export attempt', () => {
     // Thread built a workbook and an object store accepted it.
     expect(observed).toEqual([true, true]);
   });
+
+  function viewService(): RoomExportViewService {
+    const environment = validateEnvironment(process.env);
+    const configuration = createReportsConfiguration({
+      ...environment,
+      REPORT_EXPORT_ENABLED: true,
+    });
+    const storage = createObjectStorageConfiguration(environment);
+    const provider = new ObjectStorageProvider(
+      new S3Client(createObjectStorageClientOptions(storage)),
+      storage,
+    );
+    return new RoomExportViewService(
+      new RoomExportViewRepository(dataSource),
+      new RoomExportStorageService(provider, configuration),
+      configuration,
+    );
+  }
 
   interface ConsumerProbes {
     mutate?: (draft: ReportsConfiguration) => void;

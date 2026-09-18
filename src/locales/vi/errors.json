@@ -31,6 +31,7 @@
   "exportCreateDisabled": "Chức năng xuất danh mục phòng đang tạm tắt.",
   "exportCreateRateLimited": "Bạn đã yêu cầu xuất dữ liệu quá nhiều lần. Hãy đợi một lát rồi thử lại.",
   "exportCreateUnavailable": "Chức năng xuất danh mục phòng tạm thời không sẵn sàng.",
+  "exportNotFound": "Không tìm thấy yêu cầu xuất dữ liệu.",
   "exportRowLimitExceeded": "Bản xuất khớp quá nhiều phòng. Hãy thu hẹp bộ lọc rồi thử lại.",
   "exportSnapshotTooLarge": "Dữ liệu xuất quá lớn. Hãy thu hẹp bộ lọc rồi thử lại.",
   "exportStorageUnavailable": "Kho lưu trữ bản xuất tạm thời không sẵn sàng.",

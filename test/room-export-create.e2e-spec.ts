@@ -266,6 +266,81 @@ describe('Phase 6 room export create (e2e)', () => {
       'EXPORT_CREATE_RATE_LIMITED',
     );
     expect(await countJobs()).toBe(1);
+
+    // --- polling -------------------------------------------------------------
+    const polled = await adminBrowser
+      .get(body.pollPath)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(200);
+    // A poll response may carry a bearer secret, so it must not be cached anywhere.
+    expect(polled.headers['cache-control']).toBe('no-store');
+    const view = polled.body as {
+      id: string;
+      status: string;
+      filters: Record<string, unknown>;
+      download?: unknown;
+    };
+    expect(view.id).toBe(body.id);
+    // No consumer is running in this suite, so the job is still queued - which is the
+    // state that must carry no result and no URL.
+    expect(view.status).toBe('QUEUED');
+    expect(view.download).toBeUndefined();
+    expect(view.filters).toEqual({ status: 'ACTIVE', beds: 2, view: 'CITY' });
+    // The object key is server-generated and never leaves the server.
+    expect(JSON.stringify(view)).not.toContain('exports/rooms');
+
+    // A malformed id is a validation failure, not a not-found.
+    await adminBrowser
+      .get('/api/v1/admin/exports/not-a-uuid')
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(400);
+
+    // A well-formed id nobody owns is indistinguishable from someone else's.
+    const absent = await adminBrowser
+      .get(`/api/v1/admin/exports/${randomUUID()}`)
+      .set('Authorization', `Bearer ${adminAccess}`)
+      .expect(404);
+    expect((absent.body as { code: string }).code).toBe('EXPORT_NOT_FOUND');
+
+    // A second administrator gets exactly the same answer for a job that does exist,
+    // so ownership cannot be probed by comparing responses.
+    google.claims = {
+      subject: 'export-admin-2',
+      email: 'export-admin-2@example.com',
+      displayName: 'Second Admin',
+    };
+    const otherBrowser = request.agent(app.getHttpServer());
+    const otherAccess = await login(otherBrowser);
+    const otherProfile = await otherBrowser
+      .get('/api/v1/me')
+      .set('Authorization', `Bearer ${otherAccess}`)
+      .expect(200);
+    await app.get(AdminBootstrapService).promote({
+      userId: (otherProfile.body as { id: string }).id,
+      email: 'export-admin-2@example.com',
+      reason: 'P6-T06 E2E bootstrap',
+    });
+
+    const foreign = await otherBrowser
+      .get(body.pollPath)
+      .set('Authorization', `Bearer ${otherAccess}`)
+      .expect(404);
+    // Identical but for the per-request id, so nothing in the response distinguishes
+    // "this job is not yours" from "no such job".
+    const withoutRequestId = (envelope: unknown) => {
+      const { requestId, ...rest } = envelope as { requestId: string };
+      void requestId;
+      return rest;
+    };
+    expect(withoutRequestId(foreign.body)).toEqual(
+      withoutRequestId(absent.body),
+    );
+
+    // And an ordinary user never reaches the route at all.
+    await userBrowser
+      .get(body.pollPath)
+      .set('Authorization', `Bearer ${userAccess}`)
+      .expect(403);
   });
 
   async function login(

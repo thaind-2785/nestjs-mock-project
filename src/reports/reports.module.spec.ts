@@ -86,9 +86,13 @@ describe('report export module boundaries', () => {
     // Nest runs a module's shutdown hooks concurrently, so a second owner of the same
     // handle is not redundancy: `quit` on a socket the first owner has already ended
     // rejects, `context.close()` rejects with it, and the drain reports an undrained
-    // worker on every clean deploy. The dispatcher owns the producer queue and its
-    // client because it must stop polling before either closes; the consumer owns the
-    // worker client for the same reason.
+    // worker on every clean deploy.
+    //
+    // The list is every provider with a shutdown hook rather than only the ones holding
+    // a connection, because nothing here can read what a hook closes. It is therefore a
+    // decision that has to be made again each time a provider gains a hook, which is
+    // the point: adding one turns this red and the person adding it has to say which of
+    // the three cases it is.
     const closers = providersOf(ReportsWorkerModule)
       .filter(
         (provider): provider is new (...args: never[]) => object =>
@@ -99,7 +103,12 @@ describe('report export module boundaries', () => {
       .sort();
 
     expect(closers).toEqual([
+      // Stops its sample loop. Holds no handle: it borrows the producer queue the
+      // dispatcher owns and the pooled connection the database module owns.
+      'RoomExportBacklogService',
+      // Owns the consumer's blocking Redis client, and stops the BullMQ worker first.
       'RoomExportConsumerService',
+      // Owns the producer queue and its client, and stops polling before either closes.
       'RoomExportDispatcherService',
     ]);
   });

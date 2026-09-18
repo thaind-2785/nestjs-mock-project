@@ -1,6 +1,6 @@
 # SPEC-009: Worker Thread room export
 
-- Status: Accepted
+- Status: Accepted; implemented in Phase 6 (`P6-T01`-`P6-T07`, 2026-09-18)
 - Owner: Project owner
 - Last updated: 2026-09-18
 - Scope: Selected optional

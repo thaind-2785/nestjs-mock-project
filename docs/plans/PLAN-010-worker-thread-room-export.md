@@ -1,7 +1,7 @@
 # PLAN-010: Worker Thread room export
 
 - Spec: [`SPEC-009`](../specs/SPEC-009-worker-thread-room-export.md)
-- Status: In progress (approved 2026-09-17; implementation starts after Phase 5 merge)
+- Status: Implemented (approved 2026-09-17; `P6-T01`-`P6-T07` complete 2026-09-18, pending independent Phase 6 exit review)
 - Owner: Project owner
 - Reviewer (must be independent): Unassigned
 
@@ -78,15 +78,15 @@
 
 ## Vertical slices
 
-| Slice    | Observable outcome                                                      | Migration                     | Primary tests                                       | Status  |
-| -------- | ----------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------- | ------- |
-| `P6-T01` | Decisions, limits, modules, and Worker protocol are fixed               | None                          | Config/module/Worker protocol unit and benchmark    | Done    |
-| `P6-T02` | Export state persists and outbox consumers are type-isolated            | Phase 6 export schema/index   | Real-MySQL migration, claim concurrency, `EXPLAIN`  | Done    |
-| `P6-T03` | Admin creates exactly one durable, rate-limited export request          | Use P6-T02 schema             | Controller/service/idempotency integration + E2E    | Done    |
-| `P6-T04` | A bounded room snapshot becomes a safe XLSX in a Worker Thread          | None                          | Query-shape, XLSX package, resource/process tests   | Done    |
-| `P6-T05` | BullMQ attempts recover, upload privately, and finalize exactly one key | Use P6-T02 and cleanup schema | MySQL/Redis/MinIO crash/concurrency integration     | Done    |
-| `P6-T06` | Requester polls status and downloads only an unexpired private result   | Use P6-T02 schema             | Ownership/expiry/presign API integration + E2E      | Done    |
-| `P6-T07` | Operations, full journey, docs, and Phase 6 handoff are complete        | Revert/reapply proof          | Process E2E, Compose, full gate, independent review | Pending |
+| Slice    | Observable outcome                                                      | Migration                     | Primary tests                                       | Status |
+| -------- | ----------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------- | ------ |
+| `P6-T01` | Decisions, limits, modules, and Worker protocol are fixed               | None                          | Config/module/Worker protocol unit and benchmark    | Done   |
+| `P6-T02` | Export state persists and outbox consumers are type-isolated            | Phase 6 export schema/index   | Real-MySQL migration, claim concurrency, `EXPLAIN`  | Done   |
+| `P6-T03` | Admin creates exactly one durable, rate-limited export request          | Use P6-T02 schema             | Controller/service/idempotency integration + E2E    | Done   |
+| `P6-T04` | A bounded room snapshot becomes a safe XLSX in a Worker Thread          | None                          | Query-shape, XLSX package, resource/process tests   | Done   |
+| `P6-T05` | BullMQ attempts recover, upload privately, and finalize exactly one key | Use P6-T02 and cleanup schema | MySQL/Redis/MinIO crash/concurrency integration     | Done   |
+| `P6-T06` | Requester polls status and downloads only an unexpired private result   | Use P6-T02 schema             | Ownership/expiry/presign API integration + E2E      | Done   |
+| `P6-T07` | Operations, full journey, docs, and Phase 6 handoff are complete        | Revert/reapply proof          | Process E2E, Compose, full gate, independent review | Done   |
 
 ## Pull request sequence
 
@@ -530,6 +530,24 @@ gate is not the checklist disposition.
 - **Observability:** Nothing is logged on the read path. The response carries no object
   key as a field, no content hash, and no error cause.
 
+### `P6-T07` evidence
+
+- **Constants/contracts:** The backlog contracts live in
+  `room-export-backlog.types.ts`; the sampler reuses `OutboxPollLoop` rather than
+  growing a third copy of the timer protocol.
+- **Projection/indexes:** Five aggregates, each scoped to the export family or the
+  export key prefix. The outbox groups cannot use the claim index and are bounded by a
+  sample interval floored at five seconds, the same trade the notification sampler
+  documents.
+- **Batching/N+1:** One transaction, five statements, one Redis call per sample.
+- **Responsibility/reuse:** The runbook is the operator-facing half of what the sampler
+  emits; neither restates the other.
+- **Concurrency:** Two real worker processes partition a four-job backlog with both
+  doing work, four distinct object keys, and no job finalized twice. A killed worker's
+  export is recovered by a second process after its lease expires.
+- **Observability:** The lifecycle suite asserts the sample carries all five readings
+  and contains no object key and no room value.
+
 ## Documentation / OpenAPI impact
 
 - Add both export routes and every stable status/error/ownership/idempotency field to
@@ -716,6 +734,29 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   resolves relations across the whole registered set, so it fails at `initialize` with
   `Entity metadata for User#identities was not found`. Naming the transitive graph by
   hand is a puzzle, not a decision.
+
+- 2026-09-18 (`P6-T07`): the export backlog sampler reports five readings rather than
+  one number, because a pipeline can be healthy on four and broken on the fifth: how
+  much work waits, whether anything is stuck holding it, what the durable jobs say, why
+  the failed ones failed, and whether any upload was abandoned. Redis counts sit beside
+  the MySQL ones because the two disagreeing is itself the signal - durable work with an
+  empty queue means handoffs are failing, and a queue with no durable work behind it
+  means jobs nothing can claim. A queue that could not answer is reported as absent
+  rather than as zero, because zero is a claim and this is the absence of one.
+- 2026-09-18 (`P6-T07`): the lifecycle suite expires a lease with SQL rather than
+  waiting for one. The lease is a constant, not a setting, so the alternative was a
+  three-minute test; what is under test is what a second worker does with an expired
+  lease, not how long the clock takes to produce one. The first version tried to set
+  `REPORT_EXPORT_CLAIM_LEASE_MS` and failed silently - that variable stopped existing
+  when the environment surface was cut to four, and an override nothing reads looks
+  exactly like one that works.
+- 2026-09-18 (`P6-T07`): a case that killed a worker after `room_export_generated` and
+  asserted which safeguards survived was deleted rather than repaired. It was timing
+  luck: the attempt often finished between the log line and the signal, so the
+  assertion described whichever race had happened. The property it was reaching for -
+  an attempt that loses its claim after uploading publishes nothing and leaves its
+  object covered - is proven deterministically in the attempt integration suite, which
+  interrupts the claim at exactly that point.
 
 - 2026-09-18 (`P6-T06`, found by running it): the worker failed every attempt with
   `EntityMetadataNotFoundError`. The snapshot reader queries `Room` and joins

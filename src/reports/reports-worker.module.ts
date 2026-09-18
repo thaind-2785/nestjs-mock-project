@@ -11,6 +11,8 @@ import { OutboxClaimRepository } from '../common/outbox/outbox-claim.repository'
 import { ObjectStorageModule } from '../common/storage/object-storage.module';
 import { reportsWorkerEntities } from './reports-worker.entities';
 import { RoomExportAttemptRepository } from './room-export-attempt.repository';
+import { RoomExportBacklogRepository } from './room-export-backlog.repository';
+import { RoomExportBacklogService } from './room-export-backlog.service';
 import { RoomExportConsumerService } from './room-export-consumer.service';
 import { RoomExportDispatcherService } from './room-export-dispatcher.service';
 import { RoomExportGeneratorService } from './room-export-generator.service';
@@ -99,6 +101,8 @@ import {
     OutboxClaimRepository,
     RoomExportDispatcherService,
     RoomExportConsumerService,
+    RoomExportBacklogRepository,
+    RoomExportBacklogService,
     {
       // The consumer needs a connection of its own: BullMQ workers hold a blocking
       // command open, which would stall every producer command sharing the socket.
@@ -130,6 +134,7 @@ import {
     RoomExportAttemptRepository,
     RoomExportDispatcherService,
     RoomExportConsumerService,
+    RoomExportBacklogService,
   ],
 })
 export class ReportsWorkerModule {}

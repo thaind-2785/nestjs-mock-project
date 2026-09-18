@@ -148,11 +148,20 @@ void main().catch((error: unknown) => {
     error instanceof RoomExportProtocolError
       ? error.code
       : roomExportWorkerErrorCodes.generationFailed;
-  parentPort?.postMessage({
-    protocolVersion: roomExportProtocolVersion,
-    jobId: requestedJobId,
-    attempt: requestedAttempt,
-    outcome: 'FAILED',
-    errorCode: code,
-  });
+  try {
+    parentPort?.postMessage({
+      protocolVersion: roomExportProtocolVersion,
+      jobId: requestedJobId,
+      attempt: requestedAttempt,
+      outcome: 'FAILED',
+      errorCode: code,
+    });
+  } catch {
+    // Reporting the failure failed. Exiting non-zero is the remaining way to say
+    // something went wrong; the parent classifies it from the exit and the attempt
+    // retries, which is a worse diagnosis than the code above but not a worse outcome.
+    // Letting this throw would be the bad case: an unhandled rejection whose exit code
+    // says nothing at all.
+    process.exitCode = 1;
+  }
 });

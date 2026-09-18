@@ -1,9 +1,14 @@
+import { existsSync } from 'node:fs';
+import { extname } from 'node:path';
 import JSZip from 'jszip';
 import ExcelJS from 'exceljs';
 import { createReportsConfiguration } from '../config/reports.config';
 import type { ReportsConfiguration } from '../config/reports.config';
 import { validateEnvironment } from '../config/environment.validation';
-import { RoomExportGeneratorService } from './room-export-generator.service';
+import {
+  RoomExportGeneratorService,
+  workerEntrypoint,
+} from './room-export-generator.service';
 import { toWorkbookRows } from './room-export-workbook';
 import { roomExportWorksheetColumns } from './room-export-workbook.constants';
 import {
@@ -100,6 +105,25 @@ async function zipEntries(file: ArrayBuffer): Promise<Map<string, string>> {
   }
   return entries;
 }
+
+describe('workerEntrypoint', () => {
+  it('names a file that exists', () => {
+    // The thread is loaded by path, not by import, so nothing type-checks this and no
+    // static analysis links the worker to its only caller. Renaming or deleting it
+    // would compile, lint and pass every test that does not actually start a thread.
+    expect(existsSync(workerEntrypoint())).toBe(true);
+  });
+
+  it('loads the compiled worker from a compiled caller', () => {
+    // Derived from this module's own extension so development and production stay in
+    // step. Under `dist` both are `.js`; the build must therefore emit the worker, and
+    // a `tsconfig.build.json` exclusion that dropped it would break production while
+    // every test here - which runs from `.ts` - kept passing.
+    expect(
+      workerEntrypoint().endsWith(`room-export.worker${extname(__filename)}`),
+    ).toBe(true);
+  });
+});
 
 describe('RoomExportGeneratorService', () => {
   it('returns one transferred buffer for the attempt that asked', async () => {

@@ -679,6 +679,15 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   `Entity metadata for User#identities was not found`. Naming the transitive graph by
   hand is a puzzle, not a decision.
 
+- 2026-09-18 (`P6-T04`, follow-up): the worker is loaded by path rather than imported,
+  so nothing type-checks its existence and no static analysis links it to its only
+  caller. Renaming or deleting it would compile, lint, and pass every test that does not
+  start a thread; a `tsconfig.build.json` exclusion that dropped it from `dist` would
+  break production while every test here, which runs from `.ts`, kept passing. Two
+  assertions now cover both. The failure reporter is also wrapped: a `postMessage` that
+  throws used to become an unhandled rejection whose exit code said nothing, and now
+  falls back to a non-zero exit the parent can still classify.
+
 - 2026-09-18 (`P6-T04`): the Worker Thread runs under `ts-node/register/transpile-only`
   in development, and that is not a shortcut. Plain `ts-node/register` type-checks the
   whole project inside the thread, which needs more heap than the entire accepted

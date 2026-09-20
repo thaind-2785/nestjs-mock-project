@@ -158,6 +158,16 @@ for care.
 Every predicate is evaluated in SQL against `NOW(6)` and applied before `LIMIT`, so a
 batch is a prefix of what is due rather than a page of what might be.
 
+Each window is justified by what it protects, not chosen round:
+
+| Task                  | Window                                | What the window buys                                                                                                        |
+| --------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `notification-events` | 30 days after processing              | The evidence trail for "did the guest get the email". A complaint about a booking confirmation arrives in weeks, not months |
+| `export-results`      | 7 days after `expires_at`             | A requester polling a week late is told the result `EXPIRED`, not that it never existed                                     |
+| `auth-sessions`       | 24 hours after refresh expiry         | An expired session grants nothing, so the only reason to keep it is to answer "why was I logged out" for a day              |
+| `idempotency-keys`    | Exactly `IDEMPOTENCY_RETENTION_HOURS` | Already configured and already promised as a minimum; this phase must never undercut it                                     |
+| `storage-tasks`       | The existing service's own            | Unchanged from Phase 3                                                                                                      |
+
 A `FAILED` outbox event is retained deliberately. It is the evidence of a failure
 somebody may still need to redrive, and Phase 5's redrive command depends on it.
 
@@ -286,25 +296,25 @@ catch up after the worker was down for a day, and the bounded SQL behind each re
   count fail; removing the terminal-status predicate must make the `RUNNING` job test
   fail. A retention test that still passes with its guard removed is not a test.
 
-## Assumptions and open questions
+## Assumptions and decisions
 
-1. **Retention windows are assumed, not specified.** Processed notification events are
-   proposed at 30 days and export metadata at 7 days past expiry. Both are named
-   constants and both are guesses about what an operator will want to look back at.
-   The owner should correct them before implementation; changing them later is a
-   constant edit, not a migration.
+1. **The windows above are decisions, not defaults.** Each is a named constant, so
+   correcting one is an edit rather than a migration. They are sized to what somebody
+   would actually look back at, and none of them undercuts a minimum an earlier spec
+   promised.
 2. **The ledger is assumed to be small.** It grows by one row per task per window, so
-   four tasks daily is roughly 1,500 rows a year. It is deliberately not self-cleaning:
+   five tasks daily is roughly 1,800 rows a year. It is deliberately not self-cleaning:
    a retention job that deletes its own evidence is a job nobody can audit.
-3. **Open:** whether `CRON-03` (booking completion after checkout) belongs in this
-   phase. It shares the scheduler, the ledger, and the singleton mechanism, so adding
-   it costs one task rather than any new machinery. It is excluded by default because
-   it changes booking state rather than deleting exhaust, and that deserves acceptance
-   criteria written against `SPEC-006` rather than inherited from a retention spec.
-4. **Open:** whether a failed run should notify anybody. Phase 5 owns email and this
-   phase could emit an event through the same outbox. It is left out of scope because
-   a notification path that fires on retention failure is a new durable event type and
-   deserves its own decision.
+3. **`CRON-03` stays out.** Transitioning `CONFIRMED` stays to `COMPLETED` after
+   checkout would share this phase's scheduler, ledger and singleton, so it costs one
+   task and no new machinery. It is still excluded, because it advances a booking state
+   machine rather than deleting exhaust: a wrong window there changes a record a guest
+   can see, which needs acceptance criteria written against `SPEC-006` rather than
+   inherited from a retention spec. It remains an additive slice whenever it is wanted.
+4. **A failed run notifies nobody.** Decided 2026-09-20. It would need a new durable
+   event type through Phase 5's outbox, which is more machinery than the signal is
+   worth: a failed run is already a loud `FAILED` ledger row and a rising oldest-due
+   age in the backlog sample, and both are where an operator is already looking.
 
 ## Rollout and rollback
 

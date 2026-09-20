@@ -1,5 +1,6 @@
-import { spawn, ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { createServer, Server, Socket } from 'node:net';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import Redis from 'ioredis';
 import mysql from 'mysql2/promise';
@@ -39,6 +40,8 @@ describe('P6-T07 export worker lifecycle under failure', () => {
   let adminId: string;
   const children = new Set<ChildProcess>();
   const workerOutput = new Map<ChildProcess, string>();
+  const blackHoles = new Set<Server>();
+  const blackHoleSockets = new Set<Socket>();
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
@@ -82,6 +85,17 @@ describe('P6-T07 export worker lifecycle under failure', () => {
     await dataSource.initialize();
     await dataSource.runMigrations();
 
+    // Compiled here rather than assumed. `npm run verify` runs `build` after `e2e_test`,
+    // so a clean checkout has no `dist/` when this suite runs and every worker exits 1
+    // before it can start - which passes locally on any machine that has built once and
+    // fails on CI every time. Spawning `ts-node` instead is not the alternative: each
+    // worker would recompile the project, which on a box already running MySQL, Redis
+    // and jest is enough to exhaust memory.
+    execFileSync('npm', ['run', 'build'], {
+      cwd: process.cwd(),
+      stdio: 'ignore',
+    });
+
     baseEnvironment = {
       ...process.env,
       NODE_ENV: 'test',
@@ -90,13 +104,13 @@ describe('P6-T07 export worker lifecycle under failure', () => {
       REPORT_EXPORT_QUEUE_PREFIX: queuePrefix,
       // Its own namespace, so a developer's local queue is neither read nor disturbed.
       NOTIFICATION_QUEUE_PREFIX: `${queuePrefix}:mail`,
-      // Fast enough that a test does not wait a second per poll.
-      REPORT_EXPORT_POLL_INTERVAL_MS: '200',
       NOTIFICATION_POLL_INTERVAL_MS: '200',
-      // One event per claim, so a single poll cannot take the whole backlog and leave
-      // the second worker nothing to contend for.
-      REPORT_EXPORT_CLAIM_BATCH_SIZE: '1',
-      REPORT_EXPORT_BACKLOG_SAMPLE_INTERVAL_MS: '5000',
+      // The export worker's poll interval, claim batch and sample interval are named
+      // constants rather than settings - the environment surface for exports is four
+      // variables. Overrides for the three of them used to sit here, read by nothing,
+      // which looks exactly like an override that works. The tests below are written
+      // against the constants instead: a one second poll, a batch of ten, and one
+      // backlog sample at startup.
     };
   });
 
@@ -124,6 +138,13 @@ describe('P6-T07 export worker lifecycle under failure', () => {
     for (const child of children) child.kill('SIGKILL');
     children.clear();
     workerOutput.clear();
+    // Destroyed rather than ended: the point of these sockets is that nothing ever
+    // replies on them, so a polite close is one more thing that could hang, and an
+    // open handle would keep jest alive after the run.
+    for (const socket of blackHoleSockets) socket.destroy();
+    blackHoleSockets.clear();
+    for (const server of blackHoles) server.close();
+    blackHoles.clear();
     // BullMQ state outlives the process that wrote it, so a job left behind would be
     // consumed by the next test's worker and its assertions would be about work this
     // test created.
@@ -171,18 +192,40 @@ describe('P6-T07 export worker lifecycle under failure', () => {
     // The lease is what makes this work: the process stops holding a claim it can no
     // longer act on, and nothing in the database knows or needs to. A second worker
     // finds the lease expired and takes it.
+    //
+    // The kill has to land while the claim is held, and for a five room export that
+    // is a 197 millisecond window - measured, between `room_export_batch_dispatched`
+    // and `room_export_completed`. Polling the row for `PROCESSING` samples that
+    // window every 200 milliseconds, so the first version of this test was a coin
+    // flip that lost roughly once in twenty runs. So the first worker is given a
+    // storage endpoint that accepts the connection and then answers nothing: it
+    // generates the workbook, blocks on the upload, and holds its claim until it is
+    // killed. Nothing here waits on a race.
     const { jobId, eventId } = await seedQueuedJob();
-    const first = startWorker();
+    const first = startWorker({
+      OBJECT_STORAGE_ENDPOINT: await startUnresponsiveStorage(),
+    });
     await waitForWorkerReady(first);
+    // A log line, unlike a row, does not stop being true. Generation precedes the
+    // upload, so once this is logged the claim is held and the upload cannot return.
     await waitFor(
-      async () => (await readEvent(eventId)).status === 'PROCESSING',
+      () =>
+        Promise.resolve(
+          workerOutput.get(first)?.includes('room_export_generated') ?? false,
+        ),
       30_000,
+      () => describeExport(jobId, eventId, { first }),
     );
 
     first.kill('SIGKILL');
     await waitForExit(first, 30_000);
     // The row is left mid-attempt, claimed by a process that no longer exists.
     expect((await readEvent(eventId)).locked_by).not.toBeNull();
+    // And the premise holds: this worker never finished. Were the unresponsive
+    // endpoint not in play, it would have published the export before the signal
+    // arrived and everything below would be asserting against an already finished
+    // job - which is how the sampling version of this test used to pass.
+    expect(completionsLoggedBy(first)).toBe(0);
 
     // The lease is a constant rather than a setting - 180 seconds, checked against the
     // stages it covers - so this expires it rather than waiting three minutes for one.
@@ -198,6 +241,7 @@ describe('P6-T07 export worker lifecycle under failure', () => {
     await waitFor(
       async () => (await readJob(jobId)).status === ExportJobStatus.Completed,
       60_000,
+      () => describeExport(jobId, eventId, { first, second }),
     );
 
     // One result, published by the worker that recovered it. Whatever the killed
@@ -211,6 +255,10 @@ describe('P6-T07 export worker lifecycle under failure', () => {
   });
 
   it('partitions a backlog between two workers without either finalizing the other job', async () => {
+    // Either worker may claim the whole backlog, since the claim batch is ten. The
+    // split happens one step later: claiming enqueues one job per event, both workers
+    // consume the same queue, and each consumer takes one at a time, so four jobs
+    // reach two idle consumers as work for both.
     const seeded = await Promise.all([
       seedQueuedJob(),
       seedQueuedJob(),
@@ -293,20 +341,45 @@ describe('P6-T07 export worker lifecycle under failure', () => {
     expect(serialized).not.toContain('A-0');
   });
 
+  /**
+   * A storage endpoint that completes the TCP handshake and then says nothing, so an
+   * upload against it neither succeeds nor fails and the attempt holding it keeps its
+   * claim until the process is killed. This is what makes "killed mid attempt"
+   * something the test decides rather than something it hopes for.
+   */
+  async function startUnresponsiveStorage(): Promise<string> {
+    const server = createServer((socket) => {
+      blackHoleSockets.add(socket);
+    });
+    blackHoles.add(server);
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === 'string')
+      throw new Error('unresponsive storage did not bind a port');
+    return `http://127.0.0.1:${address.port}`;
+  }
+
   function startWorker(overrides: NodeJS.ProcessEnv = {}): ChildProcess {
     const child = spawn('node', ['dist/worker'], {
       cwd: process.cwd(),
       env: { ...baseEnvironment, ...overrides },
-      stdio: ['ignore', 'pipe', 'ignore'],
+      // stderr is kept rather than discarded: a worker that dies on startup says why
+      // there and nowhere else, and discarding it turns every such death into the same
+      // unhelpful "exited before starting".
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
     children.add(child);
     workerOutput.set(child, '');
-    child.stdout?.on('data', (chunk: Buffer) => {
+    const collect = (chunk: Buffer) => {
       workerOutput.set(
         child,
         (workerOutput.get(child) ?? '') + chunk.toString('utf8'),
       );
-    });
+    };
+    child.stdout?.on('data', collect);
+    child.stderr?.on('data', collect);
     return child;
   }
 
@@ -373,14 +446,39 @@ describe('P6-T07 export worker lifecycle under failure', () => {
   async function waitFor(
     condition: () => Promise<boolean>,
     timeoutMs: number,
+    // Rendered only when the wait fails. "Condition was not met in time" names the
+    // line but not the state, and the state is the whole difference between a worker
+    // that was slow, one that never claimed, and one that claimed and failed.
+    describe?: () => Promise<string>,
   ): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       if (await condition()) return;
-      if (Date.now() >= deadline)
-        throw new Error('condition was not met in time');
+      if (Date.now() >= deadline) {
+        const observed = describe ? `: ${await describe()}` : '';
+        throw new Error(`condition was not met in time${observed}`);
+      }
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
+  }
+
+  /** Everything worth knowing about one export when a wait on it has just failed. */
+  async function describeExport(
+    jobId: string,
+    eventId: string,
+    workers: Record<string, ChildProcess>,
+  ): Promise<string> {
+    const event = await readEvent(eventId);
+    const job = await readJob(jobId);
+    const logs = Object.entries(workers)
+      .map(([name, child]) => `${name} log: ${workerOutput.get(child) ?? ''}`)
+      .join(' | ');
+    return (
+      `event status=${String(event.status)} attempts=${String(event.attempts)} ` +
+      `locked_by=${String(event.locked_by)} available_at=${String(event.available_at)} ` +
+      `last_error=${String(event.last_error_code)}; ` +
+      `job status=${String(job.status)} last_error=${String(job.last_error_code)}; ${logs}`
+    );
   }
 
   async function seedQueuedJob(): Promise<{ jobId: string; eventId: string }> {

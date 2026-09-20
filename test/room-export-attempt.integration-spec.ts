@@ -271,8 +271,22 @@ describe('Phase 6 room export attempt', () => {
       [claimed.jobId],
     );
     const nearExpiry = await viewService().getOwned(claimed.jobId, adminId);
-    const expiresAt = new Date(nearExpiry.download?.expiresAt ?? 0).getTime();
-    expect(expiresAt - Date.now()).toBeLessThanOrEqual(31_000);
+    const urlExpiresAt = new Date(
+      nearExpiry.download?.expiresAt ?? 0,
+    ).getTime();
+    const resultExpiresAt = new Date(
+      String((await readJob(claimed.jobId)).expires_at),
+    ).getTime();
+    // Both instants are the database's, which is the only clock the cap is computed
+    // against. Comparing either one to this process's `Date.now()` asserts that two
+    // machines agree on the time - true where MySQL shares the runner's kernel, false
+    // against a VM whose clock drifts from the host, so the test would fail for a
+    // reason the code under test does not control.
+    expect(resultExpiresAt - urlExpiresAt).toBeGreaterThanOrEqual(0);
+    // Under a second apart, so it is the result rather than the five-minute
+    // configuration that bound the URL. The gap is exactly what rounding the lifetime
+    // down to whole seconds drops, so it cannot reach a second however slow this runs.
+    expect(resultExpiresAt - urlExpiresAt).toBeLessThan(1_000);
 
     // Past its expiry: the metadata survives so the requester can see what happened,
     // and the one field that would still have worked is gone.

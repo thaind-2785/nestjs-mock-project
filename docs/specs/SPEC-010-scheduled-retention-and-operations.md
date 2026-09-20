@@ -58,7 +58,7 @@ Out of scope:
   It is catalogued as optional support and it is not retention: it advances a booking
   state machine, so a wrong window changes a guest-visible record rather than deleting
   exhaust. It belongs on this phase's scheduler if the owner wants it, but it needs its
-  own acceptance criteria against `SPEC-006`. See open question 3.
+  own acceptance criteria against `SPEC-006`. See decision 3 below.
 - Deleting users, bookings, rooms, attachments metadata, or any history table. This
   phase deletes operational exhaust, never business records.
 - HTTP endpoints for retention. Operations happen through the repository CLI and the

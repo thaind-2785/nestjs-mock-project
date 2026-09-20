@@ -1,9 +1,12 @@
 # PLAN-010: Worker Thread room export
 
 - Spec: [`SPEC-009`](../specs/SPEC-009-worker-thread-room-export.md)
-- Status: Implemented (approved 2026-09-17; `P6-T01`-`P6-T07` complete 2026-09-18, pending independent Phase 6 exit review)
+- Status: Complete (approved 2026-09-17; `P6-T01`-`P6-T07` complete 2026-09-18; Phase 6 exit review closed 2026-09-20)
 - Owner: Project owner
-- Reviewer (must be independent): Unassigned
+- Reviewer (must be independent): Project owner, who authored none of Phase 6.
+  Exit review closed 2026-09-20 with no findings filed, so there is no
+  `REVIEW-040`; `REVIEW-039` remains on record as the non-independent pass whose
+  fourteen findings were fixed and re-read before acceptance.
 
 ## Constraints and risks
 

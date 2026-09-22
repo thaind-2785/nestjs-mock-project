@@ -9,6 +9,7 @@ import { Attachment } from '../files/entities/attachment.entity';
 import { StorageCleanupTask } from '../files/entities/storage-cleanup-task.entity';
 import { EmailDelivery } from '../notifications/entities/email-delivery.entity';
 import { ExportJob } from '../reports/entities/export-job.entity';
+import { ScheduledRun } from '../retention/entities/scheduled-run.entity';
 import { Amenity } from '../rooms/entities/amenity.entity';
 import { RoomAmenity } from '../rooms/entities/room-amenity.entity';
 import { RoomTime } from '../rooms/entities/room-time.entity';
@@ -48,4 +49,5 @@ export const applicationEntities = [
   OutboxEvent,
   EmailDelivery,
   ExportJob,
+  ScheduledRun,
 ];

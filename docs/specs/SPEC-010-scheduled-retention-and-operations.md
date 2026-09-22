@@ -147,26 +147,50 @@ for care.
 
 ### What is due
 
-| Task                  | Due when                                                               | Never deletes                                       |
-| --------------------- | ---------------------------------------------------------------------- | --------------------------------------------------- |
-| `export-results`      | `export_jobs.expires_at <= NOW(6)` and status is terminal              | A job still `QUEUED` or `RUNNING`, whatever its age |
-| `notification-events` | `outbox_events.status = PROCESSED` and older than the retention window | An event `PENDING`, `PROCESSING`, or `FAILED`       |
-| `idempotency-keys`    | `expires_at <= NOW(6)`                                                 | A key whose response has not yet been stored        |
-| `auth-sessions`       | `refresh_expires_at <= NOW(6)`, or revoked and older than the window   | A session still refreshable, whatever its age       |
-| `storage-tasks`       | The existing service's own due predicate                               | Unchanged from Phase 3                              |
+| Task                  | Due when                                                         | Never deletes                                       |
+| --------------------- | ---------------------------------------------------------------- | --------------------------------------------------- |
+| `export-results`      | Status is terminal and `updated_at` is older than the window     | A job still `QUEUED` or `RUNNING`, whatever its age |
+| `notification-events` | `status = PROCESSED` and `available_at` is older than the window | An event `PENDING`, `PROCESSING`, or `FAILED`       |
+| `idempotency-keys`    | `expires_at <= NOW(6)`                                           | A key whose response has not yet been stored        |
+| `auth-sessions`       | `refresh_expires_at` is older than the window                    | A session still refreshable, whatever its age       |
+| `storage-tasks`       | The existing service's own due predicate                         | Unchanged from Phase 3                              |
 
 Every predicate is evaluated in SQL against `NOW(6)` and applied before `LIMIT`, so a
 batch is a prefix of what is due rather than a page of what might be.
 
+### Why two anchors are not the obvious column
+
+A daily count runs against tables the API is serving reads from, so each predicate has
+to be answerable from an index this schema already has. Two of them therefore anchor on
+a column other than the one the window is named after, and the rule behind both
+substitutions is the same: the anchor must be indexed, must be non-null for every status
+the task collects, and may only ever make the window **longer** than specified.
+
+- **`notification-events` anchors on `available_at`, not `processed_at`.** There is no
+  index on `processed_at` at all, while `idx_outbox_events_claim` leads
+  `(status, available_at)`. An event becomes available before it is processed, so
+  `available_at <= processed_at` always holds and this retains at least as long as the
+  stated window.
+- **`export-results` anchors on `updated_at`, not `expires_at`.** A failed job has no
+  `expires_at`, so that column cannot serve the task at all, and
+  `idx_export_jobs_operations` leads `(status, updated_at)`. For a terminal export job
+  `updated_at` **is** the instant it became terminal, because nothing writes such a row
+  again — the view service reads without mutating. If a later phase ever does write to a
+  terminal job, the clock restarts and the row is retained longer, which is the safe
+  direction.
+
+Neither substitution can delete something earlier than specified, which is the only
+direction that matters: retention is a minimum, and lagging is recoverable.
+
 Each window is justified by what it protects, not chosen round:
 
-| Task                  | Window                                | What the window buys                                                                                                        |
-| --------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `notification-events` | 30 days after processing              | The evidence trail for "did the guest get the email". A complaint about a booking confirmation arrives in weeks, not months |
-| `export-results`      | 7 days after `expires_at`             | A requester polling a week late is told the result `EXPIRED`, not that it never existed                                     |
-| `auth-sessions`       | 24 hours after refresh expiry         | An expired session grants nothing, so the only reason to keep it is to answer "why was I logged out" for a day              |
-| `idempotency-keys`    | Exactly `IDEMPOTENCY_RETENTION_HOURS` | Already configured and already promised as a minimum; this phase must never undercut it                                     |
-| `storage-tasks`       | The existing service's own            | Unchanged from Phase 3                                                                                                      |
+| Task                  | Window                                   | What the window buys                                                                                                        |
+| --------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `notification-events` | 30 days after the event became available | The evidence trail for "did the guest get the email". A complaint about a booking confirmation arrives in weeks, not months |
+| `export-results`      | 8 days after the job became terminal     | The result's own 24 hours plus a week, so a requester polling late is told `EXPIRED` rather than that it never existed      |
+| `auth-sessions`       | 24 hours after refresh expiry            | An expired session grants nothing, so the only reason to keep it is to answer "why was I logged out" for a day              |
+| `idempotency-keys`    | Exactly `IDEMPOTENCY_RETENTION_HOURS`    | Already configured and already promised as a minimum; this phase must never undercut it                                     |
+| `storage-tasks`       | The existing service's own               | Unchanged from Phase 3                                                                                                      |
 
 A `FAILED` outbox event is retained deliberately. It is the evidence of a failure
 somebody may still need to redrive, and Phase 5's redrive command depends on it.

@@ -70,7 +70,13 @@ const generationTimeoutMs = 60_000;
 
 const maxFileBytes = 25 * 1_024 * 1_024;
 
-const resultTtlHours = 24;
+/**
+ * Exported because Phase 7 has to outlive it: retention deletes an export's metadata,
+ * and a row deleted while its object is still downloadable would leave a working
+ * presigned URL for a result nothing can describe. `assertRetentionBounds` checks the
+ * relationship rather than trusting two files to stay in step.
+ */
+export const roomExportResultTtlHours = 24;
 
 /** A download URL is a bearer secret, so it is short lived and capped again by the
  * result's own remaining lifetime at request time. */
@@ -212,7 +218,7 @@ export function createReportsConfiguration(
       concurrency: roomExportQueueConcurrency,
       shutdownDrainMs,
     },
-    result: { ttlHours: resultTtlHours, presignTtlSeconds },
+    result: { ttlHours: roomExportResultTtlHours, presignTtlSeconds },
     createRateLimit: {
       max: environment.REPORT_EXPORT_CREATE_RATE_LIMIT_MAX,
       windowSeconds: environment.REPORT_EXPORT_CREATE_RATE_LIMIT_WINDOW_SECONDS,

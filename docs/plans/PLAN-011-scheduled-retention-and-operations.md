@@ -3,9 +3,11 @@
 - Spec: [`SPEC-010`](../specs/SPEC-010-scheduled-retention-and-operations.md)
 - Status: Draft
 - Owner: Project owner
-- Reviewer (must be independent): Unassigned
-- Depends on: Phase 6 merged. `P7-T04` wires into `workerDrainMs`, which arrives
-  with PR 15; every other reference in this plan already exists on `main`.
+- Reviewer (must be independent): Project owner, who authors none of Phase 7 —
+  the same arrangement that closed Phase 6. Redirect it here if a separate pass
+  takes the exit review instead.
+- Depends on: Phase 6, merged 2026-09-22. `P7-T04` wires into `workerDrainMs`, which
+  is now on `main`, so nothing in this plan waits on anything.
 
 ## Constraints and risks
 
@@ -43,8 +45,8 @@
 Five slices, not seven. Phase 6 earned seven because each one was a different mechanism
 — a Worker Thread, a queue, a presigned download. This phase is one table, five bounded
 deletes and a tick, and slicing it as finely would be ceremony rather than risk control.
-What the slicing still buys is the one boundary that matters: the first pull request
-cannot delete a row.
+What the slicing still buys is the boundary that matters: the first pull request
+cannot delete a row, and the one that can does nothing else.
 
 | Slice    | Observable outcome                                                      | Files/modules                                                     | Migration            | Tests                                                  | Status  |
 | -------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------- | ------------------------------------------------------ | ------- |
@@ -59,18 +61,24 @@ cannot delete a row.
 | PR  | Slices              | Review boundary                                                 | Merge/deploy state                                             |
 | --- | ------------------- | --------------------------------------------------------------- | -------------------------------------------------------------- |
 | 1   | `P7-T01` + `P7-T02` | Ledger, singleton, due predicates, and a CLI that cannot delete | Nothing is deleted anywhere; `--dry-run` reports what would be |
-| 2   | `P7-T03`–`P7-T05`   | The five deletions, scheduling, operations, and phase close     | Retention runs unattended after the evidence passes            |
+| 2   | `P7-T03`            | The five deletions, in order, invoked by hand                   | Deletion works on demand; no schedule runs it                  |
+| 3   | `P7-T04` + `P7-T05` | Scheduling, catch-up, drain, operations, and phase close        | Retention runs unattended after the evidence passes            |
 
-PR 1 is mergeable and deployable while still being incapable of deleting a row, which
-is the point: the due predicates can be read against real data before anything acts on
-them. Branch PR 2 fresh from `main` after PR 1 merges.
+Three, and the middle one holds a single slice on purpose. PR 1 is mergeable and
+deployable while still incapable of deleting a row, so the due predicates get read
+against real data before anything acts on them. PR 2 then carries only the irreversible
+part: five deletions and nothing else competing for the reviewer's attention. Bundling
+it with the scheduler and the runbook, as an earlier draft of this plan did, would put
+the one change that cannot be undone in the same diff as the two that can.
+
+Branch each PR fresh from `main` after the previous one merges.
 
 ### Functional milestones
 
 - After `P7-T02` (PR 1), an operator can ask what retention _would_ do and reconcile it
   against the backlog readings, with no code path that deletes.
-- After `P7-T03`, every deletion works and is bounded, invoked by hand.
-- After `P7-T05` (PR 2), the scheduler owns it and the ledger answers what ran.
+- After `P7-T03` (PR 2), every deletion works and is bounded, invoked by hand.
+- After `P7-T05` (PR 3), the scheduler owns it and the ledger answers what ran.
 
 ### P7-T01 — Decision, ledger, and singleton claim
 
@@ -185,8 +193,31 @@ MYSQL_PORT=13306 npm run verify
 ```
 
 Run `npm run harness:check` only if the Harness or a config registry changed — this
-phase adds one entry command in `P7-T03`, so that slice does change it. Do not report an
-unrun check as green.
+phase adds one entry command, `ops:retention`, in `P7-T02`, so that slice does change
+it. Do not report an unrun check as green.
+
+### What "ready for review" means here
+
+A reviewer should open the pull request and find nothing waiting on the author. Each of
+these was missed at least once during Phase 6, which is why they are written down:
+
+1. **The gate ran before the request was opened**, and the body carries its real numbers
+   rather than the word "pending". A verification table that says "Pending CI" is a table
+   the reviewer has to come back to.
+2. **CI is green before the request leaves draft.** Open it with `--draft`, wait for
+   `Verify repository`, then mark it ready. Phase 6 had a request sitting in
+   ready-for-review with a red gate and, once, with none of its commits pushed.
+3. **The reviewer field in this plan names somebody** before handoff. `Unassigned` in
+   the diff is a pending item the reviewer is reading about themselves.
+4. **No open question remains in the spec or plan.** Either it is decided with a reason,
+   or it is an explicit accepted risk with an owner. A questionnaire is not a handoff.
+5. **Every checkbox the author owns is checked.** The only unchecked boxes are the ones
+   that are genuinely the reviewer's judgement.
+6. **The diff contains this slice and nothing else** — no next-phase specification, no
+   drive-by refactor. Phase 6's close briefly carried Phase 7's spec and had to undo it.
+7. **Nothing is assumed about the working tree.** If a suite spawns a build artifact it
+   builds it, because the gate builds after the tests run; this is verified by deleting
+   `dist/` rather than by trusting a machine that has built before.
 
 ## Documentation / OpenAPI impact
 

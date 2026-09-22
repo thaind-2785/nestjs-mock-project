@@ -3,9 +3,14 @@ import {
   createNotificationsConfiguration,
   notificationsConfig,
 } from './config/notifications.config';
+import {
+  createReportsConfiguration,
+  reportsConfig,
+} from './config/reports.config';
 import { validateEnvironment } from './config/environment.validation';
 import {
   bootstrapNotificationWorker,
+  workerDrainMs,
   WorkerShutdownSignal,
   WorkerSignalTarget,
 } from './worker-bootstrap';
@@ -32,18 +37,29 @@ class FakeSignals implements WorkerSignalTarget {
   }
 }
 
-function createContextDouble(close: () => Promise<void>) {
-  const configuration = createNotificationsConfiguration(
-    validateEnvironment({ NOTIFICATION_SHUTDOWN_DRAIN_MS: '30000' }),
-  );
+function createContextDouble(
+  close: () => Promise<void>,
+  environment: Record<string, string> = {},
+) {
+  const variables = validateEnvironment({
+    NOTIFICATION_SHUTDOWN_DRAIN_MS: '30000',
+    ...environment,
+  });
+  // Both families, because the worker process hosts both and the drain it takes is
+  // the larger of the two. A double that answered only one of them would let the
+  // bootstrap read `undefined` and the suite would never notice.
+  const configuration = createNotificationsConfiguration(variables);
+  const reports = createReportsConfiguration(variables);
   const closed = jest.fn(close);
   return {
     closed,
     context: {
       close: closed,
-      get: jest.fn((token: unknown) =>
-        token === notificationsConfig.KEY ? configuration : undefined,
-      ),
+      get: jest.fn((token: unknown) => {
+        if (token === notificationsConfig.KEY) return configuration;
+        if (token === reportsConfig.KEY) return reports;
+        return undefined;
+      }),
     } as unknown as INestApplicationContext,
   };
 }
@@ -135,6 +151,44 @@ describe('bootstrapNotificationWorker', () => {
     );
   });
 
+  it('drains on the export bound once this process hosts exports', async () => {
+    jest.useFakeTimers();
+    const logger = { log: jest.fn(), error: jest.fn() };
+    const signals = new FakeSignals();
+    const { stopped, onStopped } = createStopSignal();
+
+    await bootstrapNotificationWorker({
+      createContext: () =>
+        Promise.resolve(
+          createContextDouble(() => new Promise<void>(() => undefined), {
+            REPORT_EXPORT_ENABLED: 'true',
+          }).context,
+        ),
+      logger,
+      signals,
+      onStopped,
+    });
+    signals.emit('SIGTERM');
+    // The mail family's own bound has passed and nothing has given up: an export
+    // generation is bounded at 60 seconds, so draining at 30 would kill a Worker
+    // Thread that was about to succeed on every ordinary deploy.
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(logger.log).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'notification_worker_stopped' }),
+    );
+
+    await jest.advanceTimersByTimeAsync(60_000);
+
+    await expect(stopped).resolves.toBe(false);
+    expect(logger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'notification_worker_stopped',
+        drained: false,
+        drainMs: 90_000,
+      }),
+    );
+  });
+
   it('reports a stop that failed rather than leaving an unhandled rejection', async () => {
     const logger = { log: jest.fn(), error: jest.fn() };
     const signals = new FakeSignals();
@@ -184,5 +238,46 @@ describe('bootstrapNotificationWorker', () => {
 
     expect(closed).toHaveBeenCalledTimes(1);
     expect(drains).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('workerDrainMs', () => {
+  function configurations(environment: Record<string, string>) {
+    const variables = validateEnvironment({
+      NOTIFICATION_SHUTDOWN_DRAIN_MS: '30000',
+      ...environment,
+    });
+    return [
+      createNotificationsConfiguration(variables),
+      createReportsConfiguration(variables),
+    ] as const;
+  }
+
+  it('leaves a mail-only worker on the mail bound', () => {
+    // No consumer is registered, so there is no generation to protect and no reason
+    // to make every restart wait for work this process cannot be doing.
+    const [notifications, reports] = configurations({});
+
+    expect(reports.enabled).toBe(false);
+    expect(workerDrainMs(notifications, reports)).toBe(30_000);
+  });
+
+  it('takes the larger bound once both families are hosted', () => {
+    const [notifications, reports] = configurations({
+      REPORT_EXPORT_ENABLED: 'true',
+    });
+
+    expect(workerDrainMs(notifications, reports)).toBe(
+      reports.worker.shutdownDrainMs,
+    );
+  });
+
+  it('never shortens the mail bound to the export one', () => {
+    const [notifications, reports] = configurations({
+      REPORT_EXPORT_ENABLED: 'true',
+      NOTIFICATION_SHUTDOWN_DRAIN_MS: '120000',
+    });
+
+    expect(workerDrainMs(notifications, reports)).toBe(120_000);
   });
 });

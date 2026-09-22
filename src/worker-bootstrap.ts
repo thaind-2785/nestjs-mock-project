@@ -4,6 +4,7 @@ import {
   describeNotificationsConfiguration,
   notificationsConfig,
 } from './config/notifications.config';
+import { reportsConfig } from './config/reports.config';
 
 export const workerShutdownSignals = ['SIGTERM', 'SIGINT'] as const;
 
@@ -39,6 +40,10 @@ export async function bootstrapNotificationWorker(
   const configuration = context.get<ConfigType<typeof notificationsConfig>>(
     notificationsConfig.KEY,
   );
+  const drainMs = workerDrainMs(
+    configuration,
+    context.get<ConfigType<typeof reportsConfig>>(reportsConfig.KEY),
+  );
 
   let stopping = false;
   for (const signal of workerShutdownSignals) {
@@ -50,11 +55,7 @@ export async function bootstrapNotificationWorker(
     signals.once(signal, () => {
       if (stopping) return;
       stopping = true;
-      void stopNotificationWorker(context, {
-        drainMs: configuration.worker.shutdownDrainMs,
-        logger,
-        signal,
-      })
+      void stopNotificationWorker(context, { drainMs, logger, signal })
         .then((drained) => options.onStopped?.(drained))
         .catch((error: unknown) => {
           // A close that rejects must still produce the stopped signal this module
@@ -75,8 +76,39 @@ export async function bootstrapNotificationWorker(
   logger.log({
     event: 'notification_worker_started',
     ...describeNotificationsConfiguration(configuration),
+    // Separate from the notification family's own `shutdownDrainMs` in the summary
+    // above, which is one input to it rather than the bound the process will use.
+    processDrainMs: drainMs,
   });
   return context;
+}
+
+/**
+ * The drain this process gets: the largest of the families it actually hosts.
+ *
+ * One process hosts two independent families with two different bounded units of work,
+ * and only one number can be the drain. The mail family's 30 seconds is sized for a
+ * single provider send; an export attempt holds a Worker Thread for up to a bounded 60
+ * seconds, so draining on the mail bound alone would `SIGKILL` a generation that was
+ * about to succeed on every ordinary deploy - and it would do so while
+ * `assertRoomExportBounds` was still checking the export drain against the generation
+ * timeout, because nothing read the value it was checking.
+ *
+ * The export bound only counts when exports are enabled. A deployment that has not
+ * turned them on registers no consumer and has no generation to protect, and giving it
+ * the longer drain would make every restart of a mail-only worker wait for work it
+ * cannot be doing.
+ */
+export function workerDrainMs(
+  notifications: ConfigType<typeof notificationsConfig>,
+  reports: ConfigType<typeof reportsConfig>,
+): number {
+  return reports.enabled
+    ? Math.max(
+        notifications.worker.shutdownDrainMs,
+        reports.worker.shutdownDrainMs,
+      )
+    : notifications.worker.shutdownDrainMs;
 }
 
 export interface NotificationWorkerStopOptions {

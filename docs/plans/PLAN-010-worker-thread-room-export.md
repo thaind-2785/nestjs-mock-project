@@ -1,9 +1,12 @@
 # PLAN-010: Worker Thread room export
 
 - Spec: [`SPEC-009`](../specs/SPEC-009-worker-thread-room-export.md)
-- Status: In progress (approved 2026-09-17; implementation starts after Phase 5 merge)
+- Status: Complete (approved 2026-09-17; `P6-T01`-`P6-T07` complete 2026-09-18; Phase 6 exit review closed 2026-09-20)
 - Owner: Project owner
-- Reviewer (must be independent): Unassigned
+- Reviewer (must be independent): Project owner, who authored none of Phase 6.
+  Exit review closed 2026-09-20 with no findings filed, so there is no
+  `REVIEW-040`; `REVIEW-039` remains on record as the non-independent pass whose
+  fourteen findings were fixed and re-read before acceptance.
 
 ## Constraints and risks
 
@@ -78,15 +81,15 @@
 
 ## Vertical slices
 
-| Slice    | Observable outcome                                                      | Migration                     | Primary tests                                       | Status  |
-| -------- | ----------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------- | ------- |
-| `P6-T01` | Decisions, limits, modules, and Worker protocol are fixed               | None                          | Config/module/Worker protocol unit and benchmark    | Done    |
-| `P6-T02` | Export state persists and outbox consumers are type-isolated            | Phase 6 export schema/index   | Real-MySQL migration, claim concurrency, `EXPLAIN`  | Done    |
-| `P6-T03` | Admin creates exactly one durable, rate-limited export request          | Use P6-T02 schema             | Controller/service/idempotency integration + E2E    | Done    |
-| `P6-T04` | A bounded room snapshot becomes a safe XLSX in a Worker Thread          | None                          | Query-shape, XLSX package, resource/process tests   | Pending |
-| `P6-T05` | BullMQ attempts recover, upload privately, and finalize exactly one key | Use P6-T02 and cleanup schema | MySQL/Redis/MinIO crash/concurrency integration     | Pending |
-| `P6-T06` | Requester polls status and downloads only an unexpired private result   | Use P6-T02 schema             | Ownership/expiry/presign API integration + E2E      | Pending |
-| `P6-T07` | Operations, full journey, docs, and Phase 6 handoff are complete        | Revert/reapply proof          | Process E2E, Compose, full gate, independent review | Pending |
+| Slice    | Observable outcome                                                      | Migration                     | Primary tests                                       | Status |
+| -------- | ----------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------- | ------ |
+| `P6-T01` | Decisions, limits, modules, and Worker protocol are fixed               | None                          | Config/module/Worker protocol unit and benchmark    | Done   |
+| `P6-T02` | Export state persists and outbox consumers are type-isolated            | Phase 6 export schema/index   | Real-MySQL migration, claim concurrency, `EXPLAIN`  | Done   |
+| `P6-T03` | Admin creates exactly one durable, rate-limited export request          | Use P6-T02 schema             | Controller/service/idempotency integration + E2E    | Done   |
+| `P6-T04` | A bounded room snapshot becomes a safe XLSX in a Worker Thread          | None                          | Query-shape, XLSX package, resource/process tests   | Done   |
+| `P6-T05` | BullMQ attempts recover, upload privately, and finalize exactly one key | Use P6-T02 and cleanup schema | MySQL/Redis/MinIO crash/concurrency integration     | Done   |
+| `P6-T06` | Requester polls status and downloads only an unexpired private result   | Use P6-T02 schema             | Ownership/expiry/presign API integration + E2E      | Done   |
+| `P6-T07` | Operations, full journey, docs, and Phase 6 handoff are complete        | Revert/reapply proof          | Process E2E, Compose, full gate, independent review | Done   |
 
 ## Pull request sequence
 
@@ -472,6 +475,82 @@ gate is not the checklist disposition.
   the replayed flag, and a separate warning for an idempotency conflict. Filters, the
   key, the requester's email and the outbox payload are all absent.
 
+### `P6-T04` evidence
+
+- **Constants/contracts:** The twelve columns, worksheet name, amenity separator,
+  formula prefixes and quote prefix are named constants; the snapshot row and the
+  generate command have their own contract files.
+- **Projection/indexes:** The reader selects only the eleven columns the workbook
+  prints plus the join it needs, keyset-pages by numeric room ID with no `OFFSET`, and
+  bounds the statement with `MAX_EXECUTION_TIME` inside the database rather than in the
+  driver. An integration test asserts the exact projected row.
+- **Batching/N+1:** One amenity set query per page, proven by counting statements
+  through TypeORM's logger: ten rooms cost one amenity read, not ten.
+- **Responsibility/reuse:** The search term, status and attribute filters are now one
+  `applyRoomCatalogFilters`, used by the admin list and the export alike, so the two
+  surfaces cannot drift on `LIKE` shape, escaping or lowercasing.
+- **Concurrency:** `REPEATABLE READ` isolation is proven by committing an update from a
+  second connection between two pages of the same read and asserting every page still
+  describes the same instant - and that the update really landed.
+- **Observability:** One `room_export_generated` carrying job, attempt, row count, byte
+  count and duration. No filters, no room values, no object key.
+
+### `P6-T05` evidence
+
+- **Constants/contracts:** Job name, queue-unavailable code, claim-lost code, object
+  key prefix, content type and download filename are named; the attempt, dispatch and
+  failure contracts have their own types files.
+- **Projection/indexes:** The claim reads `id, payload` from the outbox and
+  `id, filters` from the job, both by primary key under `FOR UPDATE`. No new index.
+- **Batching/N+1:** N/A beyond the snapshot reader, which `P6-T04` covers.
+- **Responsibility/reuse:** The poll loop, the claim protocol and the object-storage
+  adapter are shared with notifications and attachments rather than copied. The export
+  keeps only its own policy: which key, which bounds, which stable error.
+- **Concurrency:** Lock order is outbox then job in every path, and every write carries
+  the claim predicate. Proven against real MySQL: a duplicate job whose claim moved on
+  changes nothing, a claim lost after upload leaves the object covered and unpublished,
+  and a stale second attempt cannot overwrite the winner's key. The lock-timeout probe
+  shows no row is held during the Worker Thread or the upload.
+- **Observability:** `room_export_completed`, `room_export_retry_scheduled`,
+  `room_export_failed`, `room_export_attempt_skipped`, plus dispatcher and consumer
+  errors. Job, attempt, counts and a stable code only - never the object key, the
+  filters, the provider text or a stack.
+
+### `P6-T06` evidence
+
+- **Constants/contracts:** `RoomExportViewStatus` is its own enum because `EXPIRED` is
+  a view rather than a stored state; the projected row and the TTL contract live in
+  `room-export-view.types.ts`.
+- **Projection/indexes:** The read selects only the columns the mapper uses plus
+  `NOW(6)`, addressed by `(id, requested_by)` - which the `idx_export_jobs_owner` index
+  leads on. `outbox_event_id` and `content_sha256` are never selected.
+- **Batching/N+1:** One query and at most one provider call per poll.
+- **Responsibility/reuse:** The controller translates HTTP; status, expiry, TTL and the
+  response shape are four separate pure functions, each testable without a database.
+  Presigning reuses the shared storage adapter.
+- **Concurrency:** N/A - the read takes no lock and mutates nothing. A presign failure
+  deliberately leaves the completed job untouched, so an outage cannot become data loss.
+- **Observability:** Nothing is logged on the read path. The response carries no object
+  key as a field, no content hash, and no error cause.
+
+### `P6-T07` evidence
+
+- **Constants/contracts:** The backlog contracts live in
+  `room-export-backlog.types.ts`; the sampler reuses `OutboxPollLoop` rather than
+  growing a third copy of the timer protocol.
+- **Projection/indexes:** Five aggregates, each scoped to the export family or the
+  export key prefix. The outbox groups cannot use the claim index and are bounded by a
+  sample interval floored at five seconds, the same trade the notification sampler
+  documents.
+- **Batching/N+1:** One transaction, five statements, one Redis call per sample.
+- **Responsibility/reuse:** The runbook is the operator-facing half of what the sampler
+  emits; neither restates the other.
+- **Concurrency:** Two real worker processes partition a four-job backlog with both
+  doing work, four distinct object keys, and no job finalized twice. A killed worker's
+  export is recovered by a second process after its lease expires.
+- **Observability:** The lifecycle suite asserts the sample carries all five readings
+  and contains no object key and no room value.
+
 ## Documentation / OpenAPI impact
 
 - Add both export routes and every stable status/error/ownership/idempotency field to
@@ -659,6 +738,119 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   `Entity metadata for User#identities was not found`. Naming the transitive graph by
   hand is a puzzle, not a decision.
 
+- 2026-09-18 (`P6-T07`): the export backlog sampler reports five readings rather than
+  one number, because a pipeline can be healthy on four and broken on the fifth: how
+  much work waits, whether anything is stuck holding it, what the durable jobs say, why
+  the failed ones failed, and whether any upload was abandoned. Redis counts sit beside
+  the MySQL ones because the two disagreeing is itself the signal - durable work with an
+  empty queue means handoffs are failing, and a queue with no durable work behind it
+  means jobs nothing can claim. A queue that could not answer is reported as absent
+  rather than as zero, because zero is a claim and this is the absence of one.
+- 2026-09-18 (`P6-T07`): the lifecycle suite expires a lease with SQL rather than
+  waiting for one. The lease is a constant, not a setting, so the alternative was a
+  three-minute test; what is under test is what a second worker does with an expired
+  lease, not how long the clock takes to produce one. The first version tried to set
+  `REPORT_EXPORT_CLAIM_LEASE_MS` and failed silently - that variable stopped existing
+  when the environment surface was cut to four, and an override nothing reads looks
+  exactly like one that works.
+- 2026-09-18 (`P6-T07`): a case that killed a worker after `room_export_generated` and
+  asserted which safeguards survived was deleted rather than repaired. It was timing
+  luck: the attempt often finished between the log line and the signal, so the
+  assertion described whichever race had happened. The property it was reaching for -
+  an attempt that loses its claim after uploading publishes nothing and leaves its
+  object covered - is proven deterministically in the attempt integration suite, which
+  interrupts the claim at exactly that point.
+
+- 2026-09-18 (`P6-T06`, found by running it): the worker failed every attempt with
+  `EntityMetadataNotFoundError`. The snapshot reader queries `Room` and joins
+  `roomType`, `autoLoadEntities` only knows about entities some module registered, and
+  `ReportsWorkerModule` registered neither. Nothing caught it: the worker starts
+  cleanly, and both integration suites built their `DataSource` from
+  `applicationEntities` - every entity in the application - so they could not notice one
+  the worker was missing. The registration list is now named in
+  `reports-worker.entities.ts` and both suites build from exactly it; commenting `Room`
+  out turns them red with the same error production gave.
+- 2026-09-18 (`P6-T06`, found by running it): the failure log carried only
+  `EXPORT_ATTEMPT_FAILED`, which is the classifier's catch-all, so a failure nobody had
+  classified was also a failure nobody could diagnose - the cause was captured and then
+  dropped. It now logs the cause's class name beside the code. That is a type, not
+  content: no provider body, no SQL, no stack, no object key.
+
+- 2026-09-18 (`P6-T06`): expiry is decided at read time against `NOW(6)` returned by
+  the same query as the row, not against the API host's clock. A host drifting fast
+  would shorten every result's life; one drifting slow would hand out URLs for results
+  Phase 7 cleanup is already entitled to delete. The expiry instant itself counts as
+  expired, because the boundary has to belong to one side and that is the safe one.
+- 2026-09-18 (`P6-T06`): the download URL is capped at `min(configured TTL, remaining
+lifetime)`, rounded down. Without the cap a job expiring in thirty seconds would still
+  hand out a five-minute URL, and that URL keeps working after the result is gone - a
+  presigned URL is checked by the object store, not by this application.
+- 2026-09-18 (`P6-T06`): a presigned URL necessarily contains the object key, because
+  it is a signature over a path. `SPEC-009` said keys are "never returned to clients",
+  which the implementation cannot satisfy literally while also issuing presigned URLs.
+  The spec now states the rule it actually means: the key is never a field a client can
+  reuse, and never in a log or a queue payload. The claim token inside the key grants
+  nothing through this API - no route accepts one - so the residual exposure is a value
+  the owner of the job could not act on.
+
+- 2026-09-18 (`P6-T05`): the attempt runs as four stages with two short transactions
+  and the expensive work between them, and the claim is revalidated before each stage
+  rather than once at the start. A lease sized for the whole attempt would still expire
+  under a slow but legal run; renewing between stages means each one runs under a full
+  lease and an attempt that lost its claim stops before doing anything another worker
+  would have to undo.
+- 2026-09-18 (`P6-T05`): losing the claim after a successful upload is a designed
+  outcome, not an error. The bytes are stored, the finalize matches zero rows, nothing
+  points at them, and the safeguard this attempt inserted before uploading is still
+  there for the cleanup runner. It is recorded as `skipped` rather than retried,
+  because retrying would upload a second object for a job another worker may already
+  have completed.
+- 2026-09-18 (`P6-T05`): the poll loop moved to `src/common/outbox/outbox-poll-loop.ts`
+  and both dispatchers use it. The two properties worth having in one place are that a
+  cycle is scheduled only after the previous one settles, so no process runs two cycles
+  claiming against each other, and that `stop` awaits the in-flight cycle rather than
+  abandoning claims it has already committed.
+- 2026-09-18 (`P6-T05`): the no-open-transaction evidence is a lock-timeout probe
+  rather than a count of open transactions. `information_schema.innodb_trx` needs the
+  `PROCESS` privilege the application user deliberately does not have, and the probe
+  asks the question that actually matters anyway: from another connection, with a
+  two-second lock wait, can the outbox and job rows be locked while the Worker Thread
+  and the upload are running? They can, at both boundaries.
+- 2026-09-18 (`P6-T05`): the attempt suite hooks its boundaries with subclasses rather
+  than by spying on the consumer's private fields. Lint rejects both `bind` and an
+  unbound method for good reasons, and the subclasses turned out to read better: the
+  consumer keeps its real collaborators, so what runs is the production sequence rather
+  than a rearranged one.
+
+- 2026-09-18 (`P6-T04`, follow-up): the worker is loaded by path rather than imported,
+  so nothing type-checks its existence and no static analysis links it to its only
+  caller. Renaming or deleting it would compile, lint, and pass every test that does not
+  start a thread; a `tsconfig.build.json` exclusion that dropped it from `dist` would
+  break production while every test here, which runs from `.ts`, kept passing. Two
+  assertions now cover both. The failure reporter is also wrapped: a `postMessage` that
+  throws used to become an unhandled rejection whose exit code said nothing, and now
+  falls back to a non-zero exit the parent can still classify.
+
+- 2026-09-18 (`P6-T04`): the Worker Thread runs under `ts-node/register/transpile-only`
+  in development, and that is not a shortcut. Plain `ts-node/register` type-checks the
+  whole project inside the thread, which needs more heap than the entire accepted
+  generation budget - measured, it terminates a three-row export at 128 MiB before any
+  workbook exists. The gate already type-checks with `tsc --noEmit`, so doing it again
+  in a memory-capped isolate buys nothing and costs the cap. Production runs `dist`,
+  where the thread loads no compiler at all and the measured profile is roughly 27 MiB
+  lower.
+- 2026-09-18 (`P6-T04`): a failure the thread can name is reported through the protocol
+  as a `FAILED` result; a failure it cannot name - out of memory, `terminate()`, a
+  crash - is classified by the parent from the exit. Both reach one settled outcome and
+  only one of them can carry a reason, which is why the worker no longer exits silently
+  on an output-size refusal the parent would otherwise have read as a bare exit code.
+- 2026-09-18 (`P6-T04`): the out-of-memory case sets a heap far below anything workable
+  rather than just below what its fixture needs. A bound near the requirement made the
+  test depend on when a garbage collector ran - it failed roughly one run in three under
+  `--runInBand` - and a test that passes four times in five is worse than none. It pins
+  the classification; where the real threshold sits is measured by the dependency
+  profile check.
+
 - 2026-09-18 (`REVIEW-038` closure): the row cap does not bound memory, and the
   benchmark that said otherwise was measuring the wrong thing twice. Its fixture reused
   one amenity string per row, which shared strings deduplicate, and it dropped the
@@ -706,7 +898,11 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   while no consumer exists, and the lease and upload safeguard make an interrupted
   attempt recoverable either way, but `P6-T05` owns reconciling the two - most likely
   by making the process bound the larger of the families it hosts rather than the mail
-  family's alone.
+  family's alone. Closed on 2026-09-18 (`P6-T05`, `REVIEW-039` `R39-02`):
+  `workerDrainMs` in
+  `worker-bootstrap.ts` is that reconciliation, and it takes the export bound only
+  while `REPORT_EXPORT_ENABLED` is on, so a mail-only worker still restarts on thirty
+  seconds rather than waiting for work it cannot be doing.
 - 2026-09-17 (`P6-T01`): the `ADR-0007` benchmark is now
   `scripts/xlsx-dependency-profile.test.mjs` inside `npm run test:harness`, so it runs
   in the gate. It measures the pinned library rather than the production generator,
@@ -718,6 +914,20 @@ deletion is idempotent but must never target an unresolved/wildcard prefix.
   though it has not failed yet. Its second case starts a thread with the misspelled
   `oldGenerationSizeMb` and requires the run to fail, which is what keeps every other
   number in the check meaningful.
+- 2026-09-18 (`REVIEW-039` closure, `R39-01`): `RoomExportQueueLifecycle` is gone and
+  the dispatcher closes the producer queue and its client itself. Two owners of one handle is not redundancy
+  here: Nest runs a module's shutdown hooks concurrently, so the second `quit` reached
+  a socket the first had already ended, rejected, and failed `context.close()` - every
+  clean deploy would have reported an undrained worker and exited non-zero. The
+  dispatcher is the owner rather than the lifecycle because the order is load-bearing:
+  the poll loop has to stop before the queue closes, or a handoff in flight is refused
+  and a perfectly good claim is handed back with a retry time.
+- 2026-09-18 (`REVIEW-039` closure, `R39-10`): a protocol _version_ the running
+  release cannot read now has its own code, `EXPORT_WORKER_PROTOCOL_VERSION`, and is
+  retryable. It is the one protocol fault a later attempt can resolve by itself - a rolling restart between the
+  release that queued a job and the one that picked it up - while a malformed message
+  stays `EXPORT_WORKER_PROTOCOL_INVALID` and stays permanent, which is the invalid
+  snapshot data `SPEC-009` accepts as terminal. One code could not be both.
 
 [`ADR-0007`](../decisions/ADR-0007-worker-thread-export-boundary.md) is accepted as
 of 2026-09-17 and records the Worker Thread boundary, the measured XLSX dependency

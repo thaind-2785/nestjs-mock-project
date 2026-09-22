@@ -4,18 +4,18 @@ Each phase exits only when its acceptance criteria, tests, docs, and independent
 review findings are complete. Avoid one large “copy tutorial” commit; port and prove
 one platform capability at a time.
 
-| Phase | Vertical slice          | Exit gate                                                                                                            |
-| ----- | ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| 0     | Harness and baseline    | Current docs agreed; `npm run verify` green; repo initialized in Git                                                 |
-| 1     | Platform foundation     | Config validation, MySQL migrations, i18n, Swagger, logs/request IDs, health endpoints; Compose dependencies healthy |
-| 2     | Auth and RBAC           | Google JIT login issues rotating app sessions; inactive users denied; auth unit/integration/E2E pass                 |
-| 3     | Room catalog            | Admin CRUD/windows, typed attachments, public search and cloud adapter; window/query/upload tests pass               |
-| 4     | Booking core            | Request/history/cancel/admin approve/reject; price snapshot and concurrent approval E2E proven                       |
-| 5     | Reliable notifications  | Transactional outbox, BullMQ worker, Gmail adapter, Mailpit local flow, retry/idempotency tests                      |
-| 6     | Worker Thread export    | Async room export, job polling, XLSX worker thread, cloud result, size/timeout/error tests                           |
-| 7     | Cron and operations     | Singleton daily cleanup, run ledger, observability; optional month-end email if reporting selected                   |
-| 8     | CI/CD                   | PR gate, immutable image, migration/deploy job, health smoke test and documented rollback drill                      |
-| 9     | Optional product slices | Profile update, reviews, payment, statistics—each independently specified and reviewed                               |
+| Phase | Vertical slice          | Exit gate                                                                                                                      |
+| ----- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 0     | Harness and baseline    | Current docs agreed; `npm run verify` green; repo initialized in Git                                                           |
+| 1     | Platform foundation     | Config validation, MySQL migrations, i18n, Swagger, logs/request IDs, health endpoints; Compose dependencies healthy           |
+| 2     | Auth and RBAC           | Google JIT login issues rotating app sessions; inactive users denied; auth unit/integration/E2E pass                           |
+| 3     | Room catalog            | Admin CRUD/windows, typed attachments, public search and cloud adapter; window/query/upload tests pass                         |
+| 4     | Booking core            | Request/history/cancel/admin approve/reject; price snapshot and concurrent approval E2E proven                                 |
+| 5     | Reliable notifications  | Transactional outbox, BullMQ worker, Gmail adapter, Mailpit local flow, retry/idempotency tests                                |
+| 6     | Worker Thread export    | **Delivered.** Async room export, outbox-driven queue, XLSX Worker Thread, private result with expiry, crash/concurrency tests |
+| 7     | Cron and operations     | Singleton daily cleanup, run ledger, observability; optional month-end email if reporting selected                             |
+| 8     | CI/CD                   | PR gate, immutable image, migration/deploy job, health smoke test and documented rollback drill                                |
+| 9     | Optional product slices | Profile update, reviews, payment, statistics—each independently specified and reviewed                                         |
 
 ## First implementation plan
 
@@ -36,6 +36,9 @@ one platform capability at a time.
 - Phase 5 choice settled in `SPEC-007`: Gmail SMTP with OAuth2 in deployment,
   Mailpit through the same SMTP port locally/CI, and sender identity from validated
   environment configuration.
-- Maximum export rows/memory/timeout before Phase 6.
+- Maximum export rows/memory/timeout before Phase 6. **Settled**: 10,000 rows,
+  20,000,000 snapshot characters, 128 MiB Worker Thread heap, 60-second generation,
+  25 MiB output, 24-hour results. The character cap was added on measured evidence
+  during the phase; see `ADR-0007`.
 - Deployment target, migration runner, secret store, and rollback method before Phase 8.
 - Revenue definition and payment provider before optional reporting/payment.

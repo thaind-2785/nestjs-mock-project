@@ -25,6 +25,7 @@
     "auth:bootstrap-admin": "ts-node -r tsconfig-paths/register src/cli/bootstrap-admin.ts",
     "files:storage-cleanup": "ts-node -r tsconfig-paths/register src/cli/storage-cleanup.ts",
     "notifications:redrive-failed": "ts-node -r tsconfig-paths/register src/cli/redrive-failed.ts",
+    "ops:retention": "ts-node -r tsconfig-paths/register src/cli/retention.ts",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.mjs\" \"docs/**/*.md\" \".agents/skills/**/*.md\" \".github/**/*.yml\" \".harness/*.yaml\" \".harness/*.json\" \"*.md\"",
     "start": "nest start",

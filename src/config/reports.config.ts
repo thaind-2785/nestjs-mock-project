@@ -70,7 +70,15 @@ const generationTimeoutMs = 60_000;
 
 const maxFileBytes = 25 * 1_024 * 1_024;
 
-const resultTtlHours = 24;
+/**
+ * Exported because Phase 7 has to outlive it: retention deletes an export's metadata,
+ * and a row deleted while its object is still downloadable would leave a working
+ * presigned URL for a result nothing can describe. `assertRetentionBounds` checks the
+ * relationship rather than trusting two files to stay in step.
+ */
+export const roomExportResultTtlHours = 24;
+
+const resultTtlHours = roomExportResultTtlHours;
 
 /** A download URL is a bearer secret, so it is short lived and capped again by the
  * result's own remaining lifetime at request time. */

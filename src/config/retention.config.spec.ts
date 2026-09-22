@@ -24,18 +24,21 @@ describe('retention configuration bounds', () => {
     expect(() => shipped()).not.toThrow();
   });
 
-  it('reads the hotel timezone and the promised idempotency window from the environment', () => {
-    const configuration = createRetentionConfiguration(
-      validateEnvironment({
-        NODE_ENV: 'test',
-        HOTEL_TIMEZONE: 'Asia/Ho_Chi_Minh',
-        IDEMPOTENCY_RETENTION_HOURS: '72',
-      }),
+  it('reads the hotel timezone from the environment', () => {
+    // The only environment value this phase takes. Idempotency keys deliberately have
+    // no window here: `expires_at` already carries the one SPEC-006 promised, written
+    // by the row's own author, and a second copy would be a number nobody reads.
+    expect(shipped().windows.timeZone).toBe('Asia/Ho_Chi_Minh');
+  });
+
+  it('keeps an export row alive for longer than the result it describes', () => {
+    // Deleting the metadata first would leave a presigned URL working against a result
+    // nothing can describe.
+    const configuration = shipped();
+    configuration.windows.exportTerminalHours = 1;
+    expect(() => assertRetentionBounds(configuration)).toThrow(
+      /windows\.exportTerminalHours/,
     );
-    expect(configuration.windows.timeZone).toBe('Asia/Ho_Chi_Minh');
-    // Used verbatim. A constant of this phase's own could undercut the minimum
-    // SPEC-006 promised, which is the one thing retention must never do.
-    expect(configuration.windows.idempotencyHours).toBe(72);
   });
 
   it('refuses a lease that cannot cover the slowest legal run', () => {

@@ -3,6 +3,7 @@ import {
   EnvironmentVariables,
   validateEnvironment,
 } from './environment.validation';
+import { roomExportResultTtlHours } from './reports.config';
 
 /*
  * The bounds below are code, not configuration, for the reason `reports.config.ts`
@@ -11,11 +12,9 @@ import {
  * environment edit. Phase 6 cut the export surface from twenty-two variables to four
  * on exactly this argument, and this phase adds none.
  *
- * Two values are read from the environment rather than named here, because they were
- * already promised elsewhere: the hotel timezone, which decides where a day begins,
- * and the idempotency window, which `SPEC-006` promised as a minimum and Joi already
- * floors at 24 hours. Retention uses that value verbatim; a constant of its own could
- * silently undercut the promise.
+ * One value is read from the environment: the hotel timezone, because `CRON-01` is
+ * specified daily in it and it is already validated there. Everything else is either a
+ * constant below or, for idempotency keys, already written into the row itself.
  */
 
 /**
@@ -79,15 +78,33 @@ const maxAttempts = 3;
  * and a complaint about a booking confirmation arrives in weeks, not months. */
 const notificationEventRetentionDays = 30;
 
-/** Results live 24 hours. Keeping the metadata a week past that means a requester who
- * polls late is told the export `EXPIRED`, not that it never existed. */
-const exportMetadataRetentionDays = 7;
+/**
+ * How long a terminal export job's row survives after it stopped changing.
+ *
+ * The result lives 24 hours, and the metadata is kept a week past that, so a requester
+ * who polls late is told the export `EXPIRED` rather than that it never existed. It is
+ * anchored on `updated_at` rather than on `expires_at` because a failed job has no
+ * expiry at all, and because `idx_export_jobs_operations` leads on `(status,
+ * updated_at)` - an anchor the existing index cannot serve would turn the daily count
+ * into a scan of every export ever run.
+ */
+const exportTerminalRetentionHours = roomExportResultTtlHours + 7 * 24;
 
 /** An expired session grants nothing, so the only reason to hold one is to answer
  * "why was I logged out" for a day. */
 const sessionRetentionHours = 24;
 
 const hoursPerDay = 24;
+
+/**
+ * Idempotency keys have no window here on purpose.
+ *
+ * `idempotency_keys.expires_at` is written as "created plus
+ * `IDEMPOTENCY_RETENTION_HOURS`" by the row's own author, so the promise `SPEC-006`
+ * made is already in the row. Retention reads that column and nothing else; a second
+ * copy of the window in this file would be a number nobody reads, which looks exactly
+ * like a number that works.
+ */
 
 export interface RetentionRunConfiguration {
   tickIntervalMs: number;
@@ -101,10 +118,8 @@ export interface RetentionWindowConfiguration {
   /** Where a day begins. A window is a local calendar date, not a fixed interval. */
   timeZone: string;
   notificationEventHours: number;
-  exportMetadataHours: number;
+  exportTerminalHours: number;
   sessionHours: number;
-  /** From the environment, floored at 24 hours by `SPEC-006`'s promise. */
-  idempotencyHours: number;
 }
 
 export interface RetentionConfiguration {
@@ -126,9 +141,8 @@ export function createRetentionConfiguration(
     windows: {
       timeZone: environment.HOTEL_TIMEZONE,
       notificationEventHours: notificationEventRetentionDays * hoursPerDay,
-      exportMetadataHours: exportMetadataRetentionDays * hoursPerDay,
+      exportTerminalHours: exportTerminalRetentionHours,
       sessionHours: sessionRetentionHours,
-      idempotencyHours: environment.IDEMPOTENCY_RETENTION_HOURS,
     },
   };
   assertRetentionBounds(configuration);
@@ -141,9 +155,8 @@ export function createRetentionConfiguration(
  *
  * Every check here is a relationship between two values. A check on a single value in
  * isolation belongs in the environment schema, and a check that cannot fail belongs
- * nowhere: `windows.idempotencyHours` is deliberately unguarded here because it is the
- * environment's value used verbatim, and asserting that a value equals itself reads
- * exactly like a guard that works.
+ * nowhere at all - a guard that no configuration can trip reads exactly like a guard
+ * that works.
  */
 export function assertRetentionBounds(
   configuration: RetentionConfiguration,
@@ -174,6 +187,12 @@ export function assertRetentionBounds(
   // due rather than like a misconfiguration.
   if (run.maxAttempts < 1) {
     unbounded.push('run.maxAttempts');
+  }
+  // Deleting an export's row while its object is still downloadable would leave a
+  // presigned URL working against a result nothing can describe. The metadata has to
+  // outlive the result, not merely accompany it.
+  if (configuration.windows.exportTerminalHours <= roomExportResultTtlHours) {
+    unbounded.push('windows.exportTerminalHours');
   }
 
   if (unbounded.length > 0) {

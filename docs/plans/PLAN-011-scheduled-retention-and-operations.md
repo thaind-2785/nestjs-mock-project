@@ -1,7 +1,7 @@
 # PLAN-011: Scheduled retention and operations
 
 - Spec: [`SPEC-010`](../specs/SPEC-010-scheduled-retention-and-operations.md)
-- Status: In progress (`P7-T01` complete 2026-09-22)
+- Status: In progress (`P7-T01`, `P7-T02` complete 2026-09-22)
 - Owner: Project owner
 - Reviewer (must be independent): Project owner, who authors none of Phase 7 —
   the same arrangement that closed Phase 6. Redirect it here if a separate pass
@@ -51,7 +51,7 @@ cannot delete a row, and the one that can does nothing else.
 | Slice    | Observable outcome                                                      | Files/modules                                                     | Migration            | Tests                                                  | Status  |
 | -------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------- | ------------------------------------------------------ | ------- |
 | `P7-T01` | A durable run ledger; two replicas competing for one window produce one | `ADR-0008`, `retention.config.ts`, `scheduled_runs`, repository   | Additive             | Config bounds unit, claim/recover, concurrent claim    | Done    |
-| `P7-T02` | Each task reports what is due; `--dry-run` deletes nothing              | `retention.tasks.ts`, due queries, `ops:retention` CLI            | Use `P7-T01` schema  | Boundary-row integration, dry-run row counts           | Pending |
+| `P7-T02` | Each task reports what is due; `--dry-run` deletes nothing              | `retention-due.ts`, due repository, `ops:retention` CLI           | Use `P7-T01` schema  | Boundary-row integration, EXPLAIN, argument unit       | Done    |
 | `P7-T03` | All five tasks delete, in order, without touching a live row            | Five task services, reusing `StorageCleanupService`               | Use `P7-T01` schema  | Orphan count, retained `FAILED`, `RUNNING` job, bounds | Pending |
 | `P7-T04` | The scheduler ticks, catches up one missed window, drains on SIGTERM    | `retention-scheduler.service.ts`, worker bootstrap wiring         | Use `P7-T01` schema  | Real-process E2E, drain E2E                            | Pending |
 | `P7-T05` | Operators can read backlog, runbook, and a failed run; phase closes     | Backlog sampler, `docs/runbooks/retention.md`, doc/status updates | Revert/reapply proof | Sampler E2E, full gate, independent review             | Pending |
@@ -192,9 +192,11 @@ At every combined PR handoff boundary, including the Phase 7 exit in PR 3:
 MYSQL_PORT=13306 npm run verify
 ```
 
-Run `npm run harness:check` only if the Harness or a config registry changed — this
-phase adds one entry command, `ops:retention`, in `P7-T02`, so that slice does change
-it. Do not report an unrun check as green.
+Run `npm run harness:check` only if the Harness or a config registry changed. This
+phase changes neither: `ops:retention` is an operator command like
+`files:storage-cleanup` and `notifications:redrive-failed`, and none of those is a
+manifest entry command — the manifest's eighteen are the development and gate commands.
+An earlier draft of this plan said otherwise. Do not report an unrun check as green.
 
 ### What "ready for review" means here
 
@@ -266,6 +268,44 @@ Durable ones are in `ADR-0008`. The rest:
   milliseconds, so measuring the offset against the original instant folds its
   sub-second part in; every window computed from a timestamp like `16:59:59.999` landed
   999 milliseconds early until the unit tests caught it.
+
+### `P7-T02`
+
+- **`--dry-run` is required rather than defaulted.** It is the only mode this slice
+  implements, and a command that accepted the deleting form and then did not delete
+  would let an operator read "retention ran" and believe it. `P7-T03` makes the flag
+  optional by giving the other mode something to do.
+- **No `--batch-size` yet.** A batch bounds a deletion and there is no deletion here.
+  The flag arrives with the thing it bounds, rather than sitting in the parser doing
+  nothing — this suite already carried three of those in Phase 6.
+- **Two predicates are anchored off the obvious column**, because the obvious one has
+  no index a daily sweep could use. Notification events anchor on `available_at` rather
+  than `processed_at`, and export jobs on `updated_at` rather than `expires_at`. Both
+  choices can only make the window longer than specified, never shorter, which is the
+  safe direction for a minimum. A failed export job has no `expires_at` at all.
+- **`EXPLAIN` asserts `possible_keys`, not `key`.** Whether the optimiser picks an
+  index depends on table size, and on a small fixture a full scan genuinely is cheaper,
+  so asserting the chosen key would assert something false about a correct optimiser.
+- **The report service opens the connection itself.** The data source is configured
+  with `manualInitialization`, so a context that only wants to ask a question still has
+  to call `ensureInitialized`; without it the CLI failed on its first query rather than
+  at startup.
+
+### `P7-T02` evidence
+
+- `npm run test:unit -- --runTestsByPath src/retention/retention-due.spec.ts src/retention/retention.arguments.spec.ts`: 13 tests.
+- `MYSQL_PORT=13306 npm run test:integration -- --runTestsByPath test/retention-due.integration-spec.ts`: 13 tests, including a row on each side of every boundary and an `EXPLAIN` per predicate.
+- Run against the developer database, which is what the slice exists for:
+  `ops:retention --dry-run` reported 1 session, 5 idempotency keys and 1 storage task
+  waiting, with ages between 2.5 and 3.5 days, and no export or notification work yet.
+- Mutations run:
+  - export terminal-status filter removed: **1 test fails** — the `RUNNING` job case.
+  - outbox `PROCESSED` filter removed: **2 tests fail**.
+  - export anchor moved to `completed_at`: **all 12 passed.** `EXPLAIN` only reads the
+    `WHERE` clause, and the anchor appears in the projection, so nothing saw that the
+    reported age would skip every failed job. A structural unit assertion (the anchor
+    must appear in the predicate) and an integration case seeding a failed job were
+    added; the same mutation now fails one of each.
 
 ### `P7-T01` evidence
 

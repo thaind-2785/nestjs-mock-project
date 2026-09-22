@@ -95,6 +95,33 @@ The zone offset is read twice — once to find the local date, once at that date
 midnight — because the two can differ where DST applies. In a zone without DST the
 second read returns the same number and costs nothing.
 
+### An anchor is chosen for its index, not for its name
+
+Each task decides what is due from one column, and that column has to be answerable
+from an index this schema already has. A daily count runs against tables the API is
+serving, and a predicate no index covers turns it into a scan of every row the system
+has ever written - on the first run, that is the whole table.
+
+Two anchors are therefore not the column the window is named after. Notification events
+use `available_at` rather than `processed_at`, which has no index at all. Export jobs use
+`updated_at` rather than `expires_at`, which a failed job does not have.
+
+The rule that makes both safe: an anchor must be indexed, must be non-null for every
+status its task collects, and may only lengthen the window. An event becomes available
+before it is processed, and a terminal export job's `updated_at` is the instant it became
+terminal, so each substitution retains at least as long as the stated window and never
+less. Retention is a minimum; lagging is recoverable and deleting early is not.
+
+Rejected alternative: **add `(status, expires_at)` to `export_jobs` and anchor there.**
+It would read more naturally and cost a migration - but it would also collect no failed
+jobs at all, because their `expires_at` is null and a range scan skips nulls. Covering
+them would need a second predicate on `failed_at`, which is unindexed, so the migration
+buys a name and leaves the same problem.
+
+Accepted consequence: if a later phase writes to a terminal export job, its retention
+clock restarts. The row is then kept longer, which is the direction that cannot cause
+harm, and the spec records the assumption rather than leaving it implicit.
+
 ### Retention lives on the worker
 
 Phase 6 separated the API and worker module graphs. This stays on the worker side: the

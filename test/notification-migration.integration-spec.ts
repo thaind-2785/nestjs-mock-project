@@ -150,8 +150,9 @@ describe('Phase 5 migration revert and reapply', () => {
     ]);
 
     // An access path, not evidence: this one reverts with rows in the table, which is
-    // what separates it from every migration under it. The Phase 6 export schema sits
-    // above it and comes off first.
+    // what separates it from every migration under it. The Phase 6 export schema and
+    // the Phase 7 run ledger sit above it and come off first.
+    await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
     expect(await indexExists('idx_email_deliveries_template_status')).toBe(
@@ -214,9 +215,11 @@ describe('Phase 5 migration revert and reapply', () => {
   /**
    * Leaves the acceptance schema on top, which is where these tests expect to find it.
    * Each later slice appends a migration above it, so the count lives here rather than
-   * in every test: the Phase 6 export schema, then the backlog index.
+   * in every test: the Phase 7 run ledger, the Phase 6 export schema, then the backlog
+   * index.
    */
   async function peelAboveAcceptanceSchema(): Promise<void> {
+    await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
     await dataSource.undoLastMigration();
   }

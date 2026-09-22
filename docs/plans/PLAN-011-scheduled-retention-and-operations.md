@@ -1,7 +1,7 @@
 # PLAN-011: Scheduled retention and operations
 
 - Spec: [`SPEC-010`](../specs/SPEC-010-scheduled-retention-and-operations.md)
-- Status: Draft
+- Status: In progress (`P7-T01` complete 2026-09-22)
 - Owner: Project owner
 - Reviewer (must be independent): Project owner, who authors none of Phase 7 —
   the same arrangement that closed Phase 6. Redirect it here if a separate pass
@@ -50,7 +50,7 @@ cannot delete a row, and the one that can does nothing else.
 
 | Slice    | Observable outcome                                                      | Files/modules                                                     | Migration            | Tests                                                  | Status  |
 | -------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------- | ------------------------------------------------------ | ------- |
-| `P7-T01` | A durable run ledger; two replicas competing for one window produce one | `ADR-0008`, `retention.config.ts`, `scheduled_runs`, repository   | Additive             | Config bounds unit, claim/recover, concurrent claim    | Pending |
+| `P7-T01` | A durable run ledger; two replicas competing for one window produce one | `ADR-0008`, `retention.config.ts`, `scheduled_runs`, repository   | Additive             | Config bounds unit, claim/recover, concurrent claim    | Done    |
 | `P7-T02` | Each task reports what is due; `--dry-run` deletes nothing              | `retention.tasks.ts`, due queries, `ops:retention` CLI            | Use `P7-T01` schema  | Boundary-row integration, dry-run row counts           | Pending |
 | `P7-T03` | All five tasks delete, in order, without touching a live row            | Five task services, reusing `StorageCleanupService`               | Use `P7-T01` schema  | Orphan count, retained `FAILED`, `RUNNING` job, bounds | Pending |
 | `P7-T04` | The scheduler ticks, catches up one missed window, drains on SIGTERM    | `retention-scheduler.service.ts`, worker bootstrap wiring         | Use `P7-T01` schema  | Real-process E2E, drain E2E                            | Pending |
@@ -247,4 +247,37 @@ record of what was deleted, which is a decision rather than a rollback step.
 
 ## Decisions made during implementation
 
-Recorded here as they are made; durable ones move to `ADR-0008`.
+Durable ones are in `ADR-0008`. The rest:
+
+### `P7-T01`
+
+- **The claim token is the only predicate.** The export repository threads a token and
+  an attempt number; here the token is a fresh UUID per claim, so a recovery replaces it
+  and the previous holder's writes stop matching on their own. A second guard would be a
+  second thing to thread correctly for no additional refusal.
+- **`recover` writes `FAILED` for a run it may not take.** A claimed row whose lease
+  expired with its budget spent has to be closed by whoever notices, because the process
+  that died could not, and left alone it would sit in the recoverable index looking like
+  work in progress forever.
+- **A claimed row may carry `last_error_code`.** It belongs to the previous attempt, the
+  way a pending outbox event's does. The first version of the state check forbade it,
+  which would have thrown away the only diagnosis of why a window was on its second try.
+- **Zone offsets are read on a second-truncated instant.** `Intl` renders no
+  milliseconds, so measuring the offset against the original instant folds its
+  sub-second part in; every window computed from a timestamp like `16:59:59.999` landed
+  999 milliseconds early until the unit tests caught it.
+
+### `P7-T01` evidence
+
+- `npm run test:unit -- --runTestsByPath src/retention/retention-window.spec.ts src/config/retention.config.spec.ts`: 13 tests.
+- `MYSQL_PORT=13306 npm run test:integration -- --runTestsByPath test/scheduled-run.integration-spec.ts`: 15 tests against real MySQL.
+- Mutations run, each recorded because a guard whose removal changes nothing is not a
+  guard:
+  - `UNIQUE KEY` → `KEY` on the window: **6 tests fail**, including the concurrent
+    election.
+  - `attempts < ?` removed from recovery: **1 test fails** — the abandoned-run case.
+  - `lock_expires_at > NOW(6)` removed from `complete`: **all 15 passed.** The sibling
+    test only proved the token predicate, because recovery had already replaced the
+    token. Two tests were added for the case where the lease is the only thing refusing
+    the write — the lease expired and nobody has taken over — and the same mutation now
+    fails one of them.

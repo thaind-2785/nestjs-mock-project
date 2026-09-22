@@ -5,6 +5,7 @@ import { CreateNotificationDeliverySchema1789370000000 } from '../../src/databas
 import { CreateEmailSendAttemptSchema1789460000000 } from '../../src/database/migrations/1789460000000-CreateEmailSendAttemptSchema';
 import { AddDeliveryBacklogIndex1789550000000 } from '../../src/database/migrations/1789550000000-AddDeliveryBacklogIndex';
 import { CreateRoomExportSchema1789640000000 } from '../../src/database/migrations/1789640000000-CreateRoomExportSchema';
+import { CreateScheduledRunSchema1790020800000 } from '../../src/database/migrations/1790020800000-CreateScheduledRunSchema';
 
 /**
  * The ordered migration list every suite that builds a disposable database runs.
@@ -24,4 +25,5 @@ export const applicationMigrations = [
   CreateEmailSendAttemptSchema1789460000000,
   AddDeliveryBacklogIndex1789550000000,
   CreateRoomExportSchema1789640000000,
+  CreateScheduledRunSchema1790020800000,
 ];

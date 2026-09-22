@@ -117,8 +117,10 @@ on the fifth.
   `EXPORT_ROW_LIMIT_EXCEEDED` is administrators filtering too broadly and needs no
   operator action; twenty `EXPORT_STORAGE_UNAVAILABLE` is an outage.
 - **`safeguards.dueCount`** — uploads whose attempt never finalized: objects nobody
-  points at. Until Phase 7 schedules cleanup this number only grows, so it is reported
-  rather than alerted on. See "Abandoned uploads" below.
+  points at. Phase 7's `storage-tasks` retention task drains these on its daily window,
+  so a number that keeps climbing means retention is not running rather than that uploads
+  are failing. Check `retention_backlog_sampled` before looking here. See "Abandoned
+  uploads" below.
 - **`queue`** — Redis counts beside the MySQL ones. The two disagreeing is itself the
   signal: durable work with an empty queue means handoffs are failing; a queue with no
   durable work behind it means jobs nothing can claim. Absent (rather than zero) when
@@ -210,8 +212,9 @@ Each attempt uploads under its own key containing its claim token, and inserts a
 `storage_cleanup_tasks` row **before** the upload. The winning attempt deletes its own
 row; a losing one leaves it, and the object it uploaded is covered.
 
-Phase 6 does not schedule cleanup. Until Phase 7 adds it, run the existing command by
-hand when `safeguards.dueCount` grows:
+Phase 7 schedules this, through the `storage-tasks` task, against the same service. Run
+it by hand when the schedule is off or when `safeguards.dueCount` is climbing faster than
+a daily window can drain:
 
 ```bash
 npm run files:storage-cleanup
@@ -220,17 +223,22 @@ npm run files:storage-cleanup
 It is idempotent - an object that is already gone counts as deleted - and it only ever
 acts on keys a `storage_cleanup_tasks` row names, never on a prefix.
 
-## Expiry before Phase 7
+## Expiry and deletion
 
 A result stops being downloadable 24 hours after completion. The API enforces this at
 read time against **database** time, so an expired job returns `EXPIRED` and no URL
-whether or not anything has deleted the object yet.
+whether or not anything has deleted the object yet. That is what lets deletion lag
+safely.
 
-What Phase 6 does _not_ do is delete the object or the row. Until Phase 7 schedules
-that, expired objects accumulate in the bucket and expired jobs accumulate in the
-table. Neither is reachable through the API. Watch bucket size if exports are heavily
-used; deleting by hand is safe as long as it targets keys listed in `export_jobs`, and
-never a prefix.
+Phase 6 does not delete anything; Phase 7's `export-results` task does, eight days after
+a job became terminal — the result's own day plus a week, so a requester who polls late
+is told `EXPIRED` rather than that the export never existed. It removes the object first
+and the rows after, because rows removed while the object survives leave a file nothing
+can name again.
+
+If exports accumulate, read `retention_backlog_sampled` rather than the bucket: a rising
+`export-results` backlog with `failedWindows` above zero means retention has given up on
+that task. See [the retention runbook](retention.md).
 
 ## Rollback
 

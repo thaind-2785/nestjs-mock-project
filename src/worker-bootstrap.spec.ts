@@ -7,6 +7,10 @@ import {
   createReportsConfiguration,
   reportsConfig,
 } from './config/reports.config';
+import {
+  createRetentionConfiguration,
+  retentionConfig,
+} from './config/retention.config';
 import { validateEnvironment } from './config/environment.validation';
 import {
   bootstrapNotificationWorker,
@@ -45,11 +49,14 @@ function createContextDouble(
     NOTIFICATION_SHUTDOWN_DRAIN_MS: '30000',
     ...environment,
   });
-  // Both families, because the worker process hosts both and the drain it takes is
-  // the larger of the two. A double that answered only one of them would let the
-  // bootstrap read `undefined` and the suite would never notice.
+  // Every family this process hosts, because the drain it takes is the largest of them
+  // and a double that answered only some would let the bootstrap read `undefined`. That
+  // is not hypothetical: retention arrived as the third and these cases failed loudly,
+  // which is the whole reason the double answers all of them rather than the one under
+  // test.
   const configuration = createNotificationsConfiguration(variables);
   const reports = createReportsConfiguration(variables);
+  const retention = createRetentionConfiguration(variables);
   const closed = jest.fn(close);
   return {
     closed,
@@ -58,6 +65,7 @@ function createContextDouble(
       get: jest.fn((token: unknown) => {
         if (token === notificationsConfig.KEY) return configuration;
         if (token === reportsConfig.KEY) return reports;
+        if (token === retentionConfig.KEY) return retention;
         return undefined;
       }),
     } as unknown as INestApplicationContext,
@@ -250,34 +258,62 @@ describe('workerDrainMs', () => {
     return [
       createNotificationsConfiguration(variables),
       createReportsConfiguration(variables),
+      createRetentionConfiguration(variables),
     ] as const;
   }
 
   it('leaves a mail-only worker on the mail bound', () => {
     // No consumer is registered, so there is no generation to protect and no reason
     // to make every restart wait for work this process cannot be doing.
-    const [notifications, reports] = configurations({});
+    const [notifications, reports, retention] = configurations({});
 
     expect(reports.enabled).toBe(false);
-    expect(workerDrainMs(notifications, reports)).toBe(30_000);
+    expect(retention.enabled).toBe(false);
+    expect(workerDrainMs(notifications, reports, retention)).toBe(30_000);
   });
 
   it('takes the larger bound once both families are hosted', () => {
-    const [notifications, reports] = configurations({
+    const [notifications, reports, retention] = configurations({
       REPORT_EXPORT_ENABLED: 'true',
     });
 
-    expect(workerDrainMs(notifications, reports)).toBe(
+    expect(workerDrainMs(notifications, reports, retention)).toBe(
       reports.worker.shutdownDrainMs,
     );
   });
 
   it('never shortens the mail bound to the export one', () => {
-    const [notifications, reports] = configurations({
+    const [notifications, reports, retention] = configurations({
       REPORT_EXPORT_ENABLED: 'true',
       NOTIFICATION_SHUTDOWN_DRAIN_MS: '120000',
     });
 
-    expect(workerDrainMs(notifications, reports)).toBe(120_000);
+    expect(workerDrainMs(notifications, reports, retention)).toBe(120_000);
+  });
+
+  it('covers a retention batch once the scheduler is hosted', () => {
+    const [notifications, reports, retention] = configurations({
+      RETENTION_ENABLED: 'true',
+    });
+
+    // One batch, not one run. The run is interruptible and hands its window back, so a
+    // deploy never waits for a whole budget - which would be five minutes per task.
+    expect(retention.run.shutdownDrainMs).toBeLessThan(
+      retention.run.runBudgetMs,
+    );
+    expect(workerDrainMs(notifications, reports, retention)).toBe(
+      retention.run.shutdownDrainMs,
+    );
+  });
+
+  it('adds nothing for a family this process is not hosting', () => {
+    // A switched-off family has no work to drain, and counting it would make every
+    // deploy wait for something that cannot be happening.
+    const [notifications, reports, retention] = configurations({
+      RETENTION_ENABLED: 'false',
+      NOTIFICATION_SHUTDOWN_DRAIN_MS: '15000',
+    });
+
+    expect(workerDrainMs(notifications, reports, retention)).toBe(15_000);
   });
 });

@@ -107,6 +107,7 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   NOTIFICATION_SHUTDOWN_DRAIN_MS: number;
   NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS: number;
   REPORT_EXPORT_ENABLED: boolean;
+  RETENTION_ENABLED: boolean;
   REPORT_EXPORT_QUEUE_PREFIX: string;
   REPORT_EXPORT_CREATE_RATE_LIMIT_MAX: number;
   REPORT_EXPORT_CREATE_RATE_LIMIT_WINDOW_SECONDS: number;
@@ -458,6 +459,11 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
   // its consumer and a fixture job is observed end to end while the API process still
   // refuses to create one.
   REPORT_EXPORT_ENABLED: Joi.boolean().default(false),
+  // The scheduler's own switch, and the only variable this phase adds. The rollout
+  // deploys the migration, then the code with this off, then turns it on after the due
+  // counts have been read by hand - which needs a worker that can be deployed before it
+  // is allowed to delete anything.
+  RETENTION_ENABLED: Joi.boolean().default(false),
   // Required in production for the reason the other two prefixes are: a second
   // deployment sharing one Redis must not consume this one's export jobs.
   REPORT_EXPORT_QUEUE_PREFIX: Joi.alternatives().conditional('NODE_ENV', {

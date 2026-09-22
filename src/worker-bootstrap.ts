@@ -5,6 +5,7 @@ import {
   notificationsConfig,
 } from './config/notifications.config';
 import { reportsConfig } from './config/reports.config';
+import { retentionConfig } from './config/retention.config';
 
 export const workerShutdownSignals = ['SIGTERM', 'SIGINT'] as const;
 
@@ -43,6 +44,7 @@ export async function bootstrapNotificationWorker(
   const drainMs = workerDrainMs(
     configuration,
     context.get<ConfigType<typeof reportsConfig>>(reportsConfig.KEY),
+    context.get<ConfigType<typeof retentionConfig>>(retentionConfig.KEY),
   );
 
   let stopping = false;
@@ -102,13 +104,19 @@ export async function bootstrapNotificationWorker(
 export function workerDrainMs(
   notifications: ConfigType<typeof notificationsConfig>,
   reports: ConfigType<typeof reportsConfig>,
+  retention: ConfigType<typeof retentionConfig>,
 ): number {
-  return reports.enabled
-    ? Math.max(
-        notifications.worker.shutdownDrainMs,
-        reports.worker.shutdownDrainMs,
-      )
-    : notifications.worker.shutdownDrainMs;
+  // The maximum across the families this process actually hosts. A family that is
+  // switched off contributes nothing, because it has no work to drain - and including it
+  // would make every deploy wait for a drain nobody needs.
+  //
+  // Retention contributes one batch rather than one run: its run is interruptible and
+  // hands the window back, so shutdown never waits for a whole budget.
+  return Math.max(
+    notifications.worker.shutdownDrainMs,
+    reports.enabled ? reports.worker.shutdownDrainMs : 0,
+    retention.enabled ? retention.run.shutdownDrainMs : 0,
+  );
 }
 
 export interface NotificationWorkerStopOptions {

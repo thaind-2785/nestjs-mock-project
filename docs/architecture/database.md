@@ -295,8 +295,10 @@ UTC-safe `YYYY-MM-DD` strings by TypeORM. Booking statuses are `PENDING`,
 An `idempotency_keys` row is either `PENDING` with neither stored response field, or
 `COMPLETED` with both `response_status` and `response_body`. The unique actor /
 operation / key tuple lets the creation transaction store and replay one exact result.
-Expired records are retained until the Phase 7 cleanup owner runs; retaining longer
-than the configured minimum is safe because it only refuses a changed reuse.
+Expired records are collected by the Phase 7 `idempotency-keys` task, which reads
+`expires_at` and nothing else - the window `SPEC-006` promised is already written into
+the row. Retaining longer than that minimum is safe because it only refuses a changed
+reuse.
 
 An `outbox_events` row is exactly one of: `PENDING` with no lease, processed time, or
 failure time; `PROCESSING` with a complete lease; `PROCESSED` with a processed time
@@ -391,7 +393,29 @@ a log.
 `expires_at` has passed, compared against database time rather than an API host's
 clock. Storing it would need a scheduler Phase 6 does not have, and a result that is
 only expired once something remembered to say so is one the API would keep handing out
-in the meantime. Phase 7 owns the durable deletion of expired objects and rows.
+in the meantime. Phase 7's `export-results` task owns the durable deletion, and does it
+in one order only: the object, then `export_jobs`, then the outbox event. Rows removed
+while the object survives would leave a file nothing can name again, because the row was
+the only thing that knew its key.
+
+### One run per task per day
+
+`scheduled_runs` is the Phase 7 ledger, and it is the election rather than a record of
+one. A window is claimed by inserting its row against
+`UNIQUE (task_name, scheduled_for)`, so replicas racing it produce one winner and N-1
+duplicate keys. A lock would pick a winner too but would leave nothing behind: a process
+that dies holding one releases it, and a released lock cannot be told apart from a window
+nobody started. The row survives its claimer, so an abandoned run is a `CLAIMED` row past
+its lease.
+
+`scheduled_for` is the instant the local day began, computed from `NOW(6)` and the hotel
+timezone, so replicas agree on the window however far their own clocks have drifted.
+`deleted_counts` accumulates across attempts and stores integers; the table is
+deliberately not self-cleaning, because a retention job that prunes its own history is one
+nobody can audit.
+
+Every table Phase 7 deletes from holds operational exhaust. No business record - no user,
+booking, room or attachment - is named by any of its predicates.
 
 ### Two consumers, one outbox
 
@@ -516,8 +540,9 @@ it inserts live metadata. If upload or metadata work fails, the safeguard eventu
 becomes claimable and deleting a nonexistent object remains safe. Attachment detach
 or replacement inserts immediately available cleanup work in its metadata
 transaction. Claimers use expiring lock fields and increment `attempts`; the lock
-columns are either all null or all populated. Phase 7 may schedule this same bounded
-cleanup service, while Phase 5's general outbox remains independent.
+columns are either all null or all populated. Phase 7's `storage-tasks` task schedules
+this same bounded service rather than reimplementing it, while Phase 5's general outbox
+remains independent.
 
 The first-admin CLI identifies one already-provisioned account using both `user_id`
 and its matching normalized verified email. It rejects missing/inactive/mismatched

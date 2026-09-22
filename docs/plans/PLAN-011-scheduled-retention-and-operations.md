@@ -1,7 +1,8 @@
 # PLAN-011: Scheduled retention and operations
 
 - Spec: [`SPEC-010`](../specs/SPEC-010-scheduled-retention-and-operations.md)
-- Status: In progress (`P7-T01`, `P7-T02`, `P7-T03` complete 2026-09-22)
+- Status: Implemented (`P7-T01`-`P7-T05` complete 2026-09-22, pending independent
+  Phase 7 exit review)
 - Owner: Project owner
 - Reviewer (must be independent): Project owner, who authors none of Phase 7 —
   the same arrangement that closed Phase 6. Redirect it here if a separate pass
@@ -48,13 +49,13 @@ deletes and a tick, and slicing it as finely would be ceremony rather than risk 
 What the slicing still buys is the boundary that matters: the first pull request
 cannot delete a row, and the one that can does nothing else.
 
-| Slice    | Observable outcome                                                      | Files/modules                                                     | Migration            | Tests                                                  | Status  |
-| -------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------- | ------------------------------------------------------ | ------- |
-| `P7-T01` | A durable run ledger; two replicas competing for one window produce one | `ADR-0008`, `retention.config.ts`, `scheduled_runs`, repository   | Additive             | Config bounds unit, claim/recover, concurrent claim    | Done    |
-| `P7-T02` | Each task reports what is due; `--dry-run` deletes nothing              | `retention-due.ts`, due repository, `ops:retention` CLI           | Use `P7-T01` schema  | Boundary-row integration, EXPLAIN, argument unit       | Done    |
-| `P7-T03` | All five tasks delete, in order, without touching a live row            | Task and run services, reusing `StorageCleanupService`            | Use `P7-T01` schema  | Orphan count, retained `FAILED`, `RUNNING` job, bounds | Done    |
-| `P7-T04` | The scheduler ticks, catches up one missed window, drains on SIGTERM    | `retention-scheduler.service.ts`, worker bootstrap wiring         | Use `P7-T01` schema  | Real-process E2E, drain E2E                            | Pending |
-| `P7-T05` | Operators can read backlog, runbook, and a failed run; phase closes     | Backlog sampler, `docs/runbooks/retention.md`, doc/status updates | Revert/reapply proof | Sampler E2E, full gate, independent review             | Pending |
+| Slice    | Observable outcome                                                      | Files/modules                                                     | Migration            | Tests                                                  | Status |
+| -------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------- | ------------------------------------------------------ | ------ |
+| `P7-T01` | A durable run ledger; two replicas competing for one window produce one | `ADR-0008`, `retention.config.ts`, `scheduled_runs`, repository   | Additive             | Config bounds unit, claim/recover, concurrent claim    | Done   |
+| `P7-T02` | Each task reports what is due; `--dry-run` deletes nothing              | `retention-due.ts`, due repository, `ops:retention` CLI           | Use `P7-T01` schema  | Boundary-row integration, EXPLAIN, argument unit       | Done   |
+| `P7-T03` | All five tasks delete, in order, without touching a live row            | Task and run services, reusing `StorageCleanupService`            | Use `P7-T01` schema  | Orphan count, retained `FAILED`, `RUNNING` job, bounds | Done   |
+| `P7-T04` | The scheduler ticks, catches up one missed window, drains on SIGTERM    | `retention-scheduler.service.ts`, worker bootstrap wiring         | Use `P7-T01` schema  | Real-process E2E, drain E2E                            | Done   |
+| `P7-T05` | Operators can read backlog, runbook, and a failed run; phase closes     | Backlog sampler, `docs/runbooks/retention.md`, doc/status updates | Revert/reapply proof | Sampler E2E, full gate, independent review             | Done   |
 
 ## Pull request sequence
 
@@ -321,6 +322,49 @@ Durable ones are in `ADR-0008`. The rest:
   that already existed could not see it; a `JSON_TYPE` check now can.
 - **`--dry-run` stops being required**, because the reason it was expired with this
   slice. Its unit test was rewritten to the new contract rather than deleted.
+
+### `P7-T04`
+
+- **A run is interruptible, and that is what sizes the drain.** A cycle is five tasks
+  each entitled to a five-minute budget, so waiting for one would have made the worker's
+  shutdown bound twenty-five minutes. The scheduler sets its stop flag before stopping
+  the loop, the run sees it between batches, and the window is handed back through the
+  same path a budget-truncated run already takes - one mechanism, not two. The drain then
+  covers one batch: ninety seconds.
+- **Catch-up is the current window only.** A worker down for a week runs today once, not
+  seven times: retention is idempotent by predicate, so replaying missed windows would
+  delete the same rows repeatedly across seven runs instead of one.
+- **A tick costs four statements per task once the day is done.** Deliberately not
+  cached: a process-local memory of what it already finished is state that can be wrong
+  about a window another replica owns.
+
+### `P7-T05`
+
+- **The sampler runs on its own timer, not at the end of a run.** The readings that
+  matter most are the ones a stopped scheduler produces, and a sample tied to a run goes
+  quiet exactly when nothing is finishing.
+- **`failedWindows` is the reading to alert on.** A task that has given up can have a
+  small backlog for days before the due counts look alarming.
+- **Earlier specs keep their Phase 7 promises in the future tense.** They are the record
+  of what was accepted at the time and carry a status line for what changed. The
+  runbooks do not: `room-export.md` told an operator to run cleanup by hand "until Phase
+  7 adds it", which is now wrong in a document somebody follows during an incident.
+
+### `P7-T04` and `P7-T05` evidence
+
+- `MYSQL_PORT=13306 npm run test:e2e -- --runTestsByPath test/retention-worker-lifecycle.e2e-spec.ts`: 5 tests against spawned worker processes.
+- Mutations run:
+  - `shouldStop` removed from the batch loop: **1 test fails** — the run is no longer
+    interruptible and SIGTERM either waits for the budget or abandons the window.
+  - the stop flag set after `loop.stop()` instead of before: **1 test fails** — the flag
+    arrives too late for the cycle to see it.
+- The drain case uses a storage endpoint that accepts the connection and answers nothing,
+  so the run is provably inside a batch when the signal arrives rather than caught by
+  luck - the technique Phase 6's error log records.
+- A pre-existing suite failed loudly and correctly: `worker-bootstrap.spec.ts` builds a
+  context double whose comment warned that answering only some families would let the
+  bootstrap read `undefined`. The third family arrived and it failed, which is the
+  comment doing its job.
 
 ### `P7-T03` evidence
 

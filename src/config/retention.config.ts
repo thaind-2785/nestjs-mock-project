@@ -57,6 +57,26 @@ const runBudgetMs = 300_000;
 const leaseSafetyMarginMs = 30_000;
 
 /**
+ * How long shutdown waits for retention.
+ *
+ * One batch, not one run. A run may keep going for its whole budget, and waiting for
+ * that on every deploy would make the worker's drain five minutes per task; instead the
+ * run is interruptible - it stops after the batch in flight and hands the window back,
+ * which is the same path a budget-truncated run already takes. So this only has to cover
+ * the slowest single batch: one bounded claim read plus one bounded provider call.
+ */
+const shutdownDrainMs = 90_000;
+
+/**
+ * How often the backlog reading is written.
+ *
+ * A minute, matching the tick: the readings worth having are the ones a stopped
+ * scheduler produces, so sampling on the run's schedule would go quiet exactly when
+ * something is wrong.
+ */
+const backlogSampleIntervalMs = 60_000;
+
+/**
  * How long a claimed run stays the claimer's before another replica may take it over.
  *
  * Generous against the worst case above rather than tight against the common one: the
@@ -103,6 +123,8 @@ const hoursPerDay = 24;
 
 export interface RetentionRunConfiguration {
   tickIntervalMs: number;
+  shutdownDrainMs: number;
+  backlogSampleIntervalMs: number;
   batchSize: number;
   statementTimeoutMs: number;
   runBudgetMs: number;
@@ -119,6 +141,11 @@ export interface RetentionWindowConfiguration {
 }
 
 export interface RetentionConfiguration {
+  /**
+   * Read in the worker, where it gates the scheduler. The operator command ignores it:
+   * running retention by hand is what the rollout does before this is ever turned on.
+   */
+  enabled: boolean;
   run: RetentionRunConfiguration;
   windows: RetentionWindowConfiguration;
 }
@@ -127,8 +154,11 @@ export function createRetentionConfiguration(
   environment: EnvironmentVariables,
 ): RetentionConfiguration {
   const configuration: RetentionConfiguration = {
+    enabled: environment.RETENTION_ENABLED,
     run: {
       tickIntervalMs,
+      shutdownDrainMs,
+      backlogSampleIntervalMs,
       batchSize,
       statementTimeoutMs,
       runBudgetMs,
@@ -185,6 +215,11 @@ export function assertRetentionBounds(
   // so every run would stop having done nothing and the backlog would only grow.
   if (run.runBudgetMs < run.statementTimeoutMs) {
     unbounded.push('run.runBudgetMs');
+  }
+  // A drain shorter than one bounded read would terminate a batch that was about to
+  // finish, on every ordinary restart.
+  if (run.shutdownDrainMs < run.statementTimeoutMs) {
+    unbounded.push('run.shutdownDrainMs');
   }
   // Zero attempts is a task that can never run; it would look like a task with nothing
   // due rather than like a misconfiguration.

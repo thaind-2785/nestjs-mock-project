@@ -67,3 +67,12 @@ export interface RetentionEventBatch {
 export interface RetentionExportBatch {
   jobs: Array<{ id: string; objectKey: string | null; outboxEventId: string }>;
 }
+
+/** One task's line in a backlog sample. */
+export interface RetentionBacklogTask {
+  taskName: RetentionTaskName;
+  table: string;
+  windowHours: number;
+  due: number;
+  oldestOverdueMs: number;
+}

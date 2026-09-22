@@ -374,6 +374,52 @@ export class ScheduledRunRepository {
   }
 
   /**
+   * What the ledger says about retention as a whole, rather than about one window.
+   *
+   * Two states the due counts cannot show. A `FAILED` window will not be picked up
+   * again by anything, so that task is stopped until somebody acts - and the backlog it
+   * leaves may still be small enough to look calm. A `CLAIMED` window past its lease is
+   * a process that died, waiting for a replica to notice; one is ordinary, a rising
+   * count is not.
+   */
+  async health(dataSource: DataSource): Promise<{
+    failedWindows: number;
+    staleClaims: number;
+    oldestFailedAgeMs: number;
+  }> {
+    const rows: Array<{
+      failed_windows: number;
+      stale_claims: number;
+      oldest_failed_age_us: string | number;
+    }> = await dataSource.manager.query(
+      `SELECT
+         SUM(status = ?) AS failed_windows,
+         SUM(status = ? AND lock_expires_at <= NOW(6)) AS stale_claims,
+         COALESCE(
+           TIMESTAMPDIFF(
+             MICROSECOND,
+             MIN(CASE WHEN status = ? THEN finished_at END),
+             NOW(6)
+           ),
+           0
+         ) AS oldest_failed_age_us
+       FROM scheduled_runs`,
+      [
+        ScheduledRunStatus.Failed,
+        ScheduledRunStatus.Claimed,
+        ScheduledRunStatus.Failed,
+      ],
+    );
+    return {
+      failedWindows: Number(rows[0].failed_windows ?? 0),
+      staleClaims: Number(rows[0].stale_claims ?? 0),
+      oldestFailedAgeMs: Math.floor(
+        Number(rows[0].oldest_failed_age_us) / microsecondsPerMillisecond,
+      ),
+    };
+  }
+
+  /**
    * A run finished work it is no longer entitled to record.
    *
    * Worth a line of its own: the rows it names really were deleted, and the ledger will

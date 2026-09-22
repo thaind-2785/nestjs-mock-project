@@ -1,6 +1,6 @@
 # SPEC-010: Scheduled retention and operations
 
-- Status: Draft
+- Status: Accepted; implemented in Phase 7 (`P7-T01`-`P7-T05`, 2026-09-22)
 - Owner: Project owner
 - Last updated: 2026-09-20
 - Scope: Required

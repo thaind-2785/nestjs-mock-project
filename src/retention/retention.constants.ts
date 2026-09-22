@@ -36,6 +36,9 @@ export const retentionErrorCodes = {
    * rows it would otherwise have taken. Retryable, and the window is handed back. */
   budgetSpent: 'RETENTION_BUDGET_SPENT',
   storageIncomplete: 'RETENTION_STORAGE_INCOMPLETE',
+  /** The process was asked to stop. The batch in flight finished and the window went
+   * back; nothing was abandoned and nothing was recorded as done. */
+  shutdown: 'RETENTION_SHUTDOWN',
 } as const;
 
 export type RetentionErrorCode =

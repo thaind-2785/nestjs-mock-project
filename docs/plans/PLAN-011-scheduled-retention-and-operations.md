@@ -71,6 +71,16 @@ part: five deletions and nothing else competing for the reviewer's attention. Bu
 it with the scheduler and the runbook, as an earlier draft of this plan did, would put
 the one change that cannot be undone in the same diff as the two that can.
 
+**Settled, and it has already paid for itself.** The boundary looked like process weight
+when it was written - three pull requests for one table and a handful of deletes. It
+stopped looking that way the moment `ops:retention --dry-run` ran against a real
+database: five predicates, written from the schema rather than from data, produced
+numbers a reviewer can sanity-check - one session, five idempotency keys, one storage
+task, nothing for exports or notifications yet - and any of them being absurd would have
+been visible before a single row was at risk. A destructive job whose predicates were
+never read against real data before they acted is the ordinary way retention deletes the
+wrong thing. The extra pull request is the cheapest insurance in this phase.
+
 Branch each PR fresh from `main` after the previous one merges.
 
 ### Functional milestones

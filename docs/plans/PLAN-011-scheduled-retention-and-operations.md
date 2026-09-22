@@ -1,7 +1,7 @@
 # PLAN-011: Scheduled retention and operations
 
 - Spec: [`SPEC-010`](../specs/SPEC-010-scheduled-retention-and-operations.md)
-- Status: In progress (`P7-T01`, `P7-T02` complete 2026-09-22)
+- Status: In progress (`P7-T01`, `P7-T02`, `P7-T03` complete 2026-09-22)
 - Owner: Project owner
 - Reviewer (must be independent): Project owner, who authors none of Phase 7 —
   the same arrangement that closed Phase 6. Redirect it here if a separate pass
@@ -52,7 +52,7 @@ cannot delete a row, and the one that can does nothing else.
 | -------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------- | ------------------------------------------------------ | ------- |
 | `P7-T01` | A durable run ledger; two replicas competing for one window produce one | `ADR-0008`, `retention.config.ts`, `scheduled_runs`, repository   | Additive             | Config bounds unit, claim/recover, concurrent claim    | Done    |
 | `P7-T02` | Each task reports what is due; `--dry-run` deletes nothing              | `retention-due.ts`, due repository, `ops:retention` CLI           | Use `P7-T01` schema  | Boundary-row integration, EXPLAIN, argument unit       | Done    |
-| `P7-T03` | All five tasks delete, in order, without touching a live row            | Five task services, reusing `StorageCleanupService`               | Use `P7-T01` schema  | Orphan count, retained `FAILED`, `RUNNING` job, bounds | Pending |
+| `P7-T03` | All five tasks delete, in order, without touching a live row            | Task and run services, reusing `StorageCleanupService`            | Use `P7-T01` schema  | Orphan count, retained `FAILED`, `RUNNING` job, bounds | Done    |
 | `P7-T04` | The scheduler ticks, catches up one missed window, drains on SIGTERM    | `retention-scheduler.service.ts`, worker bootstrap wiring         | Use `P7-T01` schema  | Real-process E2E, drain E2E                            | Pending |
 | `P7-T05` | Operators can read backlog, runbook, and a failed run; phase closes     | Backlog sampler, `docs/runbooks/retention.md`, doc/status updates | Revert/reapply proof | Sampler E2E, full gate, independent review             | Pending |
 
@@ -300,6 +300,50 @@ Durable ones are in `ADR-0008`. The rest:
   with `manualInitialization`, so a context that only wants to ask a question still has
   to call `ensureInitialized`; without it the CLI failed on its first query rather than
   at startup.
+
+### `P7-T03`
+
+- **A run is bounded by a clock, not a statement count.** `worstCaseStatementsPerRun`
+  became fiction the moment a task could loop - three steps run twenty times is sixty
+  statements. `runBudgetMs` replaces it, `assertRetentionBounds` sizes the lease against
+  the budget plus one in-flight statement plus slack, and a run that spends its budget
+  finishes with what it has. The remainder is still due tomorrow.
+- **The object is deleted before the rows that name it.** An object removed with its
+  rows intact is retried harmlessly; rows removed with the object intact leave a file
+  nothing can ever name again, because the row was the only thing that knew the key.
+- **A provider refusal is not a task failure.** That job keeps its rows and stays due
+  while the rest of the batch proceeds, which is the contract Phase 3 already set.
+- **A shared object key is checked before deletion.** Phase 6 lets a losing attempt
+  stage an object under a key a winner may also have published, so a key can outlive the
+  job that wrote it; the batch is not the whole story and the question is asked directly.
+- **Counts are cast to `SIGNED`.** MySQL's JSON arithmetic yields a DOUBLE, so the ledger
+  read `1.0` for a row count. JavaScript compares that equal to `1`, so the assertion
+  that already existed could not see it; a `JSON_TYPE` check now can.
+- **`--dry-run` stops being required**, because the reason it was expired with this
+  slice. Its unit test was rewritten to the new contract rather than deleted.
+
+### `P7-T03` evidence
+
+- `MYSQL_PORT=13306 npm run test:integration -- --runTestsByPath test/retention-deletion.integration-spec.ts`: 11 tests.
+- Run against the developer database, which is what found the entity defect below:
+  `--dry-run` reported 1 session, 5 idempotency keys and 1 storage task; the real run
+  deleted exactly those and recorded them in the ledger; a second run the same day was
+  refused `taken` by the election; the following `--dry-run` reported zero across all
+  five tasks.
+- Mutations run:
+  - the `email_send_attempts` step removed: **1 test fails** — the orphan count. The
+    database cannot see this one, which is why it is the assertion the suite exists for.
+  - the object deleted after the rows instead of before: **1 test fails** — the provider
+    refusal case, which would otherwise destroy the only record of the key.
+  - the shared-key check inverted: **1 test fails** — an object another job still points
+    at would have been deleted.
+- **Found by running it, not by tests:** importing `FilesModule` whole gave
+  `EntityMetadataNotFoundError` on `Attachment#uploader`. Registering the tables
+  retention deletes gave the same on `AuthSession#user`, and `User` relates on from
+  there. Chasing that graph was the wrong direction: retention needs metadata for nothing
+  it deletes, because every deletion is raw SQL. `retentionEntities` is one entity, the
+  one Phase 3's service reads through a repository, and it declares no relation. The same
+  class of defect as Phase 6's `reportsWorkerEntities`, found the same way.
 
 ### `P7-T02` evidence
 

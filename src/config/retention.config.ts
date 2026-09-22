@@ -51,14 +51,18 @@ const maxBatchSize = 1_000;
 const statementTimeoutMs = 30_000;
 
 /**
- * The most statements one run can serialise: three single-table purges, and two chains
- * of three steps each. The lease has to cover all of them at their worst case, because
- * this phase does not renew mid-run.
+ * How long a run may keep starting batches.
+ *
+ * A run is bounded by a clock rather than by a statement count, because the count was
+ * fiction the moment a task could loop: a chain of three steps run twenty times is sixty
+ * statements, not three. This is the number the lease is actually sized against, and a
+ * run that reaches it stops and finishes with what it has - the remainder is still due
+ * tomorrow, and lagging is the direction that cannot cause harm.
  */
-const worstCaseStatementsPerRun = 9;
+const runBudgetMs = 300_000;
 
-/** Slack between the worst case and the lease, so a run that is merely slow is not
- * treated as a run that died. */
+/** Slack between the budget and the lease, so a run that is merely slow is not treated
+ * as a run that died. */
 const leaseSafetyMarginMs = 30_000;
 
 /**
@@ -110,6 +114,7 @@ export interface RetentionRunConfiguration {
   tickIntervalMs: number;
   batchSize: number;
   statementTimeoutMs: number;
+  runBudgetMs: number;
   claimLeaseMs: number;
   maxAttempts: number;
 }
@@ -135,6 +140,7 @@ export function createRetentionConfiguration(
       tickIntervalMs,
       batchSize,
       statementTimeoutMs,
+      runBudgetMs,
       claimLeaseMs,
       maxAttempts,
     },
@@ -174,14 +180,20 @@ export function assertRetentionBounds(
   if (run.batchSize > maxBatchSize || run.batchSize < 1) {
     unbounded.push('run.batchSize');
   }
-  // The lease must outlive the slowest legal run. Shorter, and a second replica takes
-  // over a run that was still working, so two processes delete from the same tables at
-  // once - which is the one thing the singleton exists to prevent.
+  // The lease must outlive the slowest legal run: the whole budget, plus the one
+  // statement that may still be in flight when the budget runs out, plus slack. Shorter,
+  // and a second replica takes over a run that was still working, so two processes
+  // delete from the same tables at once - the one thing the singleton exists to prevent.
   if (
     run.claimLeaseMs <
-    run.statementTimeoutMs * worstCaseStatementsPerRun + leaseSafetyMarginMs
+    run.runBudgetMs + run.statementTimeoutMs + leaseSafetyMarginMs
   ) {
     unbounded.push('run.claimLeaseMs');
+  }
+  // A budget shorter than one statement's own bound could not finish a single batch,
+  // so every run would stop having done nothing and the backlog would only grow.
+  if (run.runBudgetMs < run.statementTimeoutMs) {
+    unbounded.push('run.runBudgetMs');
   }
   // Zero attempts is a task that can never run; it would look like a task with nothing
   // due rather than like a misconfiguration.

@@ -11,6 +11,7 @@ import { StorageCleanupService } from '../files/storage-cleanup.service';
 import { RetentionBacklogService } from './retention-backlog.service';
 import { RetentionDeleteRepository } from './retention-delete.repository';
 import { RetentionDueRepository } from './retention-due.repository';
+import { RetentionReportService } from './retention-report.service';
 import { RetentionRunService } from './retention-run.service';
 import { RetentionSchedulerService } from './retention-scheduler.service';
 import { RetentionTasksService } from './retention-tasks.service';
@@ -44,6 +45,7 @@ import { ScheduledRunRepository } from './scheduled-run.repository';
     RetentionBacklogService,
     RetentionDeleteRepository,
     RetentionDueRepository,
+    RetentionReportService,
     RetentionRunService,
     RetentionSchedulerService,
     RetentionTasksService,

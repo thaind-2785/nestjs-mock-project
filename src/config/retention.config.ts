@@ -77,6 +77,16 @@ const shutdownDrainMs = 90_000;
 const backlogSampleIntervalMs = 60_000;
 
 /**
+ * How far back the failed-window reading looks.
+ *
+ * It needs a horizon because nothing ever rewrites a `FAILED` row: an unscoped count
+ * latches and fires forever, including long after the cause is fixed, which is how an
+ * alert stops being read. A week is long enough that a failure cannot be missed over a
+ * weekend and short enough that a fixed one stops shouting.
+ */
+const recentFailureWindowDays = 7;
+
+/**
  * How long a claimed run stays the claimer's before another replica may take it over.
  *
  * Generous against the worst case above rather than tight against the common one: the
@@ -125,6 +135,7 @@ export interface RetentionRunConfiguration {
   tickIntervalMs: number;
   shutdownDrainMs: number;
   backlogSampleIntervalMs: number;
+  recentFailureWindowDays: number;
   batchSize: number;
   statementTimeoutMs: number;
   runBudgetMs: number;
@@ -159,6 +170,7 @@ export function createRetentionConfiguration(
       tickIntervalMs,
       shutdownDrainMs,
       backlogSampleIntervalMs,
+      recentFailureWindowDays,
       batchSize,
       statementTimeoutMs,
       runBudgetMs,
@@ -216,9 +228,11 @@ export function assertRetentionBounds(
   if (run.runBudgetMs < run.statementTimeoutMs) {
     unbounded.push('run.runBudgetMs');
   }
-  // A drain shorter than one bounded read would terminate a batch that was about to
-  // finish, on every ordinary restart.
-  if (run.shutdownDrainMs < run.statementTimeoutMs) {
+  // The drain has to cover the slowest batch, not the slowest statement. A batch is a
+  // bounded claim read followed by at most one provider call before the stop flag is
+  // consulted again, so two statement budgets plus slack is the bound that is actually
+  // true - checking it against one was the arithmetic that let a batch outlive the drain.
+  if (run.shutdownDrainMs < run.statementTimeoutMs * 2 + leaseSafetyMarginMs) {
     unbounded.push('run.shutdownDrainMs');
   }
   // Zero attempts is a task that can never run; it would look like a task with nothing

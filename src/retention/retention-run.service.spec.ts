@@ -38,6 +38,7 @@ describe('RetentionRunService', () => {
   let claim: jest.Mock;
   let complete: jest.Mock;
   let fail: jest.Mock;
+  let closeAbandonedBefore: jest.Mock;
   let query: jest.Mock;
   let service: RetentionRunService;
 
@@ -46,6 +47,7 @@ describe('RetentionRunService', () => {
     claim = jest.fn();
     complete = jest.fn().mockResolvedValue(true);
     fail = jest.fn().mockResolvedValue(true);
+    closeAbandonedBefore = jest.fn().mockResolvedValue(0);
     // Every window read returns the same instant, so `localDayStart` lands on one day.
     query = jest.fn().mockResolvedValue([{ now: scheduledFor }]);
 
@@ -60,7 +62,7 @@ describe('RetentionRunService', () => {
         },
         {
           provide: ScheduledRunRepository,
-          useValue: { claim, complete, fail },
+          useValue: { claim, complete, fail, closeAbandonedBefore },
         },
         { provide: RetentionTasksService, useValue: { runBatch } },
         { provide: retentionConfig.KEY, useValue: configuration },
@@ -156,6 +158,75 @@ describe('RetentionRunService', () => {
       );
     });
 
+    it('hands the window back when the process is asked to stop', async () => {
+      claim.mockResolvedValue(claimed());
+      runBatch.mockResolvedValue(
+        batch({ counts: { auth_sessions: 7 }, moreWaiting: true }),
+      );
+      let stopping = false;
+      // Stops after the first batch, which is what a `SIGTERM` during a run looks like.
+      runBatch.mockImplementation(() => {
+        stopping = true;
+        return Promise.resolve(
+          batch({ counts: { auth_sessions: 7 }, moreWaiting: true }),
+        );
+      });
+
+      const outcome = await service.runTask(
+        'auth-sessions',
+        undefined,
+        undefined,
+        () => stopping,
+      );
+
+      expect(outcome.outcome).toBe('incomplete');
+      expect(fail).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        { errorCode: retentionErrorCodes.shutdown, retryable: true },
+        { auth_sessions: 7 },
+        configuration.run.maxAttempts,
+      );
+    });
+
+    it('passes the stop signal into the batch, not only between batches', async () => {
+      claim.mockResolvedValue(claimed());
+      runBatch.mockResolvedValue(batch());
+
+      await service.runTask('auth-sessions', undefined, undefined, () => false);
+
+      // A batch is a loop of bounded provider calls. One that cannot be interrupted
+      // outlives the drain, and the process then exits non-zero with the window still
+      // claimed under a live lease.
+      const [, , , , shouldStop] = runBatch.mock.calls[0] as [
+        unknown,
+        unknown,
+        unknown,
+        unknown,
+        () => boolean,
+      ];
+      expect(typeof shouldStop).toBe('function');
+    });
+
+    it('prefers the shutdown code over the budget one when both are true', async () => {
+      claim.mockResolvedValue(claimed());
+      runBatch.mockResolvedValue(batch({ moreWaiting: true }));
+      jest
+        .spyOn(Date, 'now')
+        .mockReturnValueOnce(0)
+        .mockReturnValue(configuration.run.runBudgetMs + 1);
+
+      const outcome = await service.runTask(
+        'auth-sessions',
+        undefined,
+        undefined,
+        () => true,
+      );
+
+      // Both stopped it; the operator needs the one that explains the deploy.
+      expect(outcome.errorCode).toBe(retentionErrorCodes.shutdown);
+    });
+
     it('reports a lost claim rather than a success when the ledger refuses', async () => {
       claim.mockResolvedValue(claimed());
       runBatch.mockResolvedValue(batch());
@@ -210,6 +281,21 @@ describe('RetentionRunService', () => {
   });
 
   describe('runAll', () => {
+    it('closes windows left claimed by an earlier day before claiming today', async () => {
+      claim.mockResolvedValue(claimed());
+      runBatch.mockResolvedValue(batch());
+      closeAbandonedBefore.mockResolvedValue(2);
+
+      await service.runAll();
+
+      // A run only ever claims the current window, so a continuation not reclaimed
+      // before the day rolled over would sit `CLAIMED` forever with its work unowned.
+      expect(closeAbandonedBefore).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(Date),
+      );
+    });
+
     it('resolves the window once and gives every task the same one', async () => {
       claim.mockResolvedValue(claimed());
       runBatch.mockResolvedValue(batch());

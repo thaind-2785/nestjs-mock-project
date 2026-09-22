@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import {
   microsecondsPerMillisecond,
+  retentionContinuationCodes,
   retentionErrorCodes,
   type RetentionTaskName,
 } from './retention.constants';
@@ -169,6 +170,14 @@ export class ScheduledRunRepository {
    * a lease that is still live belongs to whoever holds it, and finding that out after
    * starting to delete would be too late. `attempts < ?` is what stops a task that
    * crashes every time from being retried on every tick forever.
+   *
+   * The increment is conditional, and that distinction is load-bearing. `attempts`
+   * counts failures; a window handed back because its budget ran out, a deploy
+   * interrupted it, or a provider was refusing is *continuing*, and charging it would
+   * mean a genuinely large backlog gave up after three continuations - roughly fifteen
+   * minutes of honest work - and needed a human. Three deploys during a nightly run did
+   * the same. A continuation that deleted nothing is charged anyway, because a window
+   * making no progress is not continuing.
    */
   private async recover(
     manager: EntityManager,
@@ -184,7 +193,12 @@ export class ScheduledRunRepository {
       `UPDATE scheduled_runs
        SET locked_by = ?,
            lock_expires_at = NOW(6) + INTERVAL ? MICROSECOND,
-           attempts = attempts + 1,
+           attempts = attempts + IF(
+             last_error_code IN (${retentionContinuationCodes.map(() => '?').join(', ')})
+               AND JSON_LENGTH(COALESCE(deleted_counts, JSON_OBJECT())) > 0,
+             0,
+             1
+           ),
            started_at = NOW(6)
        WHERE task_name = ?
          AND scheduled_for = ?
@@ -194,6 +208,7 @@ export class ScheduledRunRepository {
       [
         input.claimToken,
         input.leaseMs * microsecondsPerMillisecond,
+        ...retentionContinuationCodes,
         input.taskName,
         input.scheduledFor,
         ScheduledRunStatus.Claimed,
@@ -376,29 +391,50 @@ export class ScheduledRunRepository {
   /**
    * What the ledger says about retention as a whole, rather than about one window.
    *
-   * Two states the due counts cannot show. A `FAILED` window will not be picked up
-   * again by anything, so that task is stopped until somebody acts - and the backlog it
-   * leaves may still be small enough to look calm. A `CLAIMED` window past its lease is
-   * a process that died, waiting for a replica to notice; one is ordinary, a rising
-   * count is not.
+   * Both readings are narrower than they first were, and both for the same reason: a
+   * number an operator is told to alert on has to be able to return to zero, and has to
+   * count only what its name says.
+   *
+   * `failedWindows` is scoped to recent windows. Nothing ever rewrites a `FAILED` row,
+   * so an unscoped count latches: it fires forever, including long after the cause is
+   * fixed, which is how an alert stops being read.
+   *
+   * `staleClaims` excludes a window that was handed back on purpose. A continuation
+   * expires its own lease and leaves the status alone, which is byte-identical to what a
+   * dead process leaves - so counting the shape rather than the intent made every
+   * ordinary budget-spent run look like a crash.
    */
-  async health(dataSource: DataSource): Promise<{
+  async health(
+    dataSource: DataSource,
+    recentWindowDays: number,
+  ): Promise<{
     failedWindows: number;
     staleClaims: number;
     oldestFailedAgeMs: number;
   }> {
+    const continuations = retentionContinuationCodes.map(() => '?').join(', ');
     const rows: Array<{
       failed_windows: number;
       stale_claims: number;
       oldest_failed_age_us: string | number;
     }> = await dataSource.manager.query(
       `SELECT
-         SUM(status = ?) AS failed_windows,
-         SUM(status = ? AND lock_expires_at <= NOW(6)) AS stale_claims,
+         SUM(status = ? AND scheduled_for >= NOW(6) - INTERVAL ? DAY)
+           AS failed_windows,
+         SUM(
+           status = ?
+           AND lock_expires_at <= NOW(6)
+           AND (last_error_code IS NULL OR last_error_code NOT IN (${continuations}))
+         ) AS stale_claims,
          COALESCE(
            TIMESTAMPDIFF(
              MICROSECOND,
-             MIN(CASE WHEN status = ? THEN finished_at END),
+             MIN(
+               CASE
+                 WHEN status = ? AND scheduled_for >= NOW(6) - INTERVAL ? DAY
+                 THEN finished_at
+               END
+             ),
              NOW(6)
            ),
            0
@@ -406,8 +442,11 @@ export class ScheduledRunRepository {
        FROM scheduled_runs`,
       [
         ScheduledRunStatus.Failed,
+        recentWindowDays,
         ScheduledRunStatus.Claimed,
+        ...retentionContinuationCodes,
         ScheduledRunStatus.Failed,
+        recentWindowDays,
       ],
     );
     return {
@@ -417,6 +456,39 @@ export class ScheduledRunRepository {
         Number(rows[0].oldest_failed_age_us) / microsecondsPerMillisecond,
       ),
     };
+  }
+
+  /**
+   * Closes windows from earlier days that nobody will continue.
+   *
+   * A run only ever claims the current window, so a window handed back for continuation
+   * and not reclaimed before the local day rolled over is touched by nothing again: it
+   * stays `CLAIMED` forever, and the work it left is silently nobody's. Recording it
+   * `FAILED` is the truthful version - that day's retention did not finish - and it is
+   * also what lets the stale-claim reading stay a measure of the present.
+   */
+  async closeAbandonedBefore(
+    dataSource: DataSource,
+    currentWindow: Date,
+  ): Promise<number> {
+    const result: { affectedRows?: number } = await dataSource.manager.query(
+      `UPDATE scheduled_runs
+       SET status = ?,
+           locked_by = NULL,
+           lock_expires_at = NULL,
+           finished_at = NOW(6),
+           last_error_code = COALESCE(last_error_code, ?)
+       WHERE status = ?
+         AND scheduled_for < ?
+         AND lock_expires_at <= NOW(6)`,
+      [
+        ScheduledRunStatus.Failed,
+        retentionErrorCodes.runAbandoned,
+        ScheduledRunStatus.Claimed,
+        currentWindow,
+      ],
+    );
+    return result.affectedRows ?? 0;
   }
 
   /**

@@ -143,14 +143,21 @@ describe('P7-T04 retention scheduler as a process', () => {
       waitForLog(second, 'retention_scheduler_started', 60_000),
     ]);
 
-    await waitFor(async () => (await count('auth_sessions')) === 0, 60_000);
+    // Waiting for five *rows* would race: `claim` inserts the row as `CLAIMED` before the
+    // task deletes anything, and the five run serially inside one `runAll` - so the count
+    // reaches five while the last task is still working, and asserting every row is
+    // `SUCCEEDED` there fails intermittently on the test that proves the singleton.
+    await waitFor(
+      async () => (await countRunsWithStatus('SUCCEEDED')) === 5,
+      60_000,
+    );
 
+    const rows = await readRuns();
     // Five tasks, five windows, one row each - whichever process won. Two rows for one
     // task would mean two processes deleting from the same table at once.
-    await waitFor(async () => (await countRuns()) === 5, 30_000);
-    const rows = await readRuns();
+    expect(rows).toHaveLength(5);
     expect(new Set(rows.map((row) => String(row.task_name))).size).toBe(5);
-    expect(rows.every((row) => String(row.status) === 'SUCCEEDED')).toBe(true);
+    expect(await count('auth_sessions')).toBe(0);
   });
 
   it('runs the current window once after a day down, not once per missed day', async () => {
@@ -160,7 +167,10 @@ describe('P7-T04 retention scheduler as a process', () => {
     await insertExpiredSession();
     const worker = startWorker();
     await waitForLog(worker, 'retention_scheduler_started', 60_000);
-    await waitFor(async () => (await countRuns()) === 5, 60_000);
+    await waitFor(
+      async () => (await countRunsWithStatus('SUCCEEDED')) === 5,
+      60_000,
+    );
 
     const today = localDayStart(await databaseNow(), timeZone);
     const windows = (await readRuns()).map((row) =>
@@ -271,14 +281,27 @@ describe('P7-T04 retention scheduler as a process', () => {
     return `http://127.0.0.1:${address.port}`;
   }
 
-  /** Waits on a log line, which unlike a row does not stop being true. */
+  /**
+   * Waits on a whole log line, which unlike a row does not stop being true.
+   *
+   * The newline matters: a substring match can resolve while the buffer still ends mid
+   * line, and a reader that then splits and parses the last element gets a `SyntaxError`
+   * for a reason unrelated to the behaviour under test.
+   */
   async function waitForLog(
     child: ChildProcess,
     marker: string,
     timeoutMs: number,
   ): Promise<void> {
     await waitFor(
-      () => Promise.resolve(workerOutput.get(child)?.includes(marker) ?? false),
+      () =>
+        Promise.resolve(
+          (workerOutput.get(child) ?? '')
+            .split('\n')
+            .some((line, index, lines) =>
+              line.includes(marker) ? index < lines.length - 1 : false,
+            ),
+        ),
       timeoutMs,
       () =>
         Promise.resolve(
@@ -398,6 +421,14 @@ describe('P7-T04 retention scheduler as a process', () => {
 
   async function countRuns(): Promise<number> {
     return count('scheduled_runs');
+  }
+
+  async function countRunsWithStatus(status: string): Promise<number> {
+    const rows: Array<{ total: number }> = await dataSource.query(
+      'SELECT COUNT(*) AS total FROM scheduled_runs WHERE status = ?',
+      [status],
+    );
+    return Number(rows[0].total);
   }
 
   async function count(table: string): Promise<number> {

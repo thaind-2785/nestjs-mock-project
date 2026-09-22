@@ -60,6 +60,7 @@ describe('Phase 7 deletions', () => {
   let windows: RetentionWindowConfiguration;
   let userId: string;
   let storage: { deleteObject: jest.Mock };
+  let storageCleanup: { run: jest.Mock };
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
@@ -99,6 +100,11 @@ describe('Phase 7 deletions', () => {
     await dataSource.runMigrations();
 
     storage = { deleteObject: jest.fn().mockResolvedValue(undefined) };
+    storageCleanup = {
+      run: jest
+        .fn()
+        .mockResolvedValue({ claimed: 0, deleted: 0, retryable: 0 }),
+    };
     const moduleRef = await Test.createTestingModule({
       providers: [
         RetentionTasksService,
@@ -106,14 +112,7 @@ describe('Phase 7 deletions', () => {
         { provide: ObjectStorageProvider, useValue: storage },
         // Its own suite covers it; here it would only bring MinIO into a test about
         // deletion order.
-        {
-          provide: StorageCleanupService,
-          useValue: {
-            run: jest
-              .fn()
-              .mockResolvedValue({ claimed: 0, deleted: 0, retryable: 0 }),
-          },
-        },
+        { provide: StorageCleanupService, useValue: storageCleanup },
         {
           provide: retentionConfig.KEY,
           useValue: createRetentionConfiguration(environment),
@@ -132,6 +131,9 @@ describe('Phase 7 deletions', () => {
 
   beforeEach(async () => {
     storage.deleteObject.mockReset().mockResolvedValue(undefined);
+    storageCleanup.run
+      .mockReset()
+      .mockResolvedValue({ claimed: 0, deleted: 0, retryable: 0 });
     await dataSource.query('DELETE FROM email_send_attempts');
     await dataSource.query('DELETE FROM email_deliveries');
     await dataSource.query('DELETE FROM export_jobs');
@@ -366,6 +368,49 @@ describe('Phase 7 deletions', () => {
 
       expect(outcome.counts).toEqual({});
       expect(await count('export_jobs')).toBe(2);
+    });
+  });
+
+  describe('the storage drain', () => {
+    it('stops between provider calls when asked, instead of finishing its loop', async () => {
+      // Phase 3's service loops internally over sequential object deletes. Handing it the
+      // whole drain size means twenty-five of them with nothing able to interrupt - which
+      // is how a batch outlives a ninety-second drain even though every call is bounded.
+      // One call at a time, asking in between, is what makes the batch interruptible.
+      let calls = 0;
+      storageCleanup.run.mockImplementation(() => {
+        calls += 1;
+        return Promise.resolve({ claimed: 1, deleted: 1, retryable: 0 });
+      });
+
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'storage-tasks',
+        10,
+        farFuture,
+        () => calls >= 2,
+      );
+
+      expect(calls).toBe(2);
+      expect(outcome.counts).toEqual({ storage_cleanup_tasks: 2 });
+    });
+
+    it('stops early when the run budget is already spent', async () => {
+      storageCleanup.run.mockResolvedValue({
+        claimed: 1,
+        deleted: 1,
+        retryable: 0,
+      });
+
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'storage-tasks',
+        10,
+        Date.now() - 1,
+      );
+
+      expect(storageCleanup.run).not.toHaveBeenCalled();
+      expect(outcome.counts).toEqual({});
     });
   });
 

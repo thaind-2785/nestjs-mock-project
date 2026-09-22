@@ -44,6 +44,25 @@ export const retentionErrorCodes = {
 export type RetentionErrorCode =
   (typeof retentionErrorCodes)[keyof typeof retentionErrorCodes];
 
+/**
+ * The codes that mean a run stopped, not that it went wrong.
+ *
+ * `attempts` bounds how often a *broken* task is retried. A task that is merely behind -
+ * out of budget, interrupted by a deploy, waiting on a provider - is continuing, and
+ * charging it an attempt each time meant a genuinely large backlog exhausted its budget
+ * after about fifteen minutes of honest work and had to be cleared by hand. Three
+ * ordinary deploys during a nightly run did the same.
+ *
+ * So recovery increments `attempts` only when the previous stop was a failure. A window
+ * that keeps continuing without deleting anything is still charged, because that is no
+ * longer continuation.
+ */
+export const retentionContinuationCodes: readonly string[] = [
+  retentionErrorCodes.budgetSpent,
+  retentionErrorCodes.storageIncomplete,
+  retentionErrorCodes.shutdown,
+];
+
 /** Longest `task_name` the column accepts. Asserted against the list above rather than
  * trusted: a longer name would be refused at insert, and the window would never run. */
 export const maxTaskNameLength = 64;

@@ -59,6 +59,21 @@ export class RetentionRunService {
     // reporting success.
     const scheduledFor = await this.currentWindow(dataSource);
 
+    // Anything left claimed from an earlier day is nobody's: a run only ever claims the
+    // current window, so a continuation that did not get reclaimed before the local day
+    // rolled over would sit there forever with its work silently unowned.
+    const closed = await this.runs.closeAbandonedBefore(
+      dataSource,
+      scheduledFor,
+    );
+    if (closed > 0) {
+      this.logger.warn({
+        event: 'retention_windows_abandoned',
+        closed,
+        before: scheduledFor.toISOString(),
+      });
+    }
+
     const outcomes: RetentionRunOutcome[] = [];
     for (const taskName of retentionTaskNames) {
       if (shouldStop?.()) break;
@@ -145,6 +160,11 @@ export class RetentionRunService {
           taskName,
           size,
           deadline,
+          // Passed in, not only consulted between batches. A batch is a loop of bounded
+          // provider calls, and one that cannot be interrupted outlives the drain - the
+          // process then exits non-zero with the window still claimed under a live lease,
+          // unrecoverable by any replica for its full ten minutes.
+          () => shouldStop?.() ?? false,
         );
         batches += 1;
         retryableFailures += outcome.retryableFailures ?? 0;

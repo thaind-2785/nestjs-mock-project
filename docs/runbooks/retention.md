@@ -102,18 +102,24 @@ today's window to another replica is success, and a task that has given up is no
 The worker writes `retention_backlog_sampled` every minute, whether or not anything ran.
 Five readings:
 
-| Reading                   | Means                                                          |
-| ------------------------- | -------------------------------------------------------------- |
-| `tasks[].due`             | Rows waiting for that task                                     |
-| `tasks[].oldestOverdueMs` | How long the oldest of them has been past its boundary         |
-| `failedWindows`           | Windows that gave up. **Retention is stopped for those tasks** |
-| `staleClaims`             | Windows claimed by a process that died, not yet recovered      |
-| `oldestFailedAgeMs`       | How long the oldest failure has been sitting there             |
+| Reading                   | Means                                                                                  |
+| ------------------------- | -------------------------------------------------------------------------------------- |
+| `tasks[].due`             | Rows waiting for that task                                                             |
+| `tasks[].oldestOverdueMs` | How long the oldest of them has been past its boundary                                 |
+| `failedWindows`           | Windows that gave up **in the last seven days**. Retention is stopped for those tasks  |
+| `staleClaims`             | Windows claimed by a process that died. A window handed back on purpose is not counted |
+| `oldestFailedAgeMs`       | How long the oldest recent failure has been sitting there                              |
 
-`failedWindows` is the one to alert on. A stopped task can have a small backlog for
-days before the due counts look alarming, so the count of windows that gave up is what
-notices first. One `staleClaim` is ordinary — a worker restarted mid-run — and a rising
-count is not.
+`failedWindows` is the one to alert on. A stopped task can have a small backlog for days
+before the due counts look alarming, so the count of windows that gave up is what notices
+first. It is scoped to recent windows deliberately: nothing rewrites a `FAILED` row, so an
+unscoped count would fire forever, including long after the cause was fixed — which is how
+an alert stops being read.
+
+`staleClaims` counts deaths, not interruptions. A run that spends its budget, is
+interrupted by a deploy, or is waiting on a provider hands its window back by expiring its
+own lease, which leaves a row that looks identical to a crash and is not one; those are
+excluded by their error code. One genuine stale claim is ordinary; a rising count is not.
 
 ## What each task collects, and what it never touches
 
@@ -176,6 +182,20 @@ window.
 | ------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `retention_run_abandoned` | error | A window's process died with its budget spent; that task is now stopped                                                                      |
 | `retention_claim_lost`    | warn  | A run deleted rows and was refused the write because its lease lapsed. The counts in this line are real deletions the ledger does not record |
+
+## Continuation, and what does not count against a task
+
+A window that stops short is handed back and continued, and continuing does **not** spend
+an attempt. `attempts` bounds how often a _broken_ task is retried; a task that is merely
+behind — out of budget, interrupted by a deploy, waiting on a provider — would otherwise
+have given up after roughly fifteen minutes of honest work, and three ordinary deploys
+during a nightly run would have done the same.
+
+A continuation that deleted nothing is charged anyway: a window making no progress is not
+continuing.
+
+A window left claimed when the local day rolls over is closed as `FAILED` by the next run,
+because nothing would ever continue it — a run only claims the current window.
 
 ## What a deploy does to a run in flight
 

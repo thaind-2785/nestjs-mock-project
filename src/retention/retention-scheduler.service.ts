@@ -83,8 +83,23 @@ export class RetentionSchedulerService
   private async tick(): Promise<void> {
     try {
       const outcomes = await this.runs.runAll(undefined, () => this.stopping);
-      // Only worth a line when something happened. A tick that found the day already
-      // done is the common case and says nothing an operator needs.
+
+      // A window that burned its attempts is refused `exhausted` on every tick from then
+      // on, and will not run again until somebody acts. Filtering all refusals out - as
+      // an earlier version did - made a permanently dead task indistinguishable from a
+      // healthy one that found the day already done, in the logs of the thing that is
+      // actually running. The operator command exits non-zero on this for the same
+      // reason; the scheduler said nothing at all.
+      const exhausted = outcomes.filter((one) => one.reason === 'exhausted');
+      if (exhausted.length > 0) {
+        this.logger.warn({
+          event: 'retention_tasks_exhausted',
+          tasks: exhausted.map((one) => one.taskName),
+        });
+      }
+
+      // Otherwise only worth a line when something happened: a tick that found the day
+      // already done is the common case and says nothing an operator needs.
       const acted = outcomes.filter((one) => one.outcome !== 'refused');
       if (acted.length > 0) {
         this.logger.log({

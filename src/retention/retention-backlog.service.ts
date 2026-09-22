@@ -9,8 +9,7 @@ import type { ConfigType } from '@nestjs/config';
 import { retentionConfig } from '../config/retention.config';
 import { DatabaseConnectionService } from '../database/database-connection.service';
 import { OutboxPollLoop } from '../common/outbox/outbox-poll-loop';
-import { retentionDuePredicates } from './retention-due';
-import { RetentionDueRepository } from './retention-due.repository';
+import { RetentionReportService } from './retention-report.service';
 import { ScheduledRunRepository } from './scheduled-run.repository';
 import type { RetentionBacklogTask } from './retention.types';
 
@@ -28,6 +27,12 @@ import type { RetentionBacklogTask } from './retention.types';
  * It samples on its own timer rather than at the end of a run, because the readings that
  * matter most are the ones a stopped scheduler produces - and a sample that only happens
  * when a run finishes says nothing precisely when nothing is finishing.
+ *
+ * For the same reason it samples while the scheduler is **disabled**. That is the
+ * configuration the rollout establishes and the one the runbook sends an operator to
+ * inspect: deploy with retention off, read what is waiting, then turn it on. A sampler
+ * that went quiet there would leave an operator unable to tell a backlog nobody is
+ * draining from a worker that is not running at all.
  */
 @Injectable()
 export class RetentionBacklogService
@@ -41,46 +46,41 @@ export class RetentionBacklogService
 
   constructor(
     private readonly databaseConnection: DatabaseConnectionService,
-    private readonly due: RetentionDueRepository,
+    private readonly reports: RetentionReportService,
     private readonly runs: ScheduledRunRepository,
     @Inject(retentionConfig.KEY)
     private readonly configuration: ConfigType<typeof retentionConfig>,
   ) {}
 
   onApplicationBootstrap(): void {
-    if (!this.configuration.enabled) return;
     this.loop.start();
   }
 
   async onApplicationShutdown(): Promise<void> {
-    if (!this.configuration.enabled) return;
     await this.loop.stop();
   }
 
   async sample(): Promise<void> {
     try {
-      const dataSource = await this.databaseConnection.ensureInitialized();
-      const tasks: RetentionBacklogTask[] = [];
-      for (const predicate of retentionDuePredicates) {
-        // Serially: five concurrent index scans against tables the API is serving is a
-        // burst nobody asked for, and nothing here is slow enough to be worth
-        // overlapping.
-        const reading = await this.due.sample(
-          dataSource.manager,
-          predicate,
-          this.configuration.windows,
-          this.configuration.run.statementTimeoutMs,
-        );
-        tasks.push({
-          taskName: predicate.taskName,
-          table: predicate.table,
-          windowHours: predicate.windowHours(this.configuration.windows),
-          due: reading.dueCount,
-          oldestOverdueMs: reading.oldestOverdueMs,
-        });
-      }
+      // The operator command's reading, not a second copy of it. Two loops over the same
+      // predicates would have to be kept in step - a new task, a changed argument, a
+      // revised decision about running them serially - or the command and the worker
+      // would disagree about what is due.
+      const tasks: RetentionBacklogTask[] = (await this.reports.report()).map(
+        (report) => ({
+          taskName: report.taskName,
+          table: report.table,
+          windowHours: report.windowHours,
+          due: report.dueCount,
+          oldestOverdueMs: report.oldestOverdueMs,
+        }),
+      );
 
-      const ledger = await this.runs.health(dataSource);
+      const dataSource = await this.databaseConnection.ensureInitialized();
+      const ledger = await this.runs.health(
+        dataSource,
+        this.configuration.run.recentFailureWindowDays,
+      );
       this.logger.log({
         event: 'retention_backlog_sampled',
         tasks,

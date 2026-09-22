@@ -4,6 +4,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
 import { configureApplication } from '../src/bootstrap';
+import { startE2eServer } from './fixtures/http-server';
 
 jest.setTimeout(30_000);
 
@@ -16,7 +17,13 @@ describe('Readiness integration', () => {
     }).compile();
     app = moduleFixture.createNestApplication();
     configureApplication(app);
-    await app.init();
+    // Bound rather than only initialised. `REVIEW-036` diagnosed this for the e2e
+    // suites: supertest binds an unbound server itself and closes it again when the
+    // response lands, so across a `--runInBand` run the port is reused and a stranded
+    // request gets a real answer from a different application. This suite is the only
+    // integration one that drives HTTP, and it kept the defect the fixture exists to
+    // remove - which is why the fixture is no longer named for e2e alone.
+    await startE2eServer(app);
   });
 
   it('checks MySQL, Redis, and MinIO through their real local adapters', async () => {

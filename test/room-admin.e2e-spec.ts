@@ -32,7 +32,7 @@ import { UserRoleHistory } from '../src/users/entities/user-role-history.entity'
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
 import { applicationMigrations } from './fixtures/application-migrations';
-import { startE2eServer } from './fixtures/e2e-server';
+import { startE2eServer } from './fixtures/http-server';
 import { ensureAttachmentBucket } from './fixtures/room-images';
 
 jest.setTimeout(30_000);

@@ -119,10 +119,16 @@ export function workerDrainMs(
   //
   // Retention contributes one batch rather than one run: its run is interruptible and
   // hands the window back, so shutdown never waits for a whole budget.
+  // Retention contributes unconditionally, because one of its residents starts
+  // unconditionally: the backlog sampler runs while the scheduler is disabled, which is
+  // the configuration the rollout establishes and the one an operator inspects. Gating
+  // the drain on `enabled` left a default deployment draining on the mail bound while a
+  // sample was mid-flight, so an ordinary deploy reported `drained:false` and exited
+  // non-zero.
   return Math.max(
     notifications.worker.shutdownDrainMs,
     reports.enabled ? reports.worker.shutdownDrainMs : 0,
-    retention.enabled ? retention.run.shutdownDrainMs : 0,
+    retention.run.shutdownDrainMs,
   );
 }
 

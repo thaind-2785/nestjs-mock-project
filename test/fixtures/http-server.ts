@@ -1,7 +1,11 @@
 import { INestApplication } from '@nestjs/common';
 
 /**
- * Starts an e2e application and binds its own listening socket.
+ * Starts an application under test and binds its own listening socket.
+ *
+ * Named for HTTP rather than for e2e because the scope was read too narrowly: the one
+ * integration suite that drives requests skipped it and kept the defect described
+ * below, and the e2e-only name is why nobody looked.
  *
  * Every suite must use this rather than `app.init()` alone. Supertest's
  * `serverAddress` calls `app.listen(0)` whenever it finds the server unbound, and its

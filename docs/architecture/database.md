@@ -275,7 +275,7 @@ erDiagram
 | `email_deliveries`        | unique `(outbox_event_id, template_key)`; operations index `(status, created_at, id)`; backlog-aggregate index `(template_key, status)`; restrictive FK to `outbox_events`; sent/failed shape is checked                        |
 | `email_send_attempts`     | append-only provider acceptances; index `(outbox_event_id, accepted_at)`; deliberately **no** FK to `outbox_events`, because an FK insert takes a shared lock on the very row a recovering worker may hold exclusively          |
 | `idempotency_keys`        | unique `(actor_user_id, operation, idempotency_key)`; index `expires_at`; pending/completed response shape is checked                                                                                                           |
-| `schedule_runs`           | unique `(job_key, period_key)` for cron idempotency                                                                                                                                                                             |
+| `scheduled_runs`          | unique `(task_name, scheduled_for)` — the insert that wins it _is_ the election; recovery index `(status, lock_expires_at)`; lock, state and finished-after-started shapes are checked                                          |
 
 ## Phase 4 persistence contract
 

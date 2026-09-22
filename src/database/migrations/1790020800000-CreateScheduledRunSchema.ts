@@ -34,6 +34,12 @@ export class CreateScheduledRunSchema1790020800000 implements MigrationInterface
         started_at DATETIME(6) NOT NULL,
         finished_at DATETIME(6) NULL,
         deleted_counts JSON NULL,
+        -- When this window last removed a row, as opposed to when it last ran.
+        -- The counts column accumulates across attempts, so it cannot answer whether the
+        -- attempt that just stopped achieved anything - and that is the question the
+        -- attempt budget has to ask, or a task failing against a dead provider is
+        -- reclaimed forever and never recorded FAILED.
+        progressed_at DATETIME(6) NULL,
         last_error_code VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
         created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
         updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),

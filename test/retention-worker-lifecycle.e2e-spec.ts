@@ -238,6 +238,69 @@ describe('P7-T04 retention scheduler as a process', () => {
     expect(await count('export_jobs')).toBe(1);
   });
 
+  it('lets the other worker finish a window whose process was killed, once', async () => {
+    // The case the phase was planned around and never got: a worker that dies without
+    // running a single line of shutdown code. `SIGTERM` proves the handback path; this
+    // proves the path that has no code in it at all, where the only thing standing
+    // between a half-done window and a lost one is the lease.
+    await insertExpiredExportJob();
+    const killed = startWorker({
+      OBJECT_STORAGE_ENDPOINT: await startUnresponsiveStorage(),
+    });
+    // Waiting for this task's own claim rather than for the first `retention_run_started`
+    // line: the five tasks run serially, so the first line belongs to whichever runs
+    // first and the kill would land wherever it landed. The black-holed endpoint holds
+    // the process inside this batch until it is signalled.
+    await waitFor(
+      async () =>
+        (await readRuns()).some(
+          (row) =>
+            String(row.task_name) === 'export-results' &&
+            String(row.status) === 'CLAIMED',
+        ),
+      60_000,
+    );
+    killed.kill('SIGKILL');
+    await waitForExit(killed, 60_000);
+
+    const abandoned = await readRun('export-results');
+    expect(String(abandoned.status)).toBe('CLAIMED');
+    expect(Number(abandoned.attempts)).toBe(1);
+    // Nothing was deleted: the object delete never answered, so the job is still there
+    // and the window is still owed.
+    expect(await count('export_jobs')).toBe(1);
+
+    // Five and a half minutes of wall clock, applied rather than waited out. The lease
+    // is sized against the run budget, and what a takeover needs from it is only that it
+    // has expired; the ledger suite covers the expiry itself. Scoped to CLAIMED because
+    // a finished row holding a lease is a state the table's check constraint forbids.
+    await dataSource.query(
+      "UPDATE scheduled_runs SET lock_expires_at = NOW(6) WHERE status = 'CLAIMED'",
+    );
+
+    // Not held: `afterEach` kills every worker this suite started, and nothing here
+    // signals it individually.
+    startWorker();
+    await waitFor(
+      async () => (await countRunsWithStatus('SUCCEEDED')) === 5,
+      120_000,
+    );
+
+    const recovered = await readRun('export-results');
+    // One row, a second attempt on it: the window was taken over rather than started
+    // again beside the first, which is the difference between recovery and two workers
+    // deleting from one table at once.
+    expect(Number(recovered.attempts)).toBe(2);
+    expect(await countRuns()).toBe(5);
+    // And the job is gone exactly once. The ledger accumulates across attempts, so a
+    // second deletion of the same row - or a replayed window - would read as two here
+    // even though the table can only ever reach zero.
+    expect(
+      (recovered.deleted_counts as { export_jobs?: number }).export_jobs,
+    ).toBe(1);
+    expect(await count('export_jobs')).toBe(0);
+  });
+
   // --- helpers ---
 
   function startWorker(overrides: NodeJS.ProcessEnv = {}): ChildProcess {
@@ -417,6 +480,14 @@ describe('P7-T04 retention scheduler as a process', () => {
 
   async function readRuns(): Promise<Array<Record<string, unknown>>> {
     return dataSource.query('SELECT * FROM scheduled_runs');
+  }
+
+  async function readRun(taskName: string): Promise<Record<string, unknown>> {
+    const [row] = (await readRuns()).filter(
+      (candidate) => String(candidate.task_name) === taskName,
+    );
+    if (!row) throw new Error(`No ledger row for ${taskName}`);
+    return row;
   }
 
   async function countRuns(): Promise<number> {

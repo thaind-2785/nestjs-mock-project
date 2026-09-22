@@ -62,6 +62,25 @@ export class RetentionDeleteRepository {
   }
 
   /**
+   * Bounds how long a delete inside this transaction will wait for a lock.
+   *
+   * `MAX_EXECUTION_TIME` does not apply to a `DELETE`, so it is not what bounds one -
+   * `innodb_lock_wait_timeout` is, and its default of fifty seconds per statement puts a
+   * three-step chain well past the worker's drain. Setting it per transaction is what
+   * makes the drain arithmetic describe the work rather than assume it.
+   */
+  async withLockWaitBound<T>(
+    manager: EntityManager,
+    lockWaitSeconds: number,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    await manager.query('SET SESSION innodb_lock_wait_timeout = ?', [
+      lockWaitSeconds,
+    ]);
+    return work();
+  }
+
+  /**
    * A single-table purge: the whole task for the three that have no dependents.
    *
    * Ordered as well as limited. `DELETE ... LIMIT` without `ORDER BY` takes whichever

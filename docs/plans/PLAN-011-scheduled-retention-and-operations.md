@@ -1,8 +1,12 @@
 # PLAN-011: Scheduled retention and operations
 
 - Spec: [`SPEC-010`](../specs/SPEC-010-scheduled-retention-and-operations.md)
-- Status: Implemented (`P7-T01`-`P7-T05` complete 2026-09-22, pending independent
-  Phase 7 exit review)
+- Status: Implemented and closed. The independent Phase 7 exit review is
+  [`REVIEW-044`](../reviews/REVIEW-044-phase7-exit.md), 2026-09-22: verdict **Block** at
+  `e05c0d6` — three High, nine Medium, one Low and one process Blocker. All nineteen
+  findings were fixed in the pass that followed, and the gate below is the green run the
+  Blocker asked for. Two findings changed a decision rather than a line, and both are
+  recorded in that review's disposition section.
 - Owner: Project owner
 - Reviewer (must be independent): Project owner, who authors none of Phase 7 —
   the same arrangement that closed Phase 6. Redirect it here if a separate pass
@@ -55,7 +59,7 @@ cannot delete a row, and the one that can does nothing else.
 | `P7-T02` | Each task reports what is due; `--dry-run` deletes nothing              | `retention-due.ts`, due repository, `ops:retention` CLI           | Use `P7-T01` schema  | Boundary-row integration, EXPLAIN, argument unit       | Done   |
 | `P7-T03` | All five tasks delete, in order, without touching a live row            | Task and run services, reusing `StorageCleanupService`            | Use `P7-T01` schema  | Orphan count, retained `FAILED`, `RUNNING` job, bounds | Done   |
 | `P7-T04` | The scheduler ticks, catches up one missed window, drains on SIGTERM    | `retention-scheduler.service.ts`, worker bootstrap wiring         | Use `P7-T01` schema  | Real-process E2E, drain E2E                            | Done   |
-| `P7-T05` | Operators can read backlog, runbook, and a failed run; phase closes     | Backlog sampler, `docs/runbooks/retention.md`, doc/status updates | Revert/reapply proof | Sampler E2E, full gate, independent review             | Done   |
+| `P7-T05` | Operators can read backlog, runbook, and a failed run; phase closes     | Backlog sampler, `docs/runbooks/retention.md`, doc/status updates | Revert/reapply proof | Sampler E2E, full gate, independent review             | Open   |
 
 ## Pull request sequence
 
@@ -352,7 +356,7 @@ Durable ones are in `ADR-0008`. The rest:
 
 ### `P7-T04` and `P7-T05` evidence
 
-- `MYSQL_PORT=13306 npm run test:e2e -- --runTestsByPath test/retention-worker-lifecycle.e2e-spec.ts`: 5 tests against spawned worker processes.
+- `MYSQL_PORT=13306 npm run test:e2e -- --runTestsByPath test/retention-worker-lifecycle.e2e-spec.ts`: 6 tests against spawned worker processes, including a worker `SIGKILL`ed mid-batch and recovered by its successor.
 - Mutations run:
   - `shouldStop` removed from the batch loop: **1 test fails** — the run is no longer
     interruptible and SIGTERM either waits for the budget or abandons the window.
@@ -368,7 +372,7 @@ Durable ones are in `ADR-0008`. The rest:
 
 ### `P7-T03` evidence
 
-- `MYSQL_PORT=13306 npm run test:integration -- --runTestsByPath test/retention-deletion.integration-spec.ts`: 11 tests.
+- `MYSQL_PORT=13306 npm run test:integration -- --runTestsByPath test/retention-deletion.integration-spec.ts`: 16 tests, including the dry-run path proving every counted table is left as it was found.
 - Run against the developer database, which is what found the entity defect below:
   `--dry-run` reported 1 session, 5 idempotency keys and 1 storage task; the real run
   deleted exactly those and recorded them in the ledger; a second run the same day was
@@ -391,7 +395,7 @@ Durable ones are in `ADR-0008`. The rest:
 
 ### `P7-T02` evidence
 
-- `npm run test:unit -- --runTestsByPath src/retention/retention-due.spec.ts src/retention/retention.arguments.spec.ts`: 13 tests.
+- `npm run test:unit -- --runTestsByPath src/retention/retention-due.spec.ts src/retention/retention.arguments.spec.ts`: 18 tests.
 - `MYSQL_PORT=13306 npm run test:integration -- --runTestsByPath test/retention-due.integration-spec.ts`: 13 tests, including a row on each side of every boundary and an `EXPLAIN` per predicate.
 - Run against the developer database, which is what the slice exists for:
   `ops:retention --dry-run` reported 1 session, 5 idempotency keys and 1 storage task
@@ -407,10 +411,10 @@ Durable ones are in `ADR-0008`. The rest:
 
 ### `P7-T01` evidence
 
-- `npm run test:unit -- --runTestsByPath src/retention/retention-window.spec.ts src/config/retention.config.spec.ts`: 13 tests.
-- `MYSQL_PORT=13306 npm run test:integration -- --runTestsByPath test/scheduled-run.integration-spec.ts`: 15 tests against real MySQL.
-- Mutations run, each recorded because a guard whose removal changes nothing is not a
-  guard:
+- `npm run test:unit -- --runTestsByPath src/retention/retention-window.spec.ts src/config/retention.config.spec.ts`: 14 tests.
+- `MYSQL_PORT=13306 npm run test:integration -- --runTestsByPath test/scheduled-run.integration-spec.ts`: 27 tests against real MySQL, covering the health readings, window takeover and the attempt budget.
+- Mutations run against the 15 cases this slice shipped with, each recorded because a
+  guard whose removal changes nothing is not a guard:
   - `UNIQUE KEY` → `KEY` on the window: **6 tests fail**, including the concurrent
     election.
   - `attempts < ?` removed from recovery: **1 test fails** — the abandoned-run case.
@@ -419,3 +423,17 @@ Durable ones are in `ADR-0008`. The rest:
     token. Two tests were added for the case where the lease is the only thing refusing
     the write — the lease expired and nobody has taken over — and the same mutation now
     fails one of them.
+
+## Handoff evidence, after `REVIEW-044`
+
+- `npm run verify` — **exit 0**, no environment prefix. The absent `MYSQL_PORT=13306` is
+  the point: `R44-03` had made every earlier local gate run order-dependent, because
+  `process.loadEnvFile` wrote to an environment jest does not hand its test files, so the
+  suites silently fell back to the schema defaults and the documented prefix was what
+  made them pass. This run reads `.env` through the fixed loader.
+- Counts: harness regression 77 + 8 cases; unit 524 in 77 suites; integration 272 in 24
+  suites; e2e 43 in 12 suites. Lint, format and a whole-project `tsc --noEmit` clean.
+- One gate input changed after the first red run of this pass — a harness test that
+  asserted the active-sink rule by promoting a sink that happened to be `planned`, which
+  the manifest fix made true. It was rewritten to remove the evidence from a sink that is
+  already active, and the gate was rerun in full.

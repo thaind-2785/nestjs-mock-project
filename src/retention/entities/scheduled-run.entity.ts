@@ -97,6 +97,21 @@ export class ScheduledRun extends MutableEntity {
   @Column({ name: 'deleted_counts', type: 'json', nullable: true })
   deletedCounts!: Record<string, number> | null;
 
+  /**
+   * When this window last removed a row, as opposed to when it last ran.
+   *
+   * `deletedCounts` accumulates across attempts, so it cannot say whether the attempt
+   * that just stopped achieved anything - and that is the question the attempt budget
+   * has to ask.
+   */
+  @Column({
+    name: 'progressed_at',
+    type: 'datetime',
+    precision: 6,
+    nullable: true,
+  })
+  progressedAt!: Date | null;
+
   @Column({
     name: 'last_error_code',
     type: 'varchar',

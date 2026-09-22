@@ -501,15 +501,21 @@ observability:
       }
     - {
         id: application_json_logs,
-        status: planned,
+        status: active,
         retention: repository_policy,
         phase: 1,
+        implementation_ref: src/main.ts,
       }
+    # Structured events rather than a metrics endpoint. The readings an operator acts on
+    # - backlog per task, failed windows, stale claims - are emitted as log lines and
+    # documented in docs/runbooks/retention.md; no scrape target is deployed, and none is
+    # promised.
     - {
         id: queue_and_cron_metrics,
-        status: planned,
+        status: active,
         retention: repository_policy,
         phase: 5_to_7,
+        implementation_ref: src/retention/retention-backlog.service.ts,
       }
   redact:
     [authorization, cookie, oauth_code, provider_payload, secret, refresh_token]

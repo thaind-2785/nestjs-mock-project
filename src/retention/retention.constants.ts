@@ -39,6 +39,10 @@ export const retentionErrorCodes = {
   /** The process was asked to stop. The batch in flight finished and the window went
    * back; nothing was abandoned and nothing was recorded as done. */
   shutdown: 'RETENTION_SHUTDOWN',
+  /** The local day rolled over while the window was still being continued. Nothing will
+   * pick it up - a run only claims the current window - so it is closed, but it is not a
+   * crash and does not belong in the failure reading an operator alerts on. */
+  stopped: 'RETENTION_STOPPED',
 } as const;
 
 export type RetentionErrorCode =

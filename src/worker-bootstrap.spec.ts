@@ -147,14 +147,20 @@ describe('bootstrapNotificationWorker', () => {
       onStopped,
     });
     signals.emit('SIGTERM');
-    await jest.advanceTimersByTimeAsync(30_000);
+    // Past the largest bound this process hosts, not past the mail one. Retention's
+    // sampler starts unconditionally, so its drain is always in the maximum - advancing
+    // only thirty seconds left the race unresolved and the test timed out rather than
+    // failing on the behaviour.
+    await jest.advanceTimersByTimeAsync(120_000);
 
     await expect(stopped).resolves.toBe(false);
     expect(logger.log).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'notification_worker_stopped',
         drained: false,
-        drainMs: 30_000,
+        // The retention sampler starts unconditionally, so its bound is always in the
+        // maximum even on a worker hosting neither optional family.
+        drainMs: 90_000,
       }),
     );
   });
@@ -262,14 +268,20 @@ describe('workerDrainMs', () => {
     ] as const;
   }
 
-  it('leaves a mail-only worker on the mail bound', () => {
-    // No consumer is registered, so there is no generation to protect and no reason
-    // to make every restart wait for work this process cannot be doing.
+  it('leaves a worker hosting no optional family on the retention bound', () => {
+    // Exports contribute nothing when disabled: no consumer is registered, so there is
+    // no generation to protect. Retention still contributes, because one of its
+    // residents starts unconditionally - the backlog sampler runs while the scheduler is
+    // off, which is the configuration the rollout establishes. Gating the drain on
+    // `enabled` left a default deployment draining on the mail bound with a sample in
+    // flight, so an ordinary deploy reported `drained:false` and exited non-zero.
     const [notifications, reports, retention] = configurations({});
 
     expect(reports.enabled).toBe(false);
     expect(retention.enabled).toBe(false);
-    expect(workerDrainMs(notifications, reports, retention)).toBe(30_000);
+    expect(workerDrainMs(notifications, reports, retention)).toBe(
+      retention.run.shutdownDrainMs,
+    );
   });
 
   it('takes the larger bound once both families are hosted', () => {
@@ -291,7 +303,7 @@ describe('workerDrainMs', () => {
     expect(workerDrainMs(notifications, reports, retention)).toBe(120_000);
   });
 
-  it('covers a retention batch once the scheduler is hosted', () => {
+  it('covers a retention batch rather than a retention run', () => {
     const [notifications, reports, retention] = configurations({
       RETENTION_ENABLED: 'true',
     });
@@ -306,14 +318,15 @@ describe('workerDrainMs', () => {
     );
   });
 
-  it('adds nothing for a family this process is not hosting', () => {
-    // A switched-off family has no work to drain, and counting it would make every
-    // deploy wait for something that cannot be happening.
+  it('adds nothing for exports when this process is not hosting them', () => {
+    // A switched-off export family registers no consumer and has nothing to drain, and
+    // counting it would make every deploy wait for work that cannot be happening.
     const [notifications, reports, retention] = configurations({
-      RETENTION_ENABLED: 'false',
-      NOTIFICATION_SHUTDOWN_DRAIN_MS: '15000',
+      REPORT_EXPORT_ENABLED: 'false',
+      NOTIFICATION_SHUTDOWN_DRAIN_MS: '120000',
     });
 
-    expect(workerDrainMs(notifications, reports, retention)).toBe(15_000);
+    expect(reports.enabled).toBe(false);
+    expect(workerDrainMs(notifications, reports, retention)).toBe(120_000);
   });
 });

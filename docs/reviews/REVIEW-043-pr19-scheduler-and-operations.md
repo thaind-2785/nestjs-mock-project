@@ -17,7 +17,11 @@
   each a declared bound whose property did not hold, and the helper `R42-02` asked to be
   wired is now wired and still does not bind reliably.
 - Verdict at the reviewed revision: **Block** — five High, six Medium, two Low
-- Author disposition: closed 2026-09-22. All thirteen fixed. `R43-01` is the fourth
+- Author disposition: closed 2026-09-22. All thirteen recorded fixed; `REVIEW-044`
+  later found two of those dispositions were written from intent rather than from the
+  file — `R43-13` (the runbook line was never edited) and `R43-09` (closed on three
+  unit cases that did not cover the three classes it named). Both are closed for real in
+  the `REVIEW-044` pass. All thirteen fixed. `R43-01` is the fourth
   appearance of one family and the sharpest: the previous fix wired the helper the
   review asked for, and the helper still could not bind, because the part that makes the
   repository's own precedent work - pinning the connection in a transaction - was the
@@ -166,3 +170,24 @@ window should survive into whatever this becomes.
   the phase-closing PR, so `PLAN-011` line 4 records the phase as pending independent
   review — that review is the one this report does not replace. A second reader should
   re-read `R43-01`, `R43-02` and `R43-04` before the verdict is cleared.
+
+### Post-fix disposition of these risks, 2026-09-22
+
+Written after `REVIEW-044`, the independent phase-exit read this section asked for.
+
+- `R43-03`: **accepted, unchanged.** No timed-SIGTERM e2e exists. The drain e2e still
+  proves only that the process drained and exited 0. Owner: project owner. The cost of a
+  measured drain is a test that asserts a duration, which is the shape most likely to
+  flake in CI; the bound is instead asserted where it is composed, in
+  `assertRetentionBounds`.
+- `R43-01`: **closed.** `REVIEW-044` re-read the call sites; `withStatementBound` and
+  `sample` both pin the connection in `dataSource.transaction()`. It was indeed latent:
+  the suite passed before the fix and after it.
+- `R43-02` and `R43-05`: **closed, and the interaction was real.** `R44-02` found the
+  first fix incomplete — progress was read from the window's lifetime rather than from
+  the attempt — so the alert-firing-for-a-non-fault case survived the original fix and
+  is now pinned by three integration cases in `scheduled-run.integration-spec.ts`.
+- The owed `npm run verify`: run at `PLAN-011`'s handoff evidence section after the
+  `REVIEW-044` fixes, not after this review's. `R44-19` records that gap.
+- The second reader arrived: `REVIEW-044` re-read `R43-01`, `R43-02` and `R43-04`. Two of
+  the three had shipped incomplete fixes, which is the argument for the read.

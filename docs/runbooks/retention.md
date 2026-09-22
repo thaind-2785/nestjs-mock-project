@@ -9,7 +9,7 @@ before turning the schedule on for the first time.
 
 ## Turning it on
 
-Two steps, in this order, and the first one deletes nothing.
+Five steps, in this order. Only the fourth deletes anything.
 
 ```bash
 # 1. Apply the migration. Nothing reads the ledger yet.
@@ -178,10 +178,24 @@ window.
 
 ## Logs
 
-| Event                     | Level | Means                                                                                                                                        |
-| ------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `retention_run_abandoned` | error | A window's process died with its budget spent; that task is now stopped                                                                      |
-| `retention_claim_lost`    | warn  | A run deleted rows and was refused the write because its lease lapsed. The counts in this line are real deletions the ledger does not record |
+Every line is JSON with an `event` field. The ones below are what an operator acts on;
+`retention_scheduler_started`, `retention_scheduler_disabled`,
+`retention_scheduler_stopped`, `retention_run_started`, `retention_run_completed`,
+`retention_tick_completed` and `retention_backlog_sampled` are the ordinary narration of
+a healthy night.
+
+| Event                            | Level | Means                                                                                                                                                               |
+| -------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `retention_tasks_exhausted`      | error | Every task has spent its budget for today. Retention as a whole is stopped, not one bucket of it                                                                    |
+| `retention_run_abandoned`        | error | A window's process died with its budget spent; that task is now stopped                                                                                             |
+| `retention_run_failed`           | error | An attempt failed. Retryable with budget left means it will be continued; otherwise the window is closed and the line above follows                                 |
+| `retention_run_record_failed`    | error | The work was done and the ledger write was not. The counts in this line are the only record of it                                                                   |
+| `retention_backlog_failed`       | error | The readings themselves failed. `failedWindows`, `staleClaims` and the due counts are stale from here until a sample succeeds — absence of alarm stops meaning calm |
+| `retention_tick_failed`          | error | A tick could not even ask what was due, usually the database being unreachable                                                                                      |
+| `retention_claim_lost`           | warn  | A run deleted rows and was refused the write because its lease lapsed. The counts in this line are real deletions the ledger does not record                        |
+| `retention_run_incomplete`       | warn  | The run stopped short — budget, shutdown or a provider — and handed the window back. Normal once; every night for the same task means the backlog is winning        |
+| `retention_object_delete_failed` | warn  | An object could not be removed, so its rows were kept and stay due. The object is still billed until this clears                                                    |
+| `retention_windows_abandoned`    | warn  | Windows left claimed by a previous day were closed so today's can open. A count above zero is a process that died yesterday                                         |
 
 ## Continuation, and what does not count against a task
 

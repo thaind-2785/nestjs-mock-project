@@ -33,10 +33,24 @@ and no HTTP listener, so the API and the worker fail, restart, and scale apart:
 npm run start:worker
 ```
 
-`SIGTERM` drains it within `NOTIFICATION_SHUTDOWN_DRAIN_MS` and logs whether the drain
-completed. The worker claims booking notification events from the outbox, relays them
-through BullMQ, and delivers each one through SMTP - Mailpit locally, Gmail when
-deployed. The API never does either: it only commits the intent.
+`SIGTERM` drains it and logs whether the drain completed. The worker claims booking
+notification events from the outbox, relays them through BullMQ, and delivers each one
+through SMTP - Mailpit locally, Gmail when deployed. The API never does either: it only
+commits the intent.
+
+The same process also hosts scheduled retention, which deletes what earlier phases left
+behind - expired sessions and idempotency keys, storage cleanup tasks, processed
+notification events, expired export results. It ticks only when `RETENTION_ENABLED` is
+true, and a ledger row per task per day elects one runner however many replicas are
+deployed. The same work runs by hand:
+
+```bash
+npm run ops:retention -- --dry-run          # reports; deletes nothing
+npm run ops:retention -- --delete --task auth-sessions
+```
+
+Exactly one of `--dry-run` or `--delete` is required. `docs/runbooks/retention.md` is
+the enabling sequence and the operator readings.
 
 Start environment values from `.env.example`; never commit credentials. `NODE_ENV`
 accepts `development`, `test`, or `production` and defaults to `development`. `PORT`
@@ -239,8 +253,12 @@ HOTEL_TIMEZONE=Asia/Ho_Chi_Minh
 # database lock is taken.
 BOOKING_CREATE_RATE_LIMIT_MAX=10
 BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS=60
-# Minimum retention for booking-create idempotency records. Phase 7 owns cleanup.
-BOOKING_IDEMPOTENCY_RETENTION_HOURS=24
+# Minimum retention for booking-create idempotency records. Retention deletes them
+# once expired. The old BOOKING_IDEMPOTENCY_ prefix is rejected at startup.
+IDEMPOTENCY_RETENTION_HOURS=24
+# The retention scheduler is off unless this is set. Read `npm run ops:retention --
+# --dry-run` against real data before turning it on; see docs/runbooks/retention.md.
+RETENTION_ENABLED=false
 ```
 
 Deploy order is migration first, application second:

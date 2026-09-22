@@ -77,6 +77,21 @@ const shutdownDrainMs = 90_000;
 const backlogSampleIntervalMs = 60_000;
 
 /**
+ * How long a delete inside a chain transaction may wait for a lock.
+ *
+ * `MAX_EXECUTION_TIME` bounds reads and not writes, so this is what actually bounds a
+ * `DELETE`. MySQL's default is fifty seconds per statement, which puts a three-step chain
+ * at two and a half minutes - past the drain, which is how a batch could survive shutdown
+ * with the window still claimed under a live lease.
+ */
+const lockWaitSeconds = 10;
+
+/** The longest chain: send attempts, deliveries, then the event. */
+const chainSteps = 3;
+
+const millisecondsPerSecond = 1_000;
+
+/**
  * How far back the failed-window reading looks.
  *
  * It needs a horizon because nothing ever rewrites a `FAILED` row: an unscoped count
@@ -135,6 +150,7 @@ export interface RetentionRunConfiguration {
   tickIntervalMs: number;
   shutdownDrainMs: number;
   backlogSampleIntervalMs: number;
+  lockWaitSeconds: number;
   recentFailureWindowDays: number;
   batchSize: number;
   statementTimeoutMs: number;
@@ -170,6 +186,7 @@ export function createRetentionConfiguration(
       tickIntervalMs,
       shutdownDrainMs,
       backlogSampleIntervalMs,
+      lockWaitSeconds,
       recentFailureWindowDays,
       batchSize,
       statementTimeoutMs,
@@ -228,11 +245,17 @@ export function assertRetentionBounds(
   if (run.runBudgetMs < run.statementTimeoutMs) {
     unbounded.push('run.runBudgetMs');
   }
-  // The drain has to cover the slowest batch, not the slowest statement. A batch is a
-  // bounded claim read followed by at most one provider call before the stop flag is
-  // consulted again, so two statement budgets plus slack is the bound that is actually
-  // true - checking it against one was the arithmetic that let a batch outlive the drain.
-  if (run.shutdownDrainMs < run.statementTimeoutMs * 2 + leaseSafetyMarginMs) {
+  // The drain has to cover the slowest batch, and the slowest batch is a chain: one
+  // bounded claim read, then a transaction of three deletes that cannot be interrupted
+  // between its steps, because a crash there would orphan rows nothing can find. So the
+  // bound is the read plus the chain's own lock waits plus slack. Checking it against a
+  // statement budget described no batch this code actually runs.
+  if (
+    run.shutdownDrainMs <
+    run.statementTimeoutMs +
+      chainSteps * run.lockWaitSeconds * millisecondsPerSecond +
+      leaseSafetyMarginMs
+  ) {
     unbounded.push('run.shutdownDrainMs');
   }
   // Zero attempts is a task that can never run; it would look like a task with nothing

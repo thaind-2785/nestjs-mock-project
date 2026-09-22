@@ -45,6 +45,14 @@ function errno(error: unknown): number | undefined {
  * They are not data - every one is a key the caller built from `retentionDuePredicates`
  * - and the counts themselves stay bound.
  */
+function progressedAtExpression(counts: Record<string, number>): string {
+  // Stamped only by a write that removed rows. A finalizer reporting zeros leaves the
+  // previous value alone, so the attempt budget sees no progress for this attempt.
+  return Object.values(counts).some((removed) => removed > 0)
+    ? 'NOW(6)'
+    : 'progressed_at';
+}
+
 function accumulateCounts(counts: Record<string, number>): {
   expression: string;
   parameters: number[];
@@ -176,8 +184,14 @@ export class ScheduledRunRepository {
    * interrupted it, or a provider was refusing is *continuing*, and charging it would
    * mean a genuinely large backlog gave up after three continuations - roughly fifteen
    * minutes of honest work - and needed a human. Three deploys during a nightly run did
-   * the same. A continuation that deleted nothing is charged anyway, because a window
-   * making no progress is not continuing.
+   * the same.
+   *
+   * Progress is measured on the attempt that stopped, not on the window's lifetime.
+   * `deleted_counts` accumulates by design, so asking whether it is non-empty asked
+   * whether this window had *ever* deleted anything - which a task failing against a
+   * dead provider satisfies forever after its first success, so it would have been
+   * reclaimed every tick and never reached `FAILED`. `progressed_at` is stamped only by
+   * a write that removed rows, and is compared against this attempt's `started_at`.
    */
   private async recover(
     manager: EntityManager,
@@ -195,10 +209,18 @@ export class ScheduledRunRepository {
            lock_expires_at = NOW(6) + INTERVAL ? MICROSECOND,
            attempts = attempts + IF(
              last_error_code IN (${retentionContinuationCodes.map(() => '?').join(', ')})
-               AND JSON_LENGTH(COALESCE(deleted_counts, JSON_OBJECT())) > 0,
+               AND progressed_at IS NOT NULL
+               AND progressed_at >= started_at,
              0,
              1
            ),
+           -- Cleared on takeover, so the column describes the claim that is live rather
+           -- than the window's history. Left in place, a window handed back, recovered
+           -- and then killed would keep a continuation code forever, and the stale-claim
+           -- reading - which has to exclude those codes, because a handback and a crash
+           -- leave the same row shape - could never see it. The attempt count remains
+           -- durable record that the window needed more than one try.
+           last_error_code = NULL,
            started_at = NOW(6)
        WHERE task_name = ?
          AND scheduled_for = ?
@@ -317,7 +339,8 @@ export class ScheduledRunRepository {
            locked_by = NULL,
            lock_expires_at = NULL,
            finished_at = NOW(6),
-           deleted_counts = ${counts.expression}
+           deleted_counts = ${counts.expression},
+           progressed_at = ${progressedAtExpression(deletedCounts)}
        WHERE locked_by = ?
          AND status = ?
          AND lock_expires_at > NOW(6)`,
@@ -338,7 +361,10 @@ export class ScheduledRunRepository {
    *
    * A retryable failure with budget left hands the window back by expiring its own
    * lease, which makes the retry path and the crash-recovery path the same mechanism
-   * rather than two that have to agree. Anything else is terminal and loud.
+   * rather than two that have to agree. The holder stays stamped, because the table's
+   * state check requires a `CLAIMED` row to name one; what a handback leaves behind is
+   * therefore distinguishable only by its error code. Anything else is terminal and
+   * loud.
    */
   async fail(
     dataSource: DataSource,
@@ -354,6 +380,7 @@ export class ScheduledRunRepository {
         ? `UPDATE scheduled_runs
            SET lock_expires_at = NOW(6),
                deleted_counts = ${counts.expression},
+               progressed_at = ${progressedAtExpression(deletedCounts)},
                last_error_code = ?
            WHERE locked_by = ?
              AND status = ?
@@ -364,6 +391,7 @@ export class ScheduledRunRepository {
                lock_expires_at = NULL,
                finished_at = NOW(6),
                deleted_counts = ${counts.expression},
+               progressed_at = ${progressedAtExpression(deletedCounts)},
                last_error_code = ?
            WHERE locked_by = ?
              AND status = ?
@@ -401,8 +429,10 @@ export class ScheduledRunRepository {
    *
    * `staleClaims` excludes a window that was handed back on purpose. A continuation
    * expires its own lease and leaves the status alone, which is byte-identical to what a
-   * dead process leaves - so counting the shape rather than the intent made every
-   * ordinary budget-spent run look like a crash.
+   * dead process leaves - the table's state check requires a `CLAIMED` row to name a
+   * holder, so the error code is the only thing left to tell them apart. Counting the
+   * shape instead made every ordinary budget-spent run look like a crash, and an
+   * overnight one look like a crash until the day rolled over.
    */
   async health(
     dataSource: DataSource,
@@ -419,8 +449,11 @@ export class ScheduledRunRepository {
       oldest_failed_age_us: string | number;
     }> = await dataSource.manager.query(
       `SELECT
-         SUM(status = ? AND scheduled_for >= NOW(6) - INTERVAL ? DAY)
-           AS failed_windows,
+         SUM(
+           status = ?
+           AND scheduled_for >= NOW(6) - INTERVAL ? DAY
+           AND last_error_code <> ?
+         ) AS failed_windows,
          SUM(
            status = ?
            AND lock_expires_at <= NOW(6)
@@ -431,7 +464,9 @@ export class ScheduledRunRepository {
              MICROSECOND,
              MIN(
                CASE
-                 WHEN status = ? AND scheduled_for >= NOW(6) - INTERVAL ? DAY
+                 WHEN status = ?
+                   AND scheduled_for >= NOW(6) - INTERVAL ? DAY
+                   AND last_error_code <> ?
                  THEN finished_at
                END
              ),
@@ -443,10 +478,12 @@ export class ScheduledRunRepository {
       [
         ScheduledRunStatus.Failed,
         recentWindowDays,
+        retentionErrorCodes.stopped,
         ScheduledRunStatus.Claimed,
         ...retentionContinuationCodes,
         ScheduledRunStatus.Failed,
         recentWindowDays,
+        retentionErrorCodes.stopped,
       ],
     );
     return {
@@ -461,11 +498,16 @@ export class ScheduledRunRepository {
   /**
    * Closes windows from earlier days that nobody will continue.
    *
-   * A run only ever claims the current window, so a window handed back for continuation
-   * and not reclaimed before the local day rolled over is touched by nothing again: it
-   * stays `CLAIMED` forever, and the work it left is silently nobody's. Recording it
-   * `FAILED` is the truthful version - that day's retention did not finish - and it is
-   * also what lets the stale-claim reading stay a measure of the present.
+   * A run only ever claims the current window, so one left `CLAIMED` when the local day
+   * rolled over is touched by nothing again: it stays claimed forever and the work it
+   * left is silently nobody's.
+   *
+   * `RETENTION_STOPPED` rather than `RETENTION_RUN_ABANDONED`, and it is a distinct code
+   * on purpose. Most of these are the case continuation exists to support - a backlog
+   * still running at midnight, or a deploy near it - and recording those as an
+   * abandonment made the reading the runbook calls "the one to alert on" fire for a week
+   * over work the next window simply redoes. The window still has to be closed, because
+   * nothing will continue it; what it must not do is look like a crash.
    */
   async closeAbandonedBefore(
     dataSource: DataSource,
@@ -477,13 +519,13 @@ export class ScheduledRunRepository {
            locked_by = NULL,
            lock_expires_at = NULL,
            finished_at = NOW(6),
-           last_error_code = COALESCE(last_error_code, ?)
+           last_error_code = ?
        WHERE status = ?
          AND scheduled_for < ?
          AND lock_expires_at <= NOW(6)`,
       [
         ScheduledRunStatus.Failed,
-        retentionErrorCodes.runAbandoned,
+        retentionErrorCodes.stopped,
         ScheduledRunStatus.Claimed,
         currentWindow,
       ],

@@ -12,7 +12,7 @@ import { notificationEventTypes } from '../notifications/notification-event';
 import { roomExportEventTypes } from './room-export.constants';
 import { ReportsApiModule } from './reports-api.module';
 import { ReportsWorkerModule } from './reports-worker.module';
-import { RoomExportQueueLifecycle } from './room-export-queue.lifecycle';
+import { RoomExportDispatcherService } from './room-export-dispatcher.service';
 import { ROOM_EXPORT_QUEUE, ROOM_EXPORT_QUEUE_CLIENT } from './report.tokens';
 
 function importsOf(module: object): unknown[] {
@@ -82,6 +82,37 @@ describe('report export module boundaries', () => {
     expect(importsOf(ReportsWorkerModule)).not.toContain(ReportsApiModule);
   });
 
+  it('gives every export connection exactly one thing that closes it', () => {
+    // Nest runs a module's shutdown hooks concurrently, so a second owner of the same
+    // handle is not redundancy: `quit` on a socket the first owner has already ended
+    // rejects, `context.close()` rejects with it, and the drain reports an undrained
+    // worker on every clean deploy.
+    //
+    // The list is every provider with a shutdown hook rather than only the ones holding
+    // a connection, because nothing here can read what a hook closes. It is therefore a
+    // decision that has to be made again each time a provider gains a hook, which is
+    // the point: adding one turns this red and the person adding it has to say which of
+    // the three cases it is.
+    const closers = providersOf(ReportsWorkerModule)
+      .filter(
+        (provider): provider is new (...args: never[]) => object =>
+          typeof provider === 'function' &&
+          'onApplicationShutdown' in provider.prototype,
+      )
+      .map((provider) => provider.name)
+      .sort();
+
+    expect(closers).toEqual([
+      // Stops its sample loop. Holds no handle: it borrows the producer queue the
+      // dispatcher owns and the pooled connection the database module owns.
+      'RoomExportBacklogService',
+      // Owns the consumer's blocking Redis client, and stops the BullMQ worker first.
+      'RoomExportConsumerService',
+      // Owns the producer queue and its client, and stops polling before either closes.
+      'RoomExportDispatcherService',
+    ]);
+  });
+
   it('claims an event family no notification dispatcher can also claim', () => {
     // Two independent consumers now read one outbox table. P6-T02 puts these
     // allowlists inside the claiming statement, before LIMIT; overlapping families
@@ -109,7 +140,7 @@ describe('ReportsWorkerModule while the export boundary is disabled', () => {
       // Nothing to close is the point: a deployment that has not enabled exports
       // holds no socket a drain would have to wait on.
       await expect(
-        moduleRef.get(RoomExportQueueLifecycle).onApplicationShutdown(),
+        moduleRef.get(RoomExportDispatcherService).onApplicationShutdown(),
       ).resolves.toBeUndefined();
     } finally {
       await moduleRef.close();

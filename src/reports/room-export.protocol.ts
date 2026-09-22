@@ -18,10 +18,24 @@
 export const roomExportProtocolVersion = 1;
 
 export const roomExportWorkerErrorCodes = {
+  /**
+   * A message this release cannot read, which is a statement about the deployment and
+   * not about the export. It is separate from `protocolInvalid` for exactly that
+   * reason: a version mismatch is what a rolling restart produces between the release
+   * that queued a job and the one that picked it up, and it is the only protocol fault
+   * a later attempt can be expected to resolve on its own. `classifyRoomExportFailure`
+   * therefore retries this one and only this one.
+   */
+  versionUnsupported: 'EXPORT_WORKER_PROTOCOL_VERSION',
   protocolInvalid: 'EXPORT_WORKER_PROTOCOL_INVALID',
   resourceLimitMismatch: 'EXPORT_WORKER_RESOURCE_LIMIT_MISMATCH',
   rowLimitExceeded: 'EXPORT_ROW_LIMIT_EXCEEDED',
   snapshotTooLarge: 'EXPORT_SNAPSHOT_TOO_LARGE',
+  // Parent-side classifications. A thread that timed out, exceeded its heap, or exited
+  // without answering cannot report its own failure, so these are decided from the exit.
+  timedOut: 'EXPORT_WORKER_TIMEOUT',
+  outOfMemory: 'EXPORT_WORKER_OUT_OF_MEMORY',
+  exited: 'EXPORT_WORKER_EXITED',
   outputTooLarge: 'EXPORT_OUTPUT_TOO_LARGE',
   generationFailed: 'EXPORT_GENERATION_FAILED',
 } as const;
@@ -437,7 +451,8 @@ function requireExactObject<Key extends string>(
 
 function requireProtocolVersion(value: unknown): void {
   if (value !== roomExportProtocolVersion) {
-    throw invalid(
+    throw new RoomExportProtocolError(
+      roomExportWorkerErrorCodes.versionUnsupported,
       `protocolVersion must be ${roomExportProtocolVersion}, received ${String(value)}`,
     );
   }

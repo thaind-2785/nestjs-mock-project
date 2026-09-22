@@ -1,9 +1,12 @@
 import {
   Body,
   Controller,
+  Get,
+  Header,
   Headers,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   Req,
   Res,
@@ -13,6 +16,7 @@ import {
   ApiAcceptedResponse,
   ApiBearerAuth,
   ApiHeader,
+  ApiOkResponse,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
@@ -25,10 +29,13 @@ import type { RequestWithContext } from '../common/http/request-context';
 import { RoomCatalogFilterDto } from '../rooms/dto/room-catalog-filter.dto';
 import { UserRole } from '../users/entities/user.enums';
 import { CreateRoomExportResponseDto } from './dto/create-room-export-response.dto';
+import { ExportJobParamDto } from './dto/export-job-param.dto';
+import { ExportJobResponseDto } from './dto/export-job-response.dto';
 import { idempotencyReplayedHeader } from '../common/idempotency/idempotency.constants';
 import { normalizeRoomExportFilters } from './room-export-create.helpers';
 import { RoomExportCreateRateLimitGuard } from './room-export-create-rate-limit.guard';
 import { RoomExportService } from './room-export.service';
+import { RoomExportViewService } from './room-export-view.service';
 import type { RoomExportCreateResponse } from './room-export.types';
 
 @ApiTags('Admin exports')
@@ -36,7 +43,10 @@ import type { RoomExportCreateResponse } from './room-export.types';
 @Roles(UserRole.Admin)
 @Controller('admin/exports')
 export class AdminExportsController {
-  constructor(private readonly exports: RoomExportService) {}
+  constructor(
+    private readonly exports: RoomExportService,
+    private readonly view: RoomExportViewService,
+  ) {}
 
   /**
    * The body is the admin catalogue's own filter contract, so pagination is not
@@ -105,5 +115,43 @@ export class AdminExportsController {
       response.setHeader(idempotencyReplayedHeader, 'true');
     }
     return result.response;
+  }
+
+  /**
+   * The requester's own job, and only theirs.
+   *
+   * `no-store` because a completed response carries a presigned URL. A shared cache
+   * holding it would hand a bearer secret to whoever asked next, and a browser cache
+   * would keep answering after the result expired.
+   */
+  @Get(':jobId')
+  @Header('Cache-Control', 'no-store')
+  @ApiOkResponse({
+    description:
+      'Lifecycle metadata, plus a short-lived download URL for a completed unexpired result.',
+    type: ExportJobResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    type: ErrorResponseDto,
+    description: 'VALIDATION_FAILED for a malformed job id.',
+  })
+  @ApiResponse({
+    status: 404,
+    type: ErrorResponseDto,
+    description:
+      'EXPORT_NOT_FOUND. Also returned for a job owned by another administrator, so absence and ownership are indistinguishable.',
+  })
+  @ApiResponse({
+    status: 503,
+    type: ErrorResponseDto,
+    description:
+      'EXPORT_STORAGE_UNAVAILABLE when the result exists but cannot be signed right now.',
+  })
+  get(
+    @CurrentPrincipal() principal: AuthenticatedPrincipal,
+    @Param() params: ExportJobParamDto,
+  ): Promise<ExportJobResponseDto> {
+    return this.view.getOwned(params.jobId, principal.userId);
   }
 }

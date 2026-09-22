@@ -20,6 +20,46 @@ export const roomExportErrors = {
       'EXPORT_CREATE_UNAVAILABLE',
       errorMessageKeys.exportCreateUnavailable,
     ),
+  /**
+   * Permanent, not retryable. Retrying an unchanged bounded read would consume the
+   * same resources to reach the same refusal, and the administrator's answer is to
+   * narrow the filters rather than to wait.
+   */
+  rowLimitExceeded: () =>
+    new ApplicationException(
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      'EXPORT_ROW_LIMIT_EXCEEDED',
+      errorMessageKeys.exportRowLimitExceeded,
+    ),
+  snapshotTooLarge: () =>
+    new ApplicationException(
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      'EXPORT_SNAPSHOT_TOO_LARGE',
+      errorMessageKeys.exportSnapshotTooLarge,
+    ),
+  /**
+   * Retryable. The object store being unreachable says nothing about whether this
+   * export can ever succeed, so the attempt returns to the queue with its budget.
+   */
+  storageUnavailable: (cause?: unknown) =>
+    new ApplicationException(
+      HttpStatus.SERVICE_UNAVAILABLE,
+      'EXPORT_STORAGE_UNAVAILABLE',
+      errorMessageKeys.exportStorageUnavailable,
+      undefined,
+      cause,
+    ),
+  /**
+   * A missing job, a job owned by another administrator, and a well-formed id nobody
+   * owns all answer with this. One response for three states is the point: a requester
+   * must not be able to learn that someone else's export exists.
+   */
+  notFound: () =>
+    new ApplicationException(
+      HttpStatus.NOT_FOUND,
+      'EXPORT_NOT_FOUND',
+      errorMessageKeys.exportNotFound,
+    ),
   /** Returned while the export boundary is disabled, so the rollout has a closed door. */
   createDisabled: () =>
     new ApplicationException(

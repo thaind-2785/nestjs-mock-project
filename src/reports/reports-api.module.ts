@@ -12,7 +12,11 @@ import { AdminExportsController } from './admin-exports.controller';
 import { ExportJob } from './entities/export-job.entity';
 import { ExportJobRepository } from './export-job.repository';
 import { RoomExportCreateRateLimitGuard } from './room-export-create-rate-limit.guard';
+import { ObjectStorageModule } from '../common/storage/object-storage.module';
 import { RoomExportService } from './room-export.service';
+import { RoomExportStorageService } from './room-export-storage.service';
+import { RoomExportViewRepository } from './room-export-view.repository';
+import { RoomExportViewService } from './room-export-view.service';
 
 /**
  * The API half of the export boundary: the admin create endpoint and the transaction
@@ -34,6 +38,7 @@ import { RoomExportService } from './room-export.service';
     ConfigModule.forFeature(bookingsConfig),
     DatabaseModule,
     IdempotencyModule,
+    ObjectStorageModule,
     RateLimitModule,
     TypeOrmModule.forFeature([ExportJob, OutboxEvent, IdempotencyKey]),
   ],
@@ -42,6 +47,11 @@ import { RoomExportService } from './room-export.service';
     RoomExportService,
     ExportJobRepository,
     RoomExportCreateRateLimitGuard,
+    RoomExportViewRepository,
+    RoomExportViewService,
+    // Presign only. The API never uploads, deletes, or reads an export object; it
+    // signs a short-lived GET for a result the worker already published.
+    RoomExportStorageService,
   ],
   exports: [ConfigModule],
 })

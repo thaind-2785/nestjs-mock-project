@@ -347,6 +347,29 @@ admin API, request a booking as the owner, approve it as an administrator, and o
 Mailpit at <http://localhost:8025>. The worker logs `notification_batch_dispatched`
 and then `notification_delivery_finished` with an outcome of `sent`.
 
+**An administrator can export the room catalogue to XLSX without holding a request
+open.** `POST /api/v1/admin/exports/rooms` returns `202` with a job id; the worker takes
+the intent from the same outbox, reads a consistent snapshot, builds the workbook inside
+a resource-limited Worker Thread, and uploads it to a private object.
+`GET /api/v1/admin/exports/:jobId` returns the job's progress and, once it is complete,
+a short-lived download URL. The export path ships disabled: set
+`REPORT_EXPORT_ENABLED=true` on both processes to turn it on.
+
+To watch that journey locally: with the stack running, start both processes with the
+flag on, create a few rooms, then
+
+```bash
+curl -s -X POST http://localhost:3000/api/v1/admin/exports/rooms \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: room-export-demo-1' -d '{}'
+```
+
+The worker logs `room_export_batch_dispatched`, `room_export_generated`, and
+`room_export_completed` within about a second. Poll the returned `pollPath` and open the
+`download.url` it gives you; the same URL without its signature is refused, because the
+bucket is private. [`docs/runbooks/room-export.md`](docs/runbooks/room-export.md) covers
+enabling, draining, reading the backlog sample, and what to do when a job fails.
+
 Redis limiter failure denies booking creation but must never break read endpoints,
 and MySQL overload uses the existing bounded `503`. Neither failure may fall back to
 unbounded requests or to an availability claim the database did not support.

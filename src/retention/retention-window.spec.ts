@@ -55,9 +55,12 @@ describe('retention window', () => {
     expect(nextDay.getTime() - dstDay.getTime()).toBe(23 * 60 * 60 * 1_000);
   });
 
-  it('refuses a timezone it cannot read rather than silently using UTC', () => {
+  it('names the hotel timezone it could not read, rather than merely throwing', () => {
+    // Asserting the message, not just that something threw: the previous version
+    // passed against a guard that could never run, because `Intl` had already raised
+    // its own `RangeError` from the constructor.
     expect(() =>
       localDayStart(new Date('2026-09-22T02:00:00.000Z'), 'Mars/Olympus_Mons'),
-    ).toThrow();
+    ).toThrow(/Unusable hotel timezone: Mars\/Olympus_Mons/);
   });
 });

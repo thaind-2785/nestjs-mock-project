@@ -1,5 +1,10 @@
 import { retentionDuePredicate, retentionDuePredicates } from './retention-due';
-import { retentionTaskNames } from './retention.constants';
+import {
+  maxErrorCodeLength,
+  maxTaskNameLength,
+  retentionErrorCodes,
+  retentionTaskNames,
+} from './retention.constants';
 
 describe('retention due predicates', () => {
   it('covers every task exactly once', () => {
@@ -19,6 +24,21 @@ describe('retention due predicates', () => {
       expect(predicate.where).toContain(predicate.anchorColumn);
     },
   );
+
+  it('keeps every task name inside the column that stores it', () => {
+    // Not a formality: `task_name` is part of the unique key, so a name the column
+    // cannot hold is a window that can never be claimed - and the failure would arrive
+    // as an insert error at run time rather than here.
+    for (const name of retentionTaskNames) {
+      expect(name.length).toBeLessThanOrEqual(maxTaskNameLength);
+    }
+  });
+
+  it('keeps every stable error code inside the column that stores it', () => {
+    for (const code of Object.values(retentionErrorCodes)) {
+      expect(code.length).toBeLessThanOrEqual(maxErrorCodeLength);
+    }
+  });
 
   it('refuses a task it has no predicate for', () => {
     expect(() =>

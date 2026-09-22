@@ -78,8 +78,6 @@ const maxFileBytes = 25 * 1_024 * 1_024;
  */
 export const roomExportResultTtlHours = 24;
 
-const resultTtlHours = roomExportResultTtlHours;
-
 /** A download URL is a bearer secret, so it is short lived and capped again by the
  * result's own remaining lifetime at request time. */
 const presignTtlSeconds = 300;
@@ -220,7 +218,7 @@ export function createReportsConfiguration(
       concurrency: roomExportQueueConcurrency,
       shutdownDrainMs,
     },
-    result: { ttlHours: resultTtlHours, presignTtlSeconds },
+    result: { ttlHours: roomExportResultTtlHours, presignTtlSeconds },
     createRateLimit: {
       max: environment.REPORT_EXPORT_CREATE_RATE_LIMIT_MAX,
       windowSeconds: environment.REPORT_EXPORT_CREATE_RATE_LIMIT_WINDOW_SECONDS,

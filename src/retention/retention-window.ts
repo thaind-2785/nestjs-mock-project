@@ -30,21 +30,27 @@ function zoneOffsetMs(instant: Date, timeZone: string): number {
   const whole = Math.floor(instant.getTime() / 1_000) * 1_000;
   // `sv-SE` is used for its format, not its language: it renders
   // `YYYY-MM-DD HH:mm:ss`, which needs only a separator swap to be ISO.
-  const wallClock = new Intl.DateTimeFormat('sv-SE', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(new Date(whole));
-  const asIfUtc = new Date(`${wallClock.replace(' ', 'T')}Z`);
-  if (Number.isNaN(asIfUtc.getTime())) {
-    throw new Error(`Unusable hotel timezone: ${timeZone}`);
+  let wallClock: string;
+  try {
+    wallClock = new Intl.DateTimeFormat('sv-SE', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date(whole));
+  } catch (error) {
+    // `Intl` rejects an unknown zone from the constructor with a `RangeError` naming
+    // the option rather than the configuration, so this is where the hotel timezone
+    // gets named. An earlier version checked the parsed result instead, which could
+    // never run: the constructor had already thrown, and the test only asserted that
+    // something threw, so it passed for the wrong reason.
+    throw new Error(`Unusable hotel timezone: ${timeZone}`, { cause: error });
   }
-  return asIfUtc.getTime() - whole;
+  return new Date(`${wallClock.replace(' ', 'T')}Z`).getTime() - whole;
 }
 
 /**

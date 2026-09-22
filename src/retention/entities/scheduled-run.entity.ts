@@ -21,17 +21,16 @@ import { ScheduledRunStatus } from './scheduled-run.enums';
   unique: true,
 })
 @Index('idx_scheduled_runs_recoverable', ['status', 'lockExpiresAt'])
-@Index('idx_scheduled_runs_history', ['taskName', 'scheduledFor'])
 @Check(
   'chk_scheduled_runs_lock_shape',
   '(`locked_by` IS NULL AND `lock_expires_at` IS NULL) OR (`locked_by` IS NOT NULL AND `lock_expires_at` IS NOT NULL)',
 )
-// A claimed row may carry `last_error_code`: it is the previous attempt's, kept for
-// the same reason a pending outbox event keeps one - the next operator to look needs
-// to know why this window is on its second try.
+// `last_error_code` is the last error this window saw, not a claim that this run
+// failed. A window that timed out once and succeeded on its second attempt keeps the
+// code, so one row tells the whole story.
 @Check(
   'chk_scheduled_runs_state_shape',
-  "(`status` = 'CLAIMED' AND `locked_by` IS NOT NULL AND `finished_at` IS NULL) OR (`status` = 'SUCCEEDED' AND `locked_by` IS NULL AND `finished_at` IS NOT NULL AND `last_error_code` IS NULL) OR (`status` = 'FAILED' AND `locked_by` IS NULL AND `finished_at` IS NOT NULL AND `last_error_code` IS NOT NULL)",
+  "(`status` = 'CLAIMED' AND `locked_by` IS NOT NULL AND `finished_at` IS NULL) OR (`status` = 'SUCCEEDED' AND `locked_by` IS NULL AND `finished_at` IS NOT NULL) OR (`status` = 'FAILED' AND `locked_by` IS NULL AND `finished_at` IS NOT NULL AND `last_error_code` IS NOT NULL)",
 )
 @Check(
   'chk_scheduled_runs_finished_after_started',
@@ -86,7 +85,11 @@ export class ScheduledRun extends MutableEntity {
   finishedAt!: Date | null;
 
   /**
-   * How many rows this run deleted, per table.
+   * How many rows this window has deleted in total, per table.
+   *
+   * Accumulated across attempts rather than replaced by the last one: a run that
+   * removed three hundred rows and then timed out removed three hundred rows, and the
+   * attempt that finishes the window must not report only its own fifty.
    *
    * Counts only. The ledger records that data was deleted and how much, which is the
    * audit trail a destructive job owes; it never records what the data was.

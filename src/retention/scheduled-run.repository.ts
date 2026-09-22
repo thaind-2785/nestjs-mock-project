@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
-import { EntityManager } from 'typeorm';
+import { Injectable, Logger } from '@nestjs/common';
+import { DataSource, EntityManager } from 'typeorm';
 import {
+  microsecondsPerMillisecond,
   retentionErrorCodes,
   type RetentionTaskName,
 } from './retention.constants';
@@ -11,48 +12,100 @@ import type {
   ScheduledRunFailure,
 } from './scheduled-run.types';
 
-/** MySQL's duplicate-key error. Losing an election raises it, so it is an outcome
- * rather than a fault, and only this one code may be read that way. */
+/** MySQL's duplicate-key error: the winner had already committed this window. */
 const duplicateEntryErrno = 1062;
 
-function isDuplicateKey(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { errno?: number }).errno === duplicateEntryErrno
-  );
+/**
+ * MySQL's lock-wait timeout, which a losing insert gets instead of a duplicate key
+ * when the winner has not committed yet.
+ *
+ * Reading it as a lost election is narrow and deliberate. This statement inserts one
+ * row with one unique key, so the only lock it can ever wait on is that window's, and
+ * waiting on it means somebody else is inserting it. The same code anywhere else would
+ * be wrong.
+ */
+const lockWaitTimeoutErrno = 1205;
+
+function errno(error: unknown): number | undefined {
+  return typeof error === 'object' && error !== null
+    ? (error as { errno?: number }).errno
+    : undefined;
+}
+
+/**
+ * Builds the accumulate-in-place expression for `deleted_counts`.
+ *
+ * Adds to whatever is already there instead of replacing it, because the counts belong
+ * to the window rather than to the attempt: a run that removed three hundred rows and
+ * then timed out removed three hundred rows, and the attempt that finishes must not
+ * report only its own fifty.
+ *
+ * The table names are interpolated because a JSON path cannot be a bound parameter.
+ * They are not data - every one is a key the caller built from `retentionDuePredicates`
+ * - and the counts themselves stay bound.
+ */
+function accumulateCounts(counts: Record<string, number>): {
+  expression: string;
+  parameters: number[];
+} {
+  const tables = Object.keys(counts).sort();
+  if (tables.length === 0) {
+    return { expression: 'deleted_counts', parameters: [] };
+  }
+  for (const table of tables) {
+    if (!/^[a-z_]+$/.test(table)) {
+      throw new Error(`Unusable deleted_counts key: ${table}`);
+    }
+  }
+  const pairs = tables
+    .map(
+      (table) =>
+        `'$.${table}', COALESCE(JSON_EXTRACT(deleted_counts, '$.${table}'), 0) + ?`,
+    )
+    .join(', ');
+  return {
+    expression: `JSON_SET(COALESCE(deleted_counts, JSON_OBJECT()), ${pairs})`,
+    parameters: tables.map((table) => counts[table]),
+  };
 }
 
 /**
  * Every write a scheduled run makes to its own ledger row.
  *
- * Two rules run through all of it. The first is that the claim is an insert: a window
- * is won by being the replica whose `INSERT` the unique key accepted, not by holding a
- * lock. The second is that no statement after that changes anything unless the caller
- * still holds the token it was given - a run whose lease expired mid-work matches zero
- * rows and finishes nothing, rather than finalizing on top of whoever recovered it.
+ * Two rules run through all of it.
  *
- * The claim token alone carries that predicate. It is a fresh UUID per claim, so a
- * recovery replaces it and the previous holder's writes stop matching; there is no
- * need to thread an attempt number through as a second guard.
+ * The first is that the claim is an insert: a window is won by being the replica whose
+ * `INSERT` the unique key accepted, not by holding a lock.
  *
- * The caller owns the `EntityManager` because these writes share a transaction with
- * the deletions they account for.
+ * The second is that **none of these writes may share the caller's transaction**. The
+ * ledger is coordination state, not business data, and entangling it with the deletions
+ * it accounts for breaks the first rule: while the winner's transaction is open its
+ * unique-key lock is uncommitted, so a losing replica's insert does not get a duplicate
+ * key at all - it blocks, and fails with a lock-wait timeout after
+ * `innodb_lock_wait_timeout`. Losing an election would become a crash for every replica
+ * but one. That is measured rather than reasoned: two transactions inserting the same
+ * key give the second `ERROR 1205`, not `1062`.
+ *
+ * So each method takes the `DataSource` and runs on its own. The deletions commit per
+ * batch anyway, which is what lets a run be interrupted without being rolled back.
+ *
+ * The claim token carries the predicate on every later write. It is a fresh UUID per
+ * claim, so a recovery replaces it and the previous holder's writes stop matching.
  */
 @Injectable()
 export class ScheduledRunRepository {
+  private readonly logger = new Logger(ScheduledRunRepository.name);
+
   /**
    * Wins, recovers, or loses one window.
    *
-   * The order is deliberate. The insert is tried first because it is the common case
-   * and needs no read: on an untouched window exactly one replica succeeds and the
-   * rest learn they lost from the database rather than from a race they had to observe.
-   * Only after losing does this look at why, and there are three reasons - somebody is
-   * working on it, somebody finished it, or a previous attempt died and left a lease
-   * that has since expired. The third is the only one that yields a claim.
+   * The insert is tried first because it is the common case and needs no read: on an
+   * untouched window exactly one replica succeeds and the rest learn they lost from the
+   * database rather than from a race they had to observe. Only after losing does this
+   * look at why.
    */
   async claim(
-    manager: EntityManager,
+    dataSource: DataSource,
     input: {
       taskName: RetentionTaskName;
       scheduledFor: Date;
@@ -60,6 +113,7 @@ export class ScheduledRunRepository {
       maxAttempts: number;
     },
   ): Promise<ScheduledRunClaimResult> {
+    const manager = dataSource.manager;
     const id = randomUUID();
     const claimToken = randomUUID();
     try {
@@ -74,7 +128,7 @@ export class ScheduledRunRepository {
           input.scheduledFor,
           ScheduledRunStatus.Claimed,
           claimToken,
-          input.leaseMs * 1_000,
+          input.leaseMs * microsecondsPerMillisecond,
         ],
       );
       return {
@@ -88,7 +142,19 @@ export class ScheduledRunRepository {
         },
       };
     } catch (error) {
-      if (!isDuplicateKey(error)) throw error;
+      const code = errno(error);
+      if (code === lockWaitTimeoutErrno) {
+        // Somebody is inserting this window right now and has not committed. There is
+        // nothing to recover and nothing even to read: every statement touching the row
+        // would block on the same uncommitted lock and time out in turn - which is how
+        // the first version of this handler failed, catching 1205 on the insert and
+        // then raising it again from the recovery update. A window somebody is actively
+        // claiming is simply taken.
+        return { outcome: 'refused', reason: 'taken' };
+      }
+      // A duplicate key means the winner committed, so the row is readable and may well
+      // be an old one whose attempt died - which is what recovery is for.
+      if (code !== duplicateEntryErrno) throw error;
     }
     return this.recover(manager, { ...input, claimToken });
   }
@@ -96,10 +162,10 @@ export class ScheduledRunRepository {
   /**
    * Takes over a window whose previous attempt died, or says why it cannot.
    *
-   * `lock_expires_at <= NOW(6)` is part of the predicate rather than a check
-   * afterwards: a lease that is still live belongs to whoever holds it, and finding
-   * that out after starting to delete would be too late. `attempts < ?` is what stops
-   * a task that crashes every time from being retried on every tick forever.
+   * `lock_expires_at <= NOW(6)` is part of the predicate rather than a check afterwards:
+   * a lease that is still live belongs to whoever holds it, and finding that out after
+   * starting to delete would be too late. `attempts < ?` is what stops a task that
+   * crashes every time from being retried on every tick forever.
    */
   private async recover(
     manager: EntityManager,
@@ -124,7 +190,7 @@ export class ScheduledRunRepository {
          AND attempts < ?`,
       [
         input.claimToken,
-        input.leaseMs * 1_000,
+        input.leaseMs * microsecondsPerMillisecond,
         input.taskName,
         input.scheduledFor,
         ScheduledRunStatus.Claimed,
@@ -176,43 +242,77 @@ export class ScheduledRunRepository {
         input.maxAttempts,
       ],
     );
+    if ((abandoned.affectedRows ?? 0) > 0) {
+      this.logger.error({
+        event: 'retention_run_abandoned',
+        taskName: input.taskName,
+        scheduledFor: input.scheduledFor.toISOString(),
+        errorCode: retentionErrorCodes.runAbandoned,
+        attempts: input.maxAttempts,
+      });
+      return { outcome: 'refused', reason: 'exhausted' };
+    }
+
+    // Nothing was claimed and nothing was abandoned, so the window is either somebody
+    // else's right now or already finished. Which one matters: a window recorded FAILED
+    // is a task that will not run again until an operator acts, and reporting that as
+    // an ordinary "taken" would announce it once and then describe a dead task as
+    // healthy on every tick afterwards.
     return {
       outcome: 'refused',
-      reason: (abandoned.affectedRows ?? 0) > 0 ? 'exhausted' : 'taken',
+      reason: await this.refusalReason(manager, input),
     };
+  }
+
+  private async refusalReason(
+    manager: EntityManager,
+    key: { taskName: RetentionTaskName; scheduledFor: Date },
+  ): Promise<'taken' | 'exhausted'> {
+    const rows: Array<{ status: ScheduledRunStatus }> = await manager.query(
+      `SELECT status FROM scheduled_runs
+       WHERE task_name = ? AND scheduled_for = ?`,
+      [key.taskName, key.scheduledFor],
+    );
+    return rows[0]?.status === ScheduledRunStatus.Failed
+      ? 'exhausted'
+      : 'taken';
   }
 
   /**
    * Records a finished run and releases the window.
    *
    * `false` means the claim was gone - the lease expired while the run was working and
-   * another replica took it over. Nothing is written in that case, because the counts
-   * this run is reporting describe deletions the new owner is about to redo.
+   * another replica took it over. Nothing at all is written then, counts included: one
+   * rule, applied everywhere, beats an exception for the one write that looks harmless.
+   * The rows really were deleted though, so that number leaves through the log instead,
+   * which is the only place the ledger and reality can be reconciled afterwards.
    */
   async complete(
-    manager: EntityManager,
-    claim: { claimToken: string },
+    dataSource: DataSource,
+    claim: { claimToken: string; taskName: RetentionTaskName },
     deletedCounts: Record<string, number>,
   ): Promise<boolean> {
-    const result: { affectedRows?: number } = await manager.query(
+    const counts = accumulateCounts(deletedCounts);
+    const result: { affectedRows?: number } = await dataSource.manager.query(
       `UPDATE scheduled_runs
        SET status = ?,
            locked_by = NULL,
            lock_expires_at = NULL,
            finished_at = NOW(6),
-           deleted_counts = ?,
-           last_error_code = NULL
+           deleted_counts = ${counts.expression}
        WHERE locked_by = ?
          AND status = ?
          AND lock_expires_at > NOW(6)`,
       [
         ScheduledRunStatus.Succeeded,
-        JSON.stringify(deletedCounts),
+        ...counts.parameters,
         claim.claimToken,
         ScheduledRunStatus.Claimed,
       ],
     );
-    return (result.affectedRows ?? 0) > 0;
+    const applied = (result.affectedRows ?? 0) > 0;
+    if (!applied) this.warnClaimLost(claim, deletedCounts, 'complete');
+    return applied;
   }
 
   /**
@@ -221,24 +321,21 @@ export class ScheduledRunRepository {
    * A retryable failure with budget left hands the window back by expiring its own
    * lease, which makes the retry path and the crash-recovery path the same mechanism
    * rather than two that have to agree. Anything else is terminal and loud.
-   *
-   * The counts are recorded either way: a run that deleted three hundred rows and then
-   * failed deleted three hundred rows, and an operator reading the row needs to know
-   * that rather than infer it.
    */
   async fail(
-    manager: EntityManager,
-    claim: { claimToken: string; attempt: number },
+    dataSource: DataSource,
+    claim: { claimToken: string; attempt: number; taskName: RetentionTaskName },
     failure: ScheduledRunFailure,
     deletedCounts: Record<string, number>,
     maxAttempts: number,
   ): Promise<boolean> {
     const handBack = failure.retryable && claim.attempt < maxAttempts;
-    const result: { affectedRows?: number } = await manager.query(
+    const counts = accumulateCounts(deletedCounts);
+    const result: { affectedRows?: number } = await dataSource.manager.query(
       handBack
         ? `UPDATE scheduled_runs
            SET lock_expires_at = NOW(6),
-               deleted_counts = ?,
+               deleted_counts = ${counts.expression},
                last_error_code = ?
            WHERE locked_by = ?
              AND status = ?
@@ -248,26 +345,48 @@ export class ScheduledRunRepository {
                locked_by = NULL,
                lock_expires_at = NULL,
                finished_at = NOW(6),
-               deleted_counts = ?,
+               deleted_counts = ${counts.expression},
                last_error_code = ?
            WHERE locked_by = ?
              AND status = ?
              AND lock_expires_at > NOW(6)`,
       handBack
         ? [
-            JSON.stringify(deletedCounts),
+            ...counts.parameters,
             failure.errorCode,
             claim.claimToken,
             ScheduledRunStatus.Claimed,
           ]
         : [
             ScheduledRunStatus.Failed,
-            JSON.stringify(deletedCounts),
+            ...counts.parameters,
             failure.errorCode,
             claim.claimToken,
             ScheduledRunStatus.Claimed,
           ],
     );
-    return (result.affectedRows ?? 0) > 0;
+    const applied = (result.affectedRows ?? 0) > 0;
+    if (!applied) this.warnClaimLost(claim, deletedCounts, 'fail');
+    return applied;
+  }
+
+  /**
+   * A run finished work it is no longer entitled to record.
+   *
+   * Worth a line of its own: the rows it names really were deleted, and the ledger will
+   * not say so, so this log is the only place the two numbers can be reconciled.
+   */
+  private warnClaimLost(
+    claim: { claimToken: string; taskName: RetentionTaskName },
+    deletedCounts: Record<string, number>,
+    stage: 'complete' | 'fail',
+  ): void {
+    this.logger.warn({
+      event: 'retention_claim_lost',
+      taskName: claim.taskName,
+      stage,
+      errorCode: retentionErrorCodes.claimLost,
+      deletedCounts,
+    });
   }
 }

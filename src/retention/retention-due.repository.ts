@@ -2,9 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import type { RetentionWindowConfiguration } from '../config/retention.config';
 import type { RetentionDuePredicate } from './retention-due';
+import {
+  microsecondsPerMillisecond,
+  millisecondsPerHour,
+} from './retention.constants';
 import type { RetentionDueSample } from './retention.types';
-
-const microsecondsPerMillisecond = 1_000;
 
 /**
  * Reads what is due without touching it.
@@ -25,24 +27,42 @@ export class RetentionDueRepository {
     manager: EntityManager,
     predicate: RetentionDuePredicate,
     windows: RetentionWindowConfiguration,
+    statementTimeoutMs: number,
   ): Promise<RetentionDueSample> {
-    const rows: Array<{ due_count: number; oldest_age_us: string | number }> =
-      await manager.query(
-        `SELECT COUNT(*) AS due_count,
-                COALESCE(
-                  TIMESTAMPDIFF(MICROSECOND, MIN(${predicate.anchorColumn}), NOW(6)),
-                  0
-                ) AS oldest_age_us
-         FROM ${predicate.table}
-         WHERE ${predicate.where}`,
-        predicate.parameters(windows),
-      );
-    return {
-      dueCount: Number(rows[0].due_count),
-      oldestDueAgeMs: Math.floor(
+    // The bound `assertRetentionBounds` reasons about, actually applied. The lease is
+    // sized as nine bounded statements plus a margin, and until this was here that
+    // argument rested on a number no code enforced. Reset in `finally` for the same
+    // reason the export snapshot reader does it: the session outlives this query.
+    await manager.query('SET SESSION MAX_EXECUTION_TIME = ?', [
+      statementTimeoutMs,
+    ]);
+    try {
+      const rows: Array<{ due_count: number; oldest_age_us: string | number }> =
+        await manager.query(
+          `SELECT COUNT(*) AS due_count,
+                  COALESCE(
+                    TIMESTAMPDIFF(MICROSECOND, MIN(${predicate.anchorColumn}), NOW(6)),
+                    0
+                  ) AS oldest_age_us
+           FROM ${predicate.table}
+           WHERE ${predicate.where}`,
+          predicate.parameters(windows),
+        );
+      const ageMs = Math.floor(
         Number(rows[0].oldest_age_us) / microsecondsPerMillisecond,
-      ),
-    };
+      );
+      const windowMs = predicate.windowHours(windows) * millisecondsPerHour;
+      return {
+        dueCount: Number(rows[0].due_count),
+        // How long the oldest row has been *overdue*, not how old it is. A row that
+        // became due a minute ago reads as a minute, whatever its window - so a healthy
+        // task reads near zero and a task that stopped running reads as the time since
+        // it stopped, which is the comparison the operator is actually making.
+        oldestOverdueMs: Math.max(0, ageMs - windowMs),
+      };
+    } finally {
+      await manager.query('SET SESSION MAX_EXECUTION_TIME = DEFAULT');
+    }
   }
 
   /**

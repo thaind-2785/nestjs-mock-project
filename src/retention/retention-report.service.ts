@@ -47,12 +47,14 @@ export class RetentionReportService {
         dataSource.manager,
         predicate,
         this.configuration.windows,
+        this.configuration.run.statementTimeoutMs,
       );
       reports.push({
         taskName: predicate.taskName,
         table: predicate.table,
+        windowHours: predicate.windowHours(this.configuration.windows),
         dueCount: sample.dueCount,
-        oldestDueAgeMs: sample.oldestDueAgeMs,
+        oldestOverdueMs: sample.oldestOverdueMs,
       });
     }
     return reports;

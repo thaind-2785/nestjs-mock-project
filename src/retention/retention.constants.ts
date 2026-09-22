@@ -37,9 +37,16 @@ export const retentionErrorCodes = {
 export type RetentionErrorCode =
   (typeof retentionErrorCodes)[keyof typeof retentionErrorCodes];
 
-/** Longest `task_name` the column accepts, and the reason the list above is checked
- * against it in tests rather than trusted. */
+/** Longest `task_name` the column accepts. Asserted against the list above rather than
+ * trusted: a longer name would be refused at insert, and the window would never run. */
 export const maxTaskNameLength = 64;
 
-/** Longest stable error code the column accepts. */
+/** Longest stable error code the column accepts, asserted the same way. */
 export const maxErrorCodeLength = 64;
+
+/** MySQL's `INTERVAL ... MICROSECOND` is the finest unit that takes a bound parameter,
+ * so every millisecond bound is converted on its way into a statement. */
+export const microsecondsPerMillisecond = 1_000;
+
+/** Windows are configured in hours and read back as milliseconds. */
+export const millisecondsPerHour = 3_600_000;

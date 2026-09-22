@@ -13,9 +13,11 @@ import { RetentionReportService } from '../retention/retention-report.service';
  * due predicates get read against real data, which is the point of shipping the
  * deciding half of a destructive job before the acting half.
  *
- * The output is one line per task: how many rows are waiting, and how old the oldest
- * one is. Those two together are the reading - a large young backlog is a busy night,
- * a small old one is a task that is not running at all.
+ * The output is one line per task: how many rows are waiting, and how long the oldest
+ * one has been *overdue*. Those two together are the reading - a large backlog that is
+ * barely overdue is a busy night, a small one that is days overdue is a task that is not
+ * running at all. The window is printed beside them so the second number can be read
+ * against the boundary it is measured from.
  */
 async function main(): Promise<void> {
   const request = parseRetentionArguments(process.argv.slice(2));
@@ -30,7 +32,8 @@ async function main(): Promise<void> {
     for (const report of reports) {
       process.stdout.write(
         `retention:dry-run task=${report.taskName} table=${report.table} ` +
-          `due=${report.dueCount} oldestDueAgeMs=${report.oldestDueAgeMs}\n`,
+          `windowHours=${report.windowHours} due=${report.dueCount} ` +
+          `oldestOverdueMs=${report.oldestOverdueMs}\n`,
       );
     }
   } finally {

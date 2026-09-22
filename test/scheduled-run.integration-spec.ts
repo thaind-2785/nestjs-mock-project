@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import mysql from 'mysql2/promise';
 import { DataSource } from 'typeorm';
 import { createDatabaseConfiguration } from '../src/config/database.config';
@@ -6,14 +7,17 @@ import { loadRepositoryEnvironment } from '../src/config/environment-file';
 import { validateEnvironment } from '../src/config/environment.validation';
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { ScheduledRunStatus } from '../src/retention/entities/scheduled-run.enums';
-import { retentionErrorCodes } from '../src/retention/retention.constants';
+import {
+  retentionErrorCodes,
+  type RetentionTaskName,
+} from '../src/retention/retention.constants';
 import { localDayStart } from '../src/retention/retention-window';
 import { ScheduledRunRepository } from '../src/retention/scheduled-run.repository';
 import { applicationMigrations } from './fixtures/application-migrations';
 
 jest.setTimeout(60_000);
 
-const taskName = 'auth-sessions';
+const taskName: RetentionTaskName = 'auth-sessions';
 const leaseMs = 600_000;
 const maxAttempts = 3;
 
@@ -24,7 +28,11 @@ describe('Phase 7 run ledger and singleton claim', () => {
   let runs: ScheduledRunRepository;
   let window: Date;
 
-  beforeEach(async () => {
+  // Built once. Every test here works on one table, so rebuilding the whole migration
+  // stack per test bought nothing and cost eighteen runs of it; the rows go between
+  // tests instead. The schema test reapplies what it reverts, so it leaves the stack as
+  // it found it.
+  beforeAll(async () => {
     loadRepositoryEnvironment();
     const environment = validateEnvironment(process.env);
     disposableDatabase = `p7_t01_${process.pid}_${randomUUID().replaceAll('-', '')}`;
@@ -65,7 +73,11 @@ describe('Phase 7 run ledger and singleton claim', () => {
     window = localDayStart(await databaseNow(), environment.HOTEL_TIMEZONE);
   });
 
-  afterEach(async () => {
+  beforeEach(async () => {
+    await dataSource.query('DELETE FROM scheduled_runs');
+  });
+
+  afterAll(async () => {
     if (dataSource?.isInitialized) await dataSource.destroy();
     if (adminConnection && disposableDatabase) {
       try {
@@ -106,6 +118,22 @@ describe('Phase 7 run ledger and singleton claim', () => {
       ).rejects.toThrow();
     });
 
+    it('carries one index per question it answers, and no duplicate', async () => {
+      // The unique key is also the history index: same columns, same order. A second
+      // one would be maintained on every claim and read by nothing, and because the
+      // duplication was mirrored in the entity a schema check would not have seen it.
+      const rows: Array<{ INDEX_NAME: string }> = await dataSource.query(
+        `SELECT DISTINCT INDEX_NAME FROM information_schema.statistics
+         WHERE table_schema = ? AND table_name = 'scheduled_runs'`,
+        [disposableDatabase],
+      );
+      expect(rows.map((row) => row.INDEX_NAME).sort()).toEqual([
+        'PRIMARY',
+        'idx_scheduled_runs_recoverable',
+        'uq_scheduled_runs_window',
+      ]);
+    });
+
     it('refuses a finished row that still holds a lease', async () => {
       await expect(
         dataSource.query(
@@ -130,13 +158,13 @@ describe('Phase 7 run ledger and singleton claim', () => {
       // Both statements are in flight before either resolves, which is the shape two
       // replicas ticking at the same second produce. Nothing here serialises them.
       const [first, second] = await Promise.all([
-        runs.claim(dataSource.manager, {
+        runs.claim(dataSource, {
           taskName,
           scheduledFor: window,
           leaseMs,
           maxAttempts,
         }),
-        runs.claim(dataSource.manager, {
+        runs.claim(dataSource, {
           taskName,
           scheduledFor: window,
           leaseMs,
@@ -153,16 +181,52 @@ describe('Phase 7 run ledger and singleton claim', () => {
       expect(await countRuns()).toBe(1);
     });
 
+    it('refuses the loser rather than throwing, even while the winner is mid-transaction', async () => {
+      // The case the autocommit test above cannot reach. Inside a transaction the
+      // winner's unique-key lock is uncommitted, so the loser's insert does not get a
+      // duplicate key - it blocks, and MySQL raises `ERROR 1205` after
+      // `innodb_lock_wait_timeout`. Measured, not reasoned: two transactions inserting
+      // the same key give the second 1205, not 1062.
+      //
+      // The ledger therefore never runs inside a caller's transaction, and this proves
+      // that holding one somewhere else cannot turn an ordinary lost election into a
+      // crash.
+      await dataSource.query('SET SESSION innodb_lock_wait_timeout = 2');
+      const holder = dataSource.createQueryRunner();
+      await holder.connect();
+      await holder.startTransaction();
+      try {
+        await holder.query(
+          `INSERT INTO scheduled_runs
+             (id, task_name, scheduled_for, status, locked_by, lock_expires_at,
+              attempts, started_at)
+           VALUES (?, ?, ?, 'CLAIMED', ?, NOW(6) + INTERVAL 10 MINUTE, 1, NOW(6))`,
+          [randomUUID(), taskName, window, randomUUID()],
+        );
+
+        const loser = await runs.claim(dataSource, {
+          taskName,
+          scheduledFor: window,
+          leaseMs,
+          maxAttempts,
+        });
+        expect(loser.outcome === 'refused' && loser.reason).toBe('taken');
+      } finally {
+        await holder.rollbackTransaction();
+        await holder.release();
+      }
+    });
+
     it('lets a different task claim the same window', async () => {
       // The key is (task_name, scheduled_for), so the five tasks are independent: one
       // failing task must not hold up the other four.
-      const sessions = await runs.claim(dataSource.manager, {
+      const sessions = await runs.claim(dataSource, {
         taskName,
         scheduledFor: window,
         leaseMs,
         maxAttempts,
       });
-      const keys = await runs.claim(dataSource.manager, {
+      const keys = await runs.claim(dataSource, {
         taskName: 'idempotency-keys',
         scheduledFor: window,
         leaseMs,
@@ -175,11 +239,11 @@ describe('Phase 7 run ledger and singleton claim', () => {
 
     it('refuses a window that already succeeded', async () => {
       const claim = await claimOrThrow();
-      expect(
-        await runs.complete(dataSource.manager, claim, { auth_sessions: 4 }),
-      ).toBe(true);
+      expect(await runs.complete(dataSource, claim, { auth_sessions: 4 })).toBe(
+        true,
+      );
 
-      const again = await runs.claim(dataSource.manager, {
+      const again = await runs.claim(dataSource, {
         taskName,
         scheduledFor: window,
         leaseMs,
@@ -197,7 +261,7 @@ describe('Phase 7 run ledger and singleton claim', () => {
       const dead = await claimOrThrow();
       await expireLease();
 
-      const recovered = await runs.claim(dataSource.manager, {
+      const recovered = await runs.claim(dataSource, {
         taskName,
         scheduledFor: window,
         leaseMs,
@@ -220,13 +284,55 @@ describe('Phase 7 run ledger and singleton claim', () => {
       // The dead replica finishes its work and tries to record it. Its token no longer
       // matches, so it writes nothing at all - rather than marking a window succeeded
       // while another process is still deleting inside it.
-      expect(
-        await runs.complete(dataSource.manager, dead, { auth_sessions: 10 }),
-      ).toBe(false);
+      // The rows it names really were deleted and the ledger will not say so, so this
+      // line is the only place the two numbers can ever be reconciled.
+      const logged = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      expect(await runs.complete(dataSource, dead, { auth_sessions: 10 })).toBe(
+        false,
+      );
+      expect(logged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'retention_claim_lost',
+          stage: 'complete',
+          deletedCounts: { auth_sessions: 10 },
+        }),
+      );
+      logged.mockRestore();
       const row = await readRun();
       expect(row.status).toBe(ScheduledRunStatus.Claimed);
       expect(row.locked_by).toBe(recovered.claimToken);
       expect(row.deleted_counts).toBeNull();
+    });
+
+    it('keeps saying exhausted on every tick, not just the one that noticed', async () => {
+      await claimOrThrow();
+      for (let attempt = 1; attempt < maxAttempts; attempt += 1) {
+        await expireLease();
+        await claimOrThrow();
+      }
+      await expireLease();
+
+      const noticed = await runs.claim(dataSource, {
+        taskName,
+        scheduledFor: window,
+        leaseMs,
+        maxAttempts,
+      });
+      expect(noticed.outcome === 'refused' && noticed.reason).toBe('exhausted');
+
+      // Every tick afterwards asks the same question and must get the same answer. A
+      // scheduler that alerts on `exhausted` would otherwise announce a dead task once
+      // and then describe it as ordinary for the rest of the day - the silent failure
+      // the FAILED status exists to prevent.
+      for (let tick = 0; tick < 3; tick += 1) {
+        const again = await runs.claim(dataSource, {
+          taskName,
+          scheduledFor: window,
+          leaseMs,
+          maxAttempts,
+        });
+        expect(again.outcome === 'refused' && again.reason).toBe('exhausted');
+      }
     });
 
     it('refuses to finalize past its own lease even when nobody has taken over', async () => {
@@ -242,9 +348,9 @@ describe('Phase 7 run ledger and singleton claim', () => {
       // Past its lease a replica owns nothing, because another could have taken the
       // window over at any moment while it was working - and recording success would
       // hide that two processes had been deleting from the same tables at once.
-      expect(
-        await runs.complete(dataSource.manager, claim, { auth_sessions: 1 }),
-      ).toBe(false);
+      expect(await runs.complete(dataSource, claim, { auth_sessions: 1 })).toBe(
+        false,
+      );
       const row = await readRun();
       expect(row.status).toBe(ScheduledRunStatus.Claimed);
       expect(row.deleted_counts).toBeNull();
@@ -259,7 +365,7 @@ describe('Phase 7 run ledger and singleton claim', () => {
       // already stopped owning.
       expect(
         await runs.fail(
-          dataSource.manager,
+          dataSource,
           claim,
           { errorCode: retentionErrorCodes.taskFailed, retryable: false },
           {},
@@ -278,7 +384,9 @@ describe('Phase 7 run ledger and singleton claim', () => {
       // Third attempt is claimed and now dies too.
       await expireLease();
 
-      const refused = await runs.claim(dataSource.manager, {
+      // The loudest transition this module makes, and it used to make it silently.
+      const logged = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const refused = await runs.claim(dataSource, {
         taskName,
         scheduledFor: window,
         leaseMs,
@@ -287,6 +395,14 @@ describe('Phase 7 run ledger and singleton claim', () => {
       // Somebody has to write this down, because the process that died could not.
       // Left alone it would look like work in progress forever.
       expect(refused.outcome === 'refused' && refused.reason).toBe('exhausted');
+      expect(logged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'retention_run_abandoned',
+          taskName,
+          errorCode: retentionErrorCodes.runAbandoned,
+        }),
+      );
+      logged.mockRestore();
       const row = await readRun();
       expect(row.status).toBe(ScheduledRunStatus.Failed);
       expect(row.last_error_code).toBe(retentionErrorCodes.runAbandoned);
@@ -299,7 +415,7 @@ describe('Phase 7 run ledger and singleton claim', () => {
     it('records what a successful run deleted, per table', async () => {
       const claim = await claimOrThrow();
       expect(
-        await runs.complete(dataSource.manager, claim, {
+        await runs.complete(dataSource, claim, {
           auth_sessions: 120,
           idempotency_keys: 0,
         }),
@@ -319,7 +435,7 @@ describe('Phase 7 run ledger and singleton claim', () => {
       const claim = await claimOrThrow();
       expect(
         await runs.fail(
-          dataSource.manager,
+          dataSource,
           claim,
           { errorCode: retentionErrorCodes.taskFailed, retryable: true },
           { auth_sessions: 300 },
@@ -337,7 +453,7 @@ describe('Phase 7 run ledger and singleton claim', () => {
       // then failed deleted that work.
       expect(row.deleted_counts).toEqual({ auth_sessions: 300 });
 
-      const next = await runs.claim(dataSource.manager, {
+      const next = await runs.claim(dataSource, {
         taskName,
         scheduledFor: window,
         leaseMs,
@@ -347,11 +463,38 @@ describe('Phase 7 run ledger and singleton claim', () => {
       if (next.outcome === 'claimed') expect(next.claim.attempt).toBe(2);
     });
 
+    it('adds each attempt to the window total instead of replacing it', async () => {
+      const first = await claimOrThrow();
+      await runs.fail(
+        dataSource,
+        first,
+        { errorCode: retentionErrorCodes.statementTimeout, retryable: true },
+        { auth_sessions: 300 },
+        maxAttempts,
+      );
+
+      const second = await claimOrThrow();
+      expect(
+        await runs.complete(dataSource, second, { auth_sessions: 50 }),
+      ).toBe(true);
+
+      const row = await readRun();
+      // 350, not 50. The ledger is the only durable record that data was deleted, and
+      // an attempt that removed three hundred rows removed three hundred rows whether
+      // or not it was the attempt that finished.
+      expect(row.deleted_counts).toEqual({ auth_sessions: 350 });
+      // And the reason the window needed a second attempt survives its success, so one
+      // row still tells the whole story.
+      expect(row.status).toBe(ScheduledRunStatus.Succeeded);
+      expect(row.last_error_code).toBe(retentionErrorCodes.statementTimeout);
+      expect(row.attempts).toBe(2);
+    });
+
     it('closes the window when the failure is permanent, whatever the budget', async () => {
       const claim = await claimOrThrow();
       expect(
         await runs.fail(
-          dataSource.manager,
+          dataSource,
           claim,
           { errorCode: retentionErrorCodes.claimLost, retryable: false },
           {},
@@ -377,9 +520,10 @@ describe('Phase 7 run ledger and singleton claim', () => {
       const claim = {
         claimToken: String(last.locked_by),
         attempt: Number(last.attempts),
+        taskName,
       };
       await runs.fail(
-        dataSource.manager,
+        dataSource,
         claim,
         { errorCode: retentionErrorCodes.taskFailed, retryable: true },
         {},
@@ -394,7 +538,7 @@ describe('Phase 7 run ledger and singleton claim', () => {
   });
 
   async function claimOrThrow() {
-    const result = await runs.claim(dataSource.manager, {
+    const result = await runs.claim(dataSource, {
       taskName,
       scheduledFor: window,
       leaseMs,

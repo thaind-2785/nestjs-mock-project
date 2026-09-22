@@ -8,6 +8,8 @@ import {
   createRetentionConfiguration,
   type RetentionWindowConfiguration,
 } from '../src/config/retention.config';
+import { notificationEventTypes } from '../src/notifications/notification-event';
+import { roomExportEventTypes } from '../src/reports/room-export.constants';
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { OutboxEventStatus } from '../src/common/outbox/outbox.enums';
 import { ExportJobStatus } from '../src/reports/entities/export-job.enums';
@@ -19,6 +21,8 @@ import { RetentionDueRepository } from '../src/retention/retention-due.repositor
 import { applicationMigrations } from './fixtures/application-migrations';
 
 jest.setTimeout(90_000);
+
+const exportEventType = roomExportEventTypes[0];
 
 /**
  * Every predicate is `<= NOW(6)`, so the assertions below seed a row on each side of
@@ -40,9 +44,12 @@ describe('Phase 7 due work', () => {
   let dataSource: DataSource;
   let due: RetentionDueRepository;
   let windows: RetentionWindowConfiguration;
+  let statementTimeoutMs: number;
   let userId: string;
 
-  beforeEach(async () => {
+  // Built once, for the reason the sibling suite gives: ten rebuilds of the migration
+  // stack to read ten queries is nine rebuilds nobody asked for.
+  beforeAll(async () => {
     loadRepositoryEnvironment();
     const environment = validateEnvironment(process.env);
     disposableDatabase = `p7_t02_${process.pid}_${randomUUID().replaceAll('-', '')}`;
@@ -79,11 +86,24 @@ describe('Phase 7 due work', () => {
     await dataSource.initialize();
     await dataSource.runMigrations();
     due = new RetentionDueRepository();
-    windows = createRetentionConfiguration(environment).windows;
+    const retention = createRetentionConfiguration(environment);
+    windows = retention.windows;
+    statementTimeoutMs = retention.run.statementTimeoutMs;
     userId = await insertUser();
   });
 
-  afterEach(async () => {
+  beforeEach(async () => {
+    // Children before parents: `export_jobs` and `email_deliveries` both hold their
+    // outbox event with `ON DELETE RESTRICT`, and the two remaining tables hold the
+    // user this suite keeps for its whole life.
+    await dataSource.query('DELETE FROM export_jobs');
+    await dataSource.query('DELETE FROM outbox_events');
+    await dataSource.query('DELETE FROM storage_cleanup_tasks');
+    await dataSource.query('DELETE FROM idempotency_keys');
+    await dataSource.query('DELETE FROM auth_sessions');
+  });
+
+  afterAll(async () => {
     if (dataSource?.isInitialized) await dataSource.destroy();
     if (adminConnection && disposableDatabase) {
       try {
@@ -131,6 +151,23 @@ describe('Phase 7 due work', () => {
       expect((await sample('storage-tasks')).dueCount).toBe(1);
     });
 
+    it('counts only its own event family, never another owner rows', async () => {
+      // The outbox is shared. An export event belongs to `export-results`, which deletes
+      // it with the job an `ON DELETE RESTRICT` ties it to - so counting it here would
+      // report a row this task can never delete, in the one number the slice exists to
+      // produce. Worse, a job stuck `QUEUED` is never terminal, so its event would be
+      // reported as due forever.
+      const old = `NOW(6) - INTERVAL ${windows.notificationEventHours} HOUR - ${pastBoundary}`;
+      await insertOutboxEvent(OutboxEventStatus.Processed, old);
+      await insertOutboxEvent(
+        OutboxEventStatus.Processed,
+        old,
+        exportEventType,
+      );
+
+      expect((await sample('notification-events')).dueCount).toBe(1);
+    });
+
     it('collects processed outbox events and retains everything else', async () => {
       const old = `NOW(6) - INTERVAL ${windows.notificationEventHours} HOUR - ${pastBoundary}`;
       const young = `NOW(6) - INTERVAL ${windows.notificationEventHours} HOUR + ${shortOfBoundary}`;
@@ -161,15 +198,31 @@ describe('Phase 7 due work', () => {
   });
 
   describe('readings', () => {
-    it('reports the age of the oldest waiting row, not of the newest', async () => {
+    it('reports how long the oldest row has waited, not how old it is', async () => {
       await insertIdempotencyKey('NOW(6) - INTERVAL 10 DAY');
       await insertIdempotencyKey('NOW(6) - INTERVAL 1 HOUR');
 
       const reading = await sample('idempotency-keys');
       expect(reading.dueCount).toBe(2);
-      // A count that is large but young is a busy night; small but old is a task that
-      // is not running at all. The age is what tells them apart.
-      expect(reading.oldestDueAgeMs).toBeGreaterThan(9 * 24 * 60 * 60 * 1_000);
+      // A count that is large but barely overdue is a busy night; a small one that is
+      // days overdue is a task that is not running at all. This is the number that
+      // tells them apart.
+      expect(reading.oldestOverdueMs).toBeGreaterThan(9 * 24 * 60 * 60 * 1_000);
+    });
+
+    it('reads near zero on a healthy task, whatever the size of its window', async () => {
+      // The reading this replaces measured raw age, so a notification event that had
+      // been due for one second still reported thirty days - identical to a task that
+      // stopped running a month ago, which is exactly the distinction the operator is
+      // being asked to make.
+      await insertOutboxEvent(
+        OutboxEventStatus.Processed,
+        `NOW(6) - INTERVAL ${windows.notificationEventHours} HOUR - INTERVAL 2 SECOND`,
+      );
+
+      const reading = await sample('notification-events');
+      expect(reading.dueCount).toBe(1);
+      expect(reading.oldestOverdueMs).toBeLessThan(60_000);
     });
 
     it('measures an export backlog from when jobs became terminal, failures included', async () => {
@@ -184,13 +237,15 @@ describe('Phase 7 due work', () => {
 
       const reading = await sample('export-results');
       expect(reading.dueCount).toBe(2);
-      expect(reading.oldestDueAgeMs).toBeGreaterThan(59 * 24 * 60 * 60 * 1_000);
+      expect(reading.oldestOverdueMs).toBeGreaterThan(
+        (60 - 9) * 24 * 60 * 60 * 1_000,
+      );
     });
 
     it('reports zero age when nothing is due, rather than an age of never', async () => {
       const reading = await sample('idempotency-keys');
       expect(reading.dueCount).toBe(0);
-      expect(reading.oldestDueAgeMs).toBe(0);
+      expect(reading.oldestOverdueMs).toBe(0);
     });
   });
 
@@ -233,6 +288,7 @@ describe('Phase 7 due work', () => {
       dataSource.manager,
       retentionDuePredicate(taskName),
       windows,
+      statementTimeoutMs,
     );
   }
 
@@ -287,6 +343,7 @@ describe('Phase 7 due work', () => {
   async function insertOutboxEvent(
     status: OutboxEventStatus,
     availableAt: string,
+    eventType: string = notificationEventTypes[0],
   ): Promise<string> {
     const id = randomUUID();
     // Each status carries the lease and outcome columns its own check demands: a
@@ -302,9 +359,9 @@ describe('Phase 7 due work', () => {
       `INSERT INTO outbox_events
          (id, event_type, payload, available_at, status, idempotency_key,
           locked_at, lock_expires_at, locked_by, processed_at)
-       VALUES (?, 'booking.confirmed', '{}', ${availableAt}, ?, ?,
+       VALUES (?, ?, '{}', ${availableAt}, ?, ?,
                ${lease}, ${processedAt})`,
-      [id, status, randomUUID()],
+      [id, eventType, status, randomUUID()],
     );
     return id;
   }
@@ -316,6 +373,7 @@ describe('Phase 7 due work', () => {
     const eventId = await insertOutboxEvent(
       OutboxEventStatus.Processed,
       'NOW(6)',
+      exportEventType,
     );
     const terminal = status === ExportJobStatus.Completed;
     const failed = status === ExportJobStatus.Failed;

@@ -1,6 +1,7 @@
 import type { RetentionWindowConfiguration } from '../config/retention.config';
 import { ExportJobStatus } from '../reports/entities/export-job.enums';
 import { OutboxEventStatus } from '../common/outbox/outbox.enums';
+import { notificationEventTypes } from '../notifications/notification-event';
 import type { RetentionTaskName } from './retention.constants';
 
 /**
@@ -25,6 +26,16 @@ export interface RetentionDuePredicate {
   anchorColumn: string;
   where: string;
   parameters(windows: RetentionWindowConfiguration): unknown[];
+  /**
+   * How far behind the anchor the boundary sits, in hours.
+   *
+   * Reported separately so the backlog reading can be "how long has the oldest row been
+   * overdue" rather than "how old is it". Without it, a healthy `notification-events`
+   * always shows thirty days and looks identical to a task that stopped running a month
+   * ago - which is precisely the distinction an operator is being asked to make. Zero
+   * where the row carries its own boundary.
+   */
+  windowHours(windows: RetentionWindowConfiguration): number;
   /** The index this predicate is written against. `EXPLAIN` asserts it in the
    * integration suite, because an index chosen in a comment is a wish. */
   expectedIndex: string;
@@ -41,6 +52,7 @@ export const retentionDuePredicates: readonly RetentionDuePredicate[] = [
     // necessary and never earlier - and an expired session grants nothing either way.
     where: 'refresh_expires_at <= NOW(6) - INTERVAL ? HOUR',
     parameters: (windows) => [windows.sessionHours],
+    windowHours: (windows) => windows.sessionHours,
     expectedIndex: 'idx_auth_sessions_refresh_expires',
   },
   {
@@ -53,6 +65,7 @@ export const retentionDuePredicates: readonly RetentionDuePredicate[] = [
     // a value that is not in question.
     where: 'expires_at <= NOW(6)',
     parameters: () => [],
+    windowHours: () => 0,
     expectedIndex: 'idx_idempotency_keys_expires',
   },
   {
@@ -65,26 +78,38 @@ export const retentionDuePredicates: readonly RetentionDuePredicate[] = [
     where:
       'available_at <= NOW(6) AND (lock_expires_at IS NULL OR lock_expires_at <= NOW(6))',
     parameters: () => [],
+    windowHours: () => 0,
     expectedIndex: 'idx_storage_cleanup_tasks_claim',
   },
   {
     taskName: 'notification-events',
     table: 'outbox_events',
     anchorColumn: 'available_at',
-    // Anchored on `available_at` rather than `processed_at` because
-    // `idx_outbox_events_claim` leads on `(status, available_at)` and there is no index
+    // Scoped to the notification family. The outbox is shared, and an export event's
+    // row is owned by `export-results`, which deletes it together with the job that
+    // `ON DELETE RESTRICT` ties it to. Without this filter the count would include
+    // export events whose job is still `QUEUED` - rows that can never be deleted here,
+    // reported as due forever, in the one number this slice exists to produce.
+    //
+    // Anchored on `available_at` rather than `processed_at` because there is no index
     // on `processed_at` at all. For a processed event `available_at <= processed_at` -
     // the event became available, then was processed - so this window is never shorter
     // than the one specified.
     //
     // Only PROCESSED is collected. A FAILED or PENDING event is the evidence behind a
     // redrive somebody may still need, and Phase 5's redrive command depends on it.
-    where: 'status = ? AND available_at <= NOW(6) - INTERVAL ? HOUR',
+    where: `event_type IN (${notificationEventTypes.map(() => '?').join(', ')})
+            AND status = ?
+            AND available_at <= NOW(6) - INTERVAL ? HOUR`,
     parameters: (windows) => [
+      ...notificationEventTypes,
       OutboxEventStatus.Processed,
       windows.notificationEventHours,
     ],
-    expectedIndex: 'idx_outbox_events_claim',
+    // Leads on `event_type`, which is what makes a single-family sweep a range scan
+    // rather than a filter over every event the system has ever written.
+    windowHours: (windows) => windows.notificationEventHours,
+    expectedIndex: 'idx_outbox_events_claim_by_type',
   },
   {
     taskName: 'export-results',
@@ -104,6 +129,7 @@ export const retentionDuePredicates: readonly RetentionDuePredicate[] = [
       ExportJobStatus.Failed,
       windows.exportTerminalHours,
     ],
+    windowHours: (windows) => windows.exportTerminalHours,
     expectedIndex: 'idx_export_jobs_operations',
   },
 ];

@@ -43,20 +43,24 @@ export class CreateScheduledRunSchema1790020800000 implements MigrationInterface
         UNIQUE KEY uq_scheduled_runs_window (task_name, scheduled_for),
         -- Recoverable-run scan: claimed rows whose lease has passed.
         KEY idx_scheduled_runs_recoverable (status, lock_expires_at),
-        -- "What happened last night", for one task.
-        KEY idx_scheduled_runs_history (task_name, scheduled_for),
+        -- "What happened last night" needs no index of its own: the unique key above
+        -- is (task_name, scheduled_for) and serves that lookup exactly. A second index
+        -- on the same columns in the same order would be written on every insert and
+        -- read by nothing.
         -- Either both lock columns are set or neither is. A lease without an owner
         -- cannot be reasoned about, and an owner without a lease never expires.
         CONSTRAINT chk_scheduled_runs_lock_shape CHECK (
           (locked_by IS NULL AND lock_expires_at IS NULL)
           OR (locked_by IS NOT NULL AND lock_expires_at IS NOT NULL)
         ),
-        -- A claimed row may carry last_error_code: it belongs to the previous attempt,
-        -- kept for the same reason a pending outbox event keeps one.
+        -- last_error_code is the last error this window saw, not a claim that this run
+        -- failed. A window that timed out on its first attempt and succeeded on its
+        -- second keeps the code, so one row tells the whole story; clearing it on
+        -- success would leave the attempt count saying a retry happened, and nothing
         CONSTRAINT chk_scheduled_runs_state_shape CHECK (
           (status = 'CLAIMED' AND locked_by IS NOT NULL AND finished_at IS NULL)
           OR
-          (status = 'SUCCEEDED' AND locked_by IS NULL AND finished_at IS NOT NULL AND last_error_code IS NULL)
+          (status = 'SUCCEEDED' AND locked_by IS NULL AND finished_at IS NOT NULL)
           OR
           (status = 'FAILED' AND locked_by IS NULL AND finished_at IS NOT NULL AND last_error_code IS NOT NULL)
         ),

@@ -483,6 +483,17 @@ describe('Phase 7 run ledger and singleton claim', () => {
       // an attempt that removed three hundred rows removed three hundred rows whether
       // or not it was the attempt that finished.
       expect(row.deleted_counts).toEqual({ auth_sessions: 350 });
+      // Stored as an integer, not a double. MySQL's JSON arithmetic yields a DOUBLE, so
+      // without a cast the ledger reads `350.0` - which JavaScript compares equal to
+      // 350, so the assertion above cannot see it.
+      // `stored` would be a syntax error: MySQL 8 reserves it for generated columns.
+      const [{ count_type }]: Array<{ count_type: string }> =
+        await dataSource.query(
+          `SELECT JSON_TYPE(JSON_EXTRACT(deleted_counts, '$.auth_sessions')) AS count_type
+           FROM scheduled_runs WHERE task_name = ? AND scheduled_for = ?`,
+          [taskName, window],
+        );
+      expect(count_type).toBe('INTEGER');
       // And the reason the window needed a second attempt survives its success, so one
       // row still tells the whole story.
       expect(row.status).toBe(ScheduledRunStatus.Succeeded);

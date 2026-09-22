@@ -57,10 +57,13 @@ function accumulateCounts(counts: Record<string, number>): {
       throw new Error(`Unusable deleted_counts key: ${table}`);
     }
   }
+  // `CAST(... AS SIGNED)` because MySQL's JSON arithmetic yields a DOUBLE, so the sum
+  // would be stored as `1.0`. A row count is a whole number, and the ledger is what an
+  // operator reads to find out how much was deleted.
   const pairs = tables
     .map(
       (table) =>
-        `'$.${table}', COALESCE(JSON_EXTRACT(deleted_counts, '$.${table}'), 0) + ?`,
+        `'$.${table}', CAST(COALESCE(JSON_EXTRACT(deleted_counts, '$.${table}'), 0) + ? AS SIGNED)`,
     )
     .join(', ');
   return {

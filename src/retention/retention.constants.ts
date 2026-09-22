@@ -32,6 +32,10 @@ export const retentionErrorCodes = {
    * process died and nobody may pick the window up again. Recorded by whichever
    * replica noticed, because the run that died could not record anything. */
   runAbandoned: 'RETENTION_RUN_ABANDONED',
+  /** The run stopped with work still waiting: its budget ran out, or a provider refused
+   * rows it would otherwise have taken. Retryable, and the window is handed back. */
+  budgetSpent: 'RETENTION_BUDGET_SPENT',
+  storageIncomplete: 'RETENTION_STORAGE_INCOMPLETE',
 } as const;
 
 export type RetentionErrorCode =
@@ -50,3 +54,24 @@ export const microsecondsPerMillisecond = 1_000;
 
 /** Windows are configured in hours and read back as milliseconds. */
 export const millisecondsPerHour = 3_600_000;
+
+/**
+ * The largest batch anything may ask for.
+ *
+ * Here rather than in the configuration because two readers need it: the bound that
+ * validates the configured default, and the parser that validates an operator override.
+ * It was declared in both, with the parser's comment claiming to match a value nothing
+ * checked.
+ */
+export const maxBatchSize = 1_000;
+
+/**
+ * Provider calls per storage-drain batch.
+ *
+ * Deliberately not `batchSize`. That number means "rows one statement may delete", and
+ * the bounds are validated on that reading; `StorageCleanupService` uses its argument as
+ * a loop counter over sequential object deletes, for which Phase 3 chose 25. Handing it
+ * 500 turns one batch into 500 serialized provider calls, which is the concrete way a
+ * batch outlives the lease it is supposed to fit inside.
+ */
+export const storageDrainBatchSize = 25;

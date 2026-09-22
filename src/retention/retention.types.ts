@@ -39,13 +39,23 @@ export interface RetentionBatchOutcome {
 /** What a whole run did to one window. */
 export interface RetentionRunOutcome {
   taskName: RetentionTaskName;
-  outcome: 'completed' | 'refused' | 'failed';
+  /**
+   * `incomplete` is its own outcome, not a flavour of success.
+   *
+   * A run that spent its budget or was refused rows by a provider did real work and did
+   * not finish. Recording it as completed would clear the lease, and the window key
+   * would then refuse every further claim that day - so the remainder would not be due
+   * tomorrow, it would be due forever.
+   */
+  outcome: 'completed' | 'incomplete' | 'refused' | 'failed';
   /** Why, when the window was not this replica's to run. */
   reason?: 'taken' | 'exhausted';
   counts: Record<string, number>;
   batches: number;
   /** True when the budget stopped the run with work still waiting. */
   budgetSpent: boolean;
+  /** Rows a provider refused. Nonzero means the window was handed back. */
+  retryableFailures?: number;
   errorCode?: string;
 }
 

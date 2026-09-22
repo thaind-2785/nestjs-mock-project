@@ -25,6 +25,8 @@ export interface RetentionDuePredicate {
    * night from a task that is not running at all. */
   anchorColumn: string;
   where: string;
+  /** Tie-breaker for a bounded delete's ordering, so a batch is the same prefix twice. */
+  identityColumn: string;
   parameters(windows: RetentionWindowConfiguration): unknown[];
   /**
    * How far behind the anchor the boundary sits, in hours.
@@ -52,6 +54,7 @@ export const retentionDuePredicates: readonly RetentionDuePredicate[] = [
     // necessary and never earlier - and an expired session grants nothing either way.
     where: 'refresh_expires_at <= NOW(6) - INTERVAL ? HOUR',
     parameters: (windows) => [windows.sessionHours],
+    identityColumn: 'id',
     windowHours: (windows) => windows.sessionHours,
     expectedIndex: 'idx_auth_sessions_refresh_expires',
   },
@@ -65,6 +68,7 @@ export const retentionDuePredicates: readonly RetentionDuePredicate[] = [
     // a value that is not in question.
     where: 'expires_at <= NOW(6)',
     parameters: () => [],
+    identityColumn: 'id',
     windowHours: () => 0,
     expectedIndex: 'idx_idempotency_keys_expires',
   },
@@ -78,6 +82,7 @@ export const retentionDuePredicates: readonly RetentionDuePredicate[] = [
     where:
       'available_at <= NOW(6) AND (lock_expires_at IS NULL OR lock_expires_at <= NOW(6))',
     parameters: () => [],
+    identityColumn: 'id',
     windowHours: () => 0,
     expectedIndex: 'idx_storage_cleanup_tasks_claim',
   },
@@ -108,6 +113,7 @@ export const retentionDuePredicates: readonly RetentionDuePredicate[] = [
     ],
     // Leads on `event_type`, which is what makes a single-family sweep a range scan
     // rather than a filter over every event the system has ever written.
+    identityColumn: 'id',
     windowHours: (windows) => windows.notificationEventHours,
     expectedIndex: 'idx_outbox_events_claim_by_type',
   },
@@ -129,6 +135,7 @@ export const retentionDuePredicates: readonly RetentionDuePredicate[] = [
       ExportJobStatus.Failed,
       windows.exportTerminalHours,
     ],
+    identityColumn: 'id',
     windowHours: (windows) => windows.exportTerminalHours,
     expectedIndex: 'idx_export_jobs_operations',
   },

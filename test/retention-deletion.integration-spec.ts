@@ -19,6 +19,11 @@ import { notificationEventTypes } from '../src/notifications/notification-event'
 import { roomExportEventTypes } from '../src/reports/room-export.constants';
 import { RetentionDeleteRepository } from '../src/retention/retention-delete.repository';
 import { RetentionTasksService } from '../src/retention/retention-tasks.service';
+import { RoomExportStorageService } from '../src/reports/room-export-storage.service';
+import { NestFactory } from '@nestjs/core';
+import { RetentionOperationsModule } from '../src/retention/retention-operations.module';
+import { RetentionReportService } from '../src/retention/retention-report.service';
+import { retentionDuePredicates } from '../src/retention/retention-due';
 import { retentionConfig } from '../src/config/retention.config';
 import { reportsConfig } from '../src/config/reports.config';
 import { applicationMigrations } from './fixtures/application-migrations';
@@ -26,6 +31,16 @@ import { applicationMigrations } from './fixtures/application-migrations';
 jest.setTimeout(90_000);
 
 const exportEventType = roomExportEventTypes[0];
+
+/** A deadline these cases never reach: the budget is `RetentionRunService`'s concern,
+ * and every assertion here is about order and what survives. */
+const farFuture = Number.MAX_SAFE_INTEGER;
+
+/** The key builder Phase 6 publishes with, used here only to pin its shape. */
+const storageKeys = new RoomExportStorageService(
+  {} as never,
+  { storage: { timeoutMs: 1_000 }, result: { presignTtlSeconds: 1 } } as never,
+);
 
 /**
  * The slice where a mistake is not recoverable, so the assertions are mostly about what
@@ -154,6 +169,7 @@ describe('Phase 7 deletions', () => {
         dataSource,
         'notification-events',
         10,
+        farFuture,
       );
 
       expect(outcome.counts).toEqual({
@@ -179,6 +195,7 @@ describe('Phase 7 deletions', () => {
         dataSource,
         'notification-events',
         10,
+        farFuture,
       );
 
       expect(outcome.counts).toEqual({});
@@ -198,6 +215,7 @@ describe('Phase 7 deletions', () => {
         dataSource,
         'notification-events',
         10,
+        farFuture,
       );
 
       // An export job stuck `QUEUED` is never terminal, so `export-results` will not
@@ -212,11 +230,21 @@ describe('Phase 7 deletions', () => {
         await insertDueNotificationEvent();
       }
 
-      const first = await tasks.runBatch(dataSource, 'notification-events', 2);
+      const first = await tasks.runBatch(
+        dataSource,
+        'notification-events',
+        2,
+        farFuture,
+      );
       expect(first.counts.outbox_events).toBe(2);
       expect(first.moreWaiting).toBe(true);
 
-      const second = await tasks.runBatch(dataSource, 'notification-events', 2);
+      const second = await tasks.runBatch(
+        dataSource,
+        'notification-events',
+        2,
+        farFuture,
+      );
       expect(second.counts.outbox_events).toBe(1);
       expect(second.moreWaiting).toBe(false);
     });
@@ -226,7 +254,12 @@ describe('Phase 7 deletions', () => {
     it('removes the object before the rows that name it', async () => {
       const jobId = await insertTerminalExportJob('exports/rooms/a.xlsx');
 
-      const outcome = await tasks.runBatch(dataSource, 'export-results', 10);
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'export-results',
+        10,
+        farFuture,
+      );
 
       expect(storage.deleteObject).toHaveBeenCalledWith(
         expect.objectContaining({ objectKey: 'exports/rooms/a.xlsx' }),
@@ -245,7 +278,12 @@ describe('Phase 7 deletions', () => {
       await insertTerminalExportJob('exports/rooms/b.xlsx');
       storage.deleteObject.mockRejectedValue(new Error('provider down'));
 
-      const outcome = await tasks.runBatch(dataSource, 'export-results', 10);
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'export-results',
+        10,
+        farFuture,
+      );
 
       // Rows deleted with the object intact would leave a file nothing can ever name
       // again. The row is the only thing that knows the key.
@@ -255,24 +293,39 @@ describe('Phase 7 deletions', () => {
       expect(await count('outbox_events')).toBe(1);
     });
 
-    it('never deletes an object another job still points at', async () => {
-      // Phase 6 lets a losing attempt stage an object under a key a winner may also
-      // have published. Removing it would break a download that is entitled to work.
-      const shared = 'exports/rooms/shared.xlsx';
-      await insertTerminalExportJob(shared);
-      await insertExportJob(
-        ExportJobStatus.Completed,
-        'NOW(6)',
-        undefined,
-        shared,
+    it('gives each job its own key, which is why no sharing guard is needed', () => {
+      // The removed guard asked whether another job pointed at the same object, and
+      // could only ever answer no: the key carries the job's own UUID, and
+      // `uq_export_jobs_outbox_event` gives one job per event. It cost a round trip per
+      // job inside the batch whose duration the lease depends on - and if the premise
+      // had ever been true it was wrong anyway, because two sharers in one batch would
+      // each have seen the other, both been removed, and the object stranded.
+      //
+      // This is the invariant that replaces it. If the key scheme ever stops carrying
+      // the job id, this fails and the question becomes real again.
+      const token = randomUUID();
+      const first = storageKeys.stagingObjectKey(randomUUID(), token);
+      const second = storageKeys.stagingObjectKey(randomUUID(), token);
+      expect(first).not.toBe(second);
+    });
+
+    it('deletes each job object exactly once across a batch', async () => {
+      await insertTerminalExportJob('exports/rooms/one.xlsx');
+      await insertTerminalExportJob('exports/rooms/two.xlsx');
+
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'export-results',
+        10,
+        farFuture,
       );
 
-      const outcome = await tasks.runBatch(dataSource, 'export-results', 10);
-
-      expect(storage.deleteObject).not.toHaveBeenCalled();
-      expect(outcome.counts.export_jobs).toBe(1);
-      // The live job and its event survive; only the aged one goes.
-      expect(await count('export_jobs')).toBe(1);
+      expect(storage.deleteObject).toHaveBeenCalledTimes(2);
+      expect(outcome.counts).toEqual({
+        export_objects: 2,
+        export_jobs: 2,
+        outbox_events: 2,
+      });
     });
 
     it('collects a failed job, which never had an object at all', async () => {
@@ -281,7 +334,12 @@ describe('Phase 7 deletions', () => {
         oldEnough(windows.exportTerminalHours),
       );
 
-      const outcome = await tasks.runBatch(dataSource, 'export-results', 10);
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'export-results',
+        10,
+        farFuture,
+      );
 
       expect(storage.deleteObject).not.toHaveBeenCalled();
       expect(outcome.counts).toEqual({ export_jobs: 1, outbox_events: 1 });
@@ -299,10 +357,41 @@ describe('Phase 7 deletions', () => {
         oldEnough(windows.exportTerminalHours),
       );
 
-      const outcome = await tasks.runBatch(dataSource, 'export-results', 10);
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'export-results',
+        10,
+        farFuture,
+      );
 
       expect(outcome.counts).toEqual({});
       expect(await count('export_jobs')).toBe(2);
+    });
+  });
+
+  describe('wiring', () => {
+    it('boots the real module and reaches the database through it', async () => {
+      // The check that would have caught both wiring defects in this slice. Importing
+      // `FilesModule` whole gave `EntityMetadataNotFoundError` on `Attachment#uploader`;
+      // registering the deleted tables gave it on `AuthSession#user`. Both started
+      // cleanly and failed at the first query, so nothing short of resolving the graph
+      // and running something could see them - which is why the only witness until now
+      // was running the CLI by hand.
+      const previousDatabase = process.env.MYSQL_DATABASE;
+      process.env.MYSQL_DATABASE = disposableDatabase;
+      let wired: INestApplicationContext | undefined;
+      try {
+        wired = await NestFactory.createApplicationContext(
+          RetentionOperationsModule,
+          { logger: false },
+        );
+        const reports = await wired.get(RetentionReportService).report();
+        expect(reports).toHaveLength(retentionDuePredicates.length);
+      } finally {
+        if (wired) await wired.close();
+        if (previousDatabase === undefined) delete process.env.MYSQL_DATABASE;
+        else process.env.MYSQL_DATABASE = previousDatabase;
+      }
     });
   });
 
@@ -311,7 +400,12 @@ describe('Phase 7 deletions', () => {
       await insertSession(oldEnough(windows.sessionHours));
       await insertSession('NOW(6) + INTERVAL 30 DAY');
 
-      const outcome = await tasks.runBatch(dataSource, 'auth-sessions', 10);
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'auth-sessions',
+        10,
+        farFuture,
+      );
 
       expect(outcome.counts).toEqual({ auth_sessions: 1 });
       expect(await count('auth_sessions')).toBe(1);
@@ -321,7 +415,12 @@ describe('Phase 7 deletions', () => {
       await insertIdempotencyKey('NOW(6) - INTERVAL 1 MICROSECOND');
       await insertIdempotencyKey('NOW(6) + INTERVAL 1 HOUR');
 
-      const outcome = await tasks.runBatch(dataSource, 'idempotency-keys', 10);
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'idempotency-keys',
+        10,
+        farFuture,
+      );
 
       expect(outcome.counts).toEqual({ idempotency_keys: 1 });
       expect(await count('idempotency_keys')).toBe(1);

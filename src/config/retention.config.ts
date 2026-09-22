@@ -4,6 +4,7 @@ import {
   validateEnvironment,
 } from './environment.validation';
 import { roomExportResultTtlHours } from './reports.config';
+import { maxBatchSize } from '../retention/retention.constants';
 
 /*
  * The bounds below are code, not configuration, for the reason `reports.config.ts`
@@ -35,16 +36,6 @@ const minimumWindowMs = 23 * 60 * 60 * 1_000;
 
 /** Rows per statement. Bounded so one pass cannot become a table-long lock. */
 const batchSize = 500;
-
-/**
- * The ceiling `batchSize` is allowed to reach.
- *
- * It exists so the bound is checkable rather than asserted about itself: a thousand
- * rows is what a single indexed delete finishes well inside `statementTimeoutMs` on
- * the shapes this schema produces, and raising it is a decision that wants the
- * measurement redone.
- */
-const maxBatchSize = 1_000;
 
 /** Matches the export snapshot's bound; a retention statement is no more entitled to
  * run unboundedly than a read is. */

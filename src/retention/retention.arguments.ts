@@ -1,4 +1,5 @@
 import {
+  maxBatchSize,
   retentionTaskNames,
   type RetentionTaskName,
 } from './retention.constants';
@@ -12,8 +13,9 @@ export interface RetentionCommandRequest {
   batchSize?: number;
 }
 
-/** The largest batch the command will accept, matching the configured ceiling. */
-const maxBatchSize = 1_000;
+/** Decimal only. `Number('0x1f5')` is 501 and `Number('5e2')` is 500, both integers, so
+ * a parser whose stated purpose is refusing what it was not asked would accept both. */
+const decimalInteger = /^[0-9]+$/;
 
 /**
  * Parses `ops:retention` arguments, strictly.
@@ -22,13 +24,18 @@ const maxBatchSize = 1_000;
  * asked. A misspelled task name that silently ran all five would be worse here than it
  * was in `P7-T02`: this build deletes.
  *
- * `--dry-run` is no longer required, because the other mode now does something. It is
- * still the mode to reach for first.
+ * Exactly one mode has to be named. `--dry-run` reports; `--delete` deletes. The bare
+ * form is refused rather than defaulting to either, because this build removes rows from
+ * five tables and the safe default for something that cannot be undone is no default.
+ * `P7-T02` also trained everyone that the bare form is refused, and leaving it refused
+ * for a different reason is better than pointing that muscle memory at the irreversible
+ * mode.
  */
 export function parseRetentionArguments(
   argumentsList: string[],
 ): RetentionCommandRequest {
   let dryRun = false;
+  let deleting = false;
   let taskName: RetentionTaskName | undefined;
   let batchSize: number | undefined;
 
@@ -36,6 +43,10 @@ export function parseRetentionArguments(
     const flag = argumentsList[index];
     if (flag === '--dry-run') {
       dryRun = true;
+      continue;
+    }
+    if (flag === '--delete') {
+      deleting = true;
       continue;
     }
     if (flag === '--task') {
@@ -50,12 +61,13 @@ export function parseRetentionArguments(
       continue;
     }
     if (flag === '--batch-size') {
-      const value = Number(argumentsList[index + 1]);
+      const raw = argumentsList[index + 1];
+      const value = Number(raw);
       if (
-        !Number.isInteger(value) ||
+        raw === undefined ||
+        !decimalInteger.test(raw) ||
         value < 1 ||
-        value > maxBatchSize ||
-        argumentsList[index + 1] === undefined
+        value > maxBatchSize
       ) {
         throw new Error(
           `INVALID_CLI_ARGUMENTS: --batch-size must be an integer between 1 and ${maxBatchSize}`,
@@ -68,6 +80,11 @@ export function parseRetentionArguments(
     throw new Error(`INVALID_CLI_ARGUMENTS: unexpected argument ${flag}`);
   }
 
+  if (dryRun === deleting) {
+    throw new Error(
+      'INVALID_CLI_ARGUMENTS: name exactly one of --dry-run or --delete',
+    );
+  }
   if (dryRun && batchSize !== undefined) {
     // A batch bounds a deletion, and a dry run deletes nothing. Accepting the pair
     // would let an operator believe the reported numbers were limited by it.

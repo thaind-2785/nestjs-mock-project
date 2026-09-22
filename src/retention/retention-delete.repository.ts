@@ -29,14 +29,18 @@ import type {
 @Injectable()
 export class RetentionDeleteRepository {
   /**
-   * Applies the declared statement bound for the caller's session.
+   * Applies the declared statement bound for one read, and resets it afterwards.
    *
-   * Reads only: MySQL's `MAX_EXECUTION_TIME` does not bound a `DELETE`. What bounds the
-   * deletes is the batch size and the index behind the predicate, and what bounds the
-   * run as a whole is its budget. Stated here because the distinction is easy to assume
-   * away, and the lease argument rests on the budget rather than on this.
+   * Reads only, because `MAX_EXECUTION_TIME` bounds nothing else: MySQL ignores it for a
+   * `DELETE`, which is bounded by its `LIMIT` and the index behind its predicate
+   * instead. The two claim reads below are exactly what it does bound, so they are
+   * exactly where it is applied - an earlier version of this file wrote the helper and
+   * called it from nowhere, which left `RETENTION_STATEMENT_TIMEOUT` unreachable and a
+   * configured bound enforcing nothing.
+   *
+   * The reset is in `finally` because the session outlives this query.
    */
-  async withStatementBound<T>(
+  private async withStatementBound<T>(
     manager: EntityManager,
     statementTimeoutMs: number,
     work: () => Promise<T>,
@@ -51,7 +55,14 @@ export class RetentionDeleteRepository {
     }
   }
 
-  /** A single-table purge: the whole task for the three that have no dependents. */
+  /**
+   * A single-table purge: the whole task for the three that have no dependents.
+   *
+   * Ordered as well as limited. `DELETE ... LIMIT` without `ORDER BY` takes whichever
+   * rows the access path reaches first, which for a range scan is usually the oldest but
+   * is not promised - and under a permanently full window the oldest could survive while
+   * newer rows are collected, invisible in the ledger because the counts look the same.
+   */
   async deleteBatch(
     manager: EntityManager,
     predicate: RetentionDuePredicate,
@@ -61,6 +72,7 @@ export class RetentionDeleteRepository {
     const result: { affectedRows?: number } = await manager.query(
       `DELETE FROM ${predicate.table}
        WHERE ${predicate.where}
+       ORDER BY ${predicate.anchorColumn}, ${predicate.identityColumn}
        LIMIT ?`,
       [...predicate.parameters(windows), batchSize],
     );
@@ -73,13 +85,19 @@ export class RetentionDeleteRepository {
     predicate: RetentionDuePredicate,
     windows: RetentionWindowConfiguration,
     batchSize: number,
+    statementTimeoutMs: number,
   ): Promise<RetentionEventBatch> {
-    const rows: Array<{ id: string }> = await manager.query(
-      `SELECT id FROM ${predicate.table}
-       WHERE ${predicate.where}
-       ORDER BY ${predicate.anchorColumn}, id
-       LIMIT ?`,
-      [...predicate.parameters(windows), batchSize],
+    const rows: Array<{ id: string }> = await this.withStatementBound(
+      manager,
+      statementTimeoutMs,
+      () =>
+        manager.query(
+          `SELECT id FROM ${predicate.table}
+           WHERE ${predicate.where}
+           ORDER BY ${predicate.anchorColumn}, id
+           LIMIT ?`,
+          [...predicate.parameters(windows), batchSize],
+        ),
     );
     return { eventIds: rows.map((row) => row.id) };
   }
@@ -89,17 +107,20 @@ export class RetentionDeleteRepository {
     predicate: RetentionDuePredicate,
     windows: RetentionWindowConfiguration,
     batchSize: number,
+    statementTimeoutMs: number,
   ): Promise<RetentionExportBatch> {
     const rows: Array<{
       id: string;
       object_key: string | null;
       outbox_event_id: string;
-    }> = await manager.query(
-      `SELECT id, object_key, outbox_event_id FROM ${predicate.table}
-       WHERE ${predicate.where}
-       ORDER BY ${predicate.anchorColumn}, id
-       LIMIT ?`,
-      [...predicate.parameters(windows), batchSize],
+    }> = await this.withStatementBound(manager, statementTimeoutMs, () =>
+      manager.query(
+        `SELECT id, object_key, outbox_event_id FROM ${predicate.table}
+         WHERE ${predicate.where}
+         ORDER BY ${predicate.anchorColumn}, id
+         LIMIT ?`,
+        [...predicate.parameters(windows), batchSize],
+      ),
     );
     return {
       jobs: rows.map((row) => ({
@@ -152,26 +173,6 @@ export class RetentionDeleteRepository {
       jobIds,
     );
     return result.affectedRows ?? 0;
-  }
-
-  /**
-   * Whether an object is still referenced by a job this run is not deleting.
-   *
-   * Phase 6 lets a failed attempt leave a staging object behind under its own cleanup
-   * safeguard, and the published key of a completed job is the one thing that must not
-   * be removed while the job row still points at it. This asks the question directly
-   * rather than assuming the batch is the whole story.
-   */
-  async countJobsPointingAt(
-    manager: EntityManager,
-    objectKey: string,
-    excludingJobId: string,
-  ): Promise<number> {
-    const rows: Array<{ total: number }> = await manager.query(
-      'SELECT COUNT(*) AS total FROM export_jobs WHERE object_key = ? AND id <> ?',
-      [objectKey, excludingJobId],
-    );
-    return Number(rows[0].total);
   }
 
   private async deleteByEventIds(

@@ -9,9 +9,9 @@ import { RetentionRunService } from '../retention/retention-run.service';
  *
  * Usage:
  *   `npm run ops:retention -- --dry-run [--task <name>]`
- *   `npm run ops:retention -- [--task <name>] [--batch-size <n>]`
+ *   `npm run ops:retention -- --delete [--task <name>] [--batch-size <n>]`
  *
- * The dry run reports and touches nothing; without it the command deletes. Both claim
+ * One of the two modes has to be named; the bare form is refused. Both claim
  * nothing the scheduler would not: a real run takes today's window through the same
  * ledger election, so running it twice in a day is refused rather than repeated, and
  * `P7-T04` will find the window already done.
@@ -48,18 +48,24 @@ async function main(): Promise<void> {
 
     let failed = false;
     for (const outcome of outcomes) {
-      failed = failed || outcome.outcome === 'failed';
+      // `taken` is the singleton working - today's window went to another replica or to
+      // an earlier run of this command, and that is a success. `exhausted` is not: that
+      // window burned every attempt, was recorded FAILED, and will not run again until
+      // somebody intervenes. Exiting zero on it would let a cron wrapper or an `&&`
+      // chain read a permanently dead retention task as healthy.
+      failed =
+        failed ||
+        outcome.outcome === 'failed' ||
+        outcome.reason === 'exhausted';
       process.stdout.write(
         `retention:run task=${outcome.taskName} outcome=${outcome.outcome}` +
           `${outcome.reason ? ` reason=${outcome.reason}` : ''} ` +
           `batches=${outcome.batches} budgetSpent=${outcome.budgetSpent} ` +
+          `retryableFailures=${outcome.retryableFailures ?? 0} ` +
           `deleted=${JSON.stringify(outcome.counts)}` +
           `${outcome.errorCode ? ` errorCode=${outcome.errorCode}` : ''}\n`,
       );
     }
-    // A refusal is not a failure: losing today's window to another replica, or to an
-    // earlier run of this command, is the singleton working. A task that actually
-    // failed has to stop a script that runs this in a loop.
     if (failed) process.exitCode = 1;
   } finally {
     await application.close();

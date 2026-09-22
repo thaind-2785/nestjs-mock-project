@@ -9,6 +9,7 @@ import { retentionDuePredicate } from './retention-due';
 import { RetentionDeleteRepository } from './retention-delete.repository';
 import {
   retentionErrorCodes,
+  storageDrainBatchSize,
   type RetentionTaskName,
 } from './retention.constants';
 import type { RetentionBatchOutcome } from './retention.types';
@@ -34,21 +35,31 @@ export class RetentionTasksService {
     private readonly reports: ConfigType<typeof reportsConfig>,
   ) {}
 
+  /**
+   * `deadline` is passed in rather than owned here because a batch can be long.
+   *
+   * The run's budget used to be checked only between batches, which was sound while a
+   * batch was one statement and wrong as soon as one became hundreds of provider calls:
+   * a single export batch against a degraded object store could outlive the lease
+   * entirely, and a second replica would recover a window this one was still deleting
+   * inside. The loops below stop at the deadline and report what they did.
+   */
   async runBatch(
     dataSource: DataSource,
     taskName: RetentionTaskName,
     batchSize: number,
+    deadline: number,
   ): Promise<RetentionBatchOutcome> {
     switch (taskName) {
       case 'auth-sessions':
       case 'idempotency-keys':
         return this.purge(dataSource, taskName, batchSize);
       case 'storage-tasks':
-        return this.drainStorageTasks(batchSize);
+        return this.drainStorageTasks();
       case 'notification-events':
         return this.collectNotificationEvents(dataSource, batchSize);
       case 'export-results':
-        return this.collectExportResults(dataSource, batchSize);
+        return this.collectExportResults(dataSource, batchSize, deadline);
     }
   }
 
@@ -83,14 +94,17 @@ export class RetentionTasksService {
    * and a second implementation here would be a second opinion about which of those
    * rows is safe to remove.
    */
-  private async drainStorageTasks(
-    batchSize: number,
-  ): Promise<RetentionBatchOutcome> {
-    const result = await this.storageCleanup.run({ batchSize });
+  private async drainStorageTasks(): Promise<RetentionBatchOutcome> {
+    // Its own bound, not `batchSize`. That number means rows one statement may delete,
+    // and this service uses its argument as a loop counter over sequential provider
+    // calls - handing it five hundred turns one batch into five hundred round trips.
+    const result = await this.storageCleanup.run({
+      batchSize: storageDrainBatchSize,
+    });
     return {
       counts:
         result.deleted > 0 ? { storage_cleanup_tasks: result.deleted } : {},
-      moreWaiting: result.claimed === batchSize,
+      moreWaiting: result.claimed === storageDrainBatchSize,
       // A provider that refused is not a task that failed: the row stays due and the
       // next run tries again, which is the contract Phase 3 already established.
       retryableFailures: result.retryable,
@@ -116,6 +130,7 @@ export class RetentionTasksService {
       predicate,
       this.configuration.windows,
       batchSize,
+      this.configuration.run.statementTimeoutMs,
     );
     if (batch.eventIds.length === 0) return { counts: {}, moreWaiting: false };
 
@@ -159,6 +174,7 @@ export class RetentionTasksService {
   private async collectExportResults(
     dataSource: DataSource,
     batchSize: number,
+    deadline: number,
   ): Promise<RetentionBatchOutcome> {
     const predicate = retentionDuePredicate('export-results');
     const batch = await this.deletes.claimExportBatch(
@@ -166,6 +182,7 @@ export class RetentionTasksService {
       predicate,
       this.configuration.windows,
       batchSize,
+      this.configuration.run.statementTimeoutMs,
     );
     if (batch.jobs.length === 0) return { counts: {}, moreWaiting: false };
 
@@ -173,24 +190,26 @@ export class RetentionTasksService {
     let objectsDeleted = 0;
     let retryableFailures = 0;
 
+    let truncated = false;
+
     for (const job of batch.jobs) {
+      // Checked inside the loop, not only between batches: each iteration is a bounded
+      // provider call, and five hundred of them against a slow store is how a batch
+      // outlives the lease it was supposed to fit inside.
+      if (Date.now() >= deadline) {
+        truncated = true;
+        break;
+      }
       if (job.objectKey === null) {
         // A failed job never uploaded anything. Its rows are still due.
         removable.push(job);
         continue;
       }
-      // Phase 6 lets a losing attempt stage an object under its own key, so a key can
-      // outlive the job that wrote it. Removing one another job still points at would
-      // break a download that is entitled to work.
-      const stillReferenced = await this.deletes.countJobsPointingAt(
-        dataSource.manager,
-        job.objectKey,
-        job.id,
-      );
-      if (stillReferenced > 0) {
-        removable.push(job);
-        continue;
-      }
+      // No check that another job shares this key. `stagingObjectKey` puts the job's own
+      // UUID in the path and `uq_export_jobs_outbox_event` gives one job per event, so
+      // two rows cannot share one - the query that used to ask could only ever answer
+      // zero, at the cost of one round trip per job inside the batch whose duration the
+      // lease depends on. If that key scheme ever changes, this is the comment to find.
       try {
         await this.storage.deleteObject({
           objectKey: job.objectKey,
@@ -210,7 +229,13 @@ export class RetentionTasksService {
     }
 
     if (removable.length === 0) {
-      return { counts: {}, moreWaiting: false, retryableFailures };
+      // Nothing removable and every attempt refused is a total outage of the dependency
+      // this task exists to call. It must not read as a quiet night.
+      return {
+        counts: {},
+        moreWaiting: truncated || retryableFailures > 0,
+        retryableFailures,
+      };
     }
 
     const counts = await dataSource.transaction(async (manager) => {
@@ -232,7 +257,7 @@ export class RetentionTasksService {
           Object.entries(counts).filter(([, value]) => value > 0),
         ),
       },
-      moreWaiting: batch.jobs.length === batchSize,
+      moreWaiting: truncated || batch.jobs.length === batchSize,
       retryableFailures,
     };
   }

@@ -9,7 +9,21 @@
 # is exactly the one a single image makes impossible.
 #
 # The command is therefore not baked in. The image defaults to the API and every other
-# entrypoint overrides it.
+# entrypoint overrides it:
+#
+#   docker run <image>                                  # the API
+#   docker run <image> node dist/worker                 # mail, export, retention
+#   docker run <image> npm run migration:run:prod       # one-shot, before a deploy
+#   docker run <image> npm run ops:retention:prod -- --dry-run
+#
+# `compose.production.yaml` is where those overrides are declared for real.
+#
+# The image carries no configuration. Every value the application needs arrives at run
+# time, from the environment the container is started with - which is why the same image
+# is the local one, the CI one and the deployed one. The only build argument is the
+# commit SHA, and it is not a secret: `docker history` on a published image shows every
+# build argument to anybody who pulls it, so a secret passed that way is a secret
+# published.
 
 # ---------------------------------------------------------------------------
 # deps - the full install, build tools included, cached on the lockfile alone

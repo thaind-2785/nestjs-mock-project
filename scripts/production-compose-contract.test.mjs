@@ -93,7 +93,15 @@ test('keeps the migration a deliberate one-shot', () => {
   // containers are replaced, so a failed migration leaves the previous revision serving.
   assert.deepEqual(migrate.profiles, ['migrate']);
   assert.equal(migrate.restart, 'no');
-  assert.deepEqual(migrate.command, ['npm', 'run', 'migration:run:prod']);
+  // `node` directly rather than through a package manager: the image ships no npm, which
+  // is what removed eleven of the fourteen findings its first scan produced.
+  assert.deepEqual(migrate.command, [
+    'node',
+    'node_modules/typeorm/cli.js',
+    'migration:run',
+    '-d',
+    'dist/database/data-source.js',
+  ]);
 
   // Never `migration:revert`. `AGENTS.md` makes migrations the source of truth, and an
   // automatic revert on a failed deploy is how a partial migration becomes data loss.

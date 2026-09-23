@@ -80,7 +80,14 @@ services:
     image: ${APP_IMAGE:?set APP_IMAGE to the published commit-SHA tag}
     profiles: [migrate]
     restart: 'no'
-    command: [npm, run, migration:run:prod]
+    command:
+      [
+        node,
+        node_modules/typeorm/cli.js,
+        migration:run,
+        -d,
+        dist/database/data-source.js,
+      ]
     env_file: .env
     environment:
       NODE_ENV: production

@@ -21,7 +21,7 @@
     "migration:test:run": "typeorm-ts-node-commonjs migration:run -d test/fixtures/database-data-source.ts",
     "migration:test:revert": "typeorm-ts-node-commonjs migration:revert -d test/fixtures/database-data-source.ts",
     "migration:run": "typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts",
-    "migration:run:prod": "typeorm migration:run -d dist/database/data-source.js",
+    "migration:run:prod": "node node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js",
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
     "auth:bootstrap-admin": "ts-node -r tsconfig-paths/register src/cli/bootstrap-admin.ts",
     "files:storage-cleanup": "ts-node -r tsconfig-paths/register src/cli/storage-cleanup.ts",
@@ -126,5 +126,8 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "overrides": {
+    "multer": "^2.3.0"
   }
 }

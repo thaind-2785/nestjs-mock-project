@@ -67,6 +67,19 @@ RUN npm ci --omit=dev --omit=optional && npm cache clean --force
 
 COPY --from=build --chown=node:node /app/dist ./dist
 
+# npm is removed, and it is the single largest thing in this image that never runs.
+#
+# `node dist/main` does not need a package manager, and neither does anything else here:
+# the two operator entrypoints invoke `node` directly for exactly this reason. What npm
+# brought was 17 MB and, on the first publish that scanned this image, eleven of its
+# fourteen findings - in `tar`, `pacote`, `sigstore`, `picomatch`, `ip-address` and
+# `brace-expansion`, none of which the application can reach.
+#
+# The alternative was to keep upgrading a tool the image does not use, forever.
+RUN rm -rf /usr/local/lib/node_modules/npm \
+  /usr/local/bin/npm /usr/local/bin/npx \
+  /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
+
 # Answered by the image itself, so `docker inspect` can say which revision is running
 # without trusting a tag. The deploy job passes the commit SHA; a local build says
 # "unknown", which is true.

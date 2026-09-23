@@ -111,6 +111,41 @@ test('every entrypoint the image runs is a compiled one', () => {
   }
 });
 
+test('ships no package manager, because nothing in it runs one', () => {
+  // The first publish that scanned this image found fourteen vulnerabilities. Eleven were
+  // in npm's own bundled dependencies - tar, pacote, sigstore, picomatch, ip-address,
+  // brace-expansion - none of which the application can reach, in 17 MB it never loads.
+  // Removing npm removed them and removes the next batch too; keeping it would have meant
+  // upgrading a tool this image does not use, forever.
+  assert.match(runtimeStage, /rm -rf \/usr\/local\/lib\/node_modules\/npm/);
+
+  // Which is only safe while every entrypoint invokes node directly.
+  for (const name of [
+    'start:prod',
+    'start:worker:prod',
+    'migration:run:prod',
+    'ops:retention:prod',
+  ]) {
+    assert.match(
+      packageJson.scripts[name],
+      /^node /,
+      `${name} must invoke node directly; npm is not in the image`,
+    );
+  }
+  assert.doesNotMatch(
+    dockerfile,
+    /CMD \["npm"/,
+    'the default command must not be an npm script',
+  );
+});
+
+test('pins the transitive dependency a scan found, since the direct one cannot', () => {
+  // multer arrives through @nestjs/platform-express, so the version is not ours to choose
+  // in `dependencies`. An override is the only lever, and without it the image ships a
+  // known DoS in the request path that every upload goes through.
+  assert.ok(packageJson.overrides?.multer, 'multer must be pinned by override');
+});
+
 test('declares the revision it was built from', () => {
   assert.match(dockerfile, /LABEL org\.opencontainers\.image\.revision/);
   assert.match(dockerfile, /ARG GIT_SHA/);

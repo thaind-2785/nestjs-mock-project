@@ -1,7 +1,7 @@
 # PLAN-012: Delivery pipeline and public deployment
 
 - Spec: [`SPEC-011`](../specs/SPEC-011-delivery-pipeline-and-public-deployment.md)
-- Status: Draft
+- Status: In progress — `P8-T01` to `P8-T04` complete and in review; `P8-T05` blocked on the platform being prepared
 - Owner: Project owner
 - Reviewer (must be independent): an agent or person that authored none of Phase 8.
   Phase 7 closed with `REVIEW-044`, an independent exit read that found two shipped
@@ -38,10 +38,10 @@ is required by `endpoint-catalog.md`.
 
 | Slice    | Observable outcome                                                                    | Files/modules                                                      | Migration                                     | Tests                                                                            | Status  |
 | -------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------- | -------------------------------------------------------------------------------- | ------- |
-| `P8-T01` | One image runs either process, as a non-root user, with no toolchain or `.env` inside | `Dockerfile`, `.dockerignore`                                      | None                                          | Image contract tests; smoke-run both entrypoints                                 | Pending |
-| `P8-T02` | The whole stack runs from compose with healthchecks; `/health/ready` is `200`         | `compose.yaml`, `compose.production.yaml`, `scripts/compose-*.mjs` | None                                          | Compose contract tests; readiness integration                                    | Pending |
-| `P8-T03` | Swagger renders against a configured public origin instead of the request host        | `src/config/*`, `src/common/openapi/swagger.ts`                    | None                                          | Unit (base URL validation, server URL derivation); integration (document served) | Pending |
-| `P8-T04` | Merging to `main` publishes a scanned, SHA-tagged image; the gate is required         | `.github/workflows/ci.yml`, `.github/workflows/release.yml`        | None                                          | Workflow contract tests                                                          | Pending |
+| `P8-T01` | One image runs either process, as a non-root user, with no toolchain or `.env` inside | `Dockerfile`, `.dockerignore`                                      | None                                          | Image contract tests; smoke-run both entrypoints                                 | Done    |
+| `P8-T02` | The whole stack runs from compose with healthchecks; `/health/ready` is `200`         | `compose.yaml`, `compose.production.yaml`, `scripts/compose-*.mjs` | None                                          | Compose contract tests; readiness integration                                    | Done    |
+| `P8-T03` | Swagger renders against a configured public origin instead of the request host        | `src/config/*`, `src/common/openapi/swagger.ts`                    | None                                          | Unit (base URL validation, server URL derivation); integration (document served) | Done    |
+| `P8-T04` | Merging to `main` publishes a scanned, SHA-tagged image; the gate is required         | `.github/workflows/ci.yml`, `.github/workflows/release.yml`        | None                                          | Workflow contract tests                                                          | Done    |
 | `P8-T05` | That exact image serves the public internet; a failed deploy rolls back               | `.github/workflows/deploy.yml`, `docs/runbooks/deployment.md`      | Runs the full history against an empty schema | Contract tests; the deploy itself as recorded evidence                           | Pending |
 | `P8-T06` | The project is closed: docs, ADR, manifest, roadmap all agree                         | `docs/`, `.harness/manifest.yaml`, `README.md`                     | None                                          | `harness:check`; full gate                                                       | Pending |
 

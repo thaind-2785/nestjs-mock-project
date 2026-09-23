@@ -1,0 +1,31 @@
+# What must never enter a published image.
+#
+# `.env` first and by name: this image is published to a public registry, and a secret
+# that reaches it is a secret that cannot be recalled. The build never needs one - every
+# value is supplied at run time - so nothing here is a trade-off.
+.env
+.env.*
+!.env.example
+
+# Not secrets, but not the application either. Tests, docs and fixtures would enlarge the
+# image and its scan surface without a single one of them ever executing.
+test
+docs
+coverage
+*.spec.ts
+*.e2e-spec.ts
+
+# Rebuilt inside the image. Copying either from the host would ship whatever the host
+# happened to have, including a `dist/` compiled from uncommitted source.
+node_modules
+dist
+
+# Repository furniture.
+.git
+.github
+.harness
+.agents
+.vscode
+.idea
+*.log
+.DS_Store

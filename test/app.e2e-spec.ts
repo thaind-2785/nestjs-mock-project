@@ -73,7 +73,24 @@ describe('Application bootstrap (e2e)', () => {
         log: (record: unknown) => requestLogs.push(record),
       },
       swaggerEnabled: true,
+      publicBaseUrl: 'https://hotel-nestjs-mock-pj.duckdns.org',
     });
+  });
+
+  it('documents the public origin rather than whatever host reached it', async () => {
+    // The deployed API sits behind a reverse proxy, so the request arriving at the
+    // container carries the proxy's host header. A document that derived its server from
+    // that would advertise an address nobody outside the host can reach, and a front-end
+    // generating a client from it would generate one that cannot call anything.
+    const document = await request(app.getHttpServer())
+      .get(`/${swaggerJsonPath}`)
+      .expect(200);
+    const servers = (document.body as { servers?: Array<{ url?: string }> })
+      .servers;
+
+    expect(servers).toEqual([
+      { url: 'https://hotel-nestjs-mock-pj.duckdns.org' },
+    ]);
   });
 
   it('serves request-correlated liveness only under the API prefix', async () => {

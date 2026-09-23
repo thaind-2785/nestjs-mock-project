@@ -16,6 +16,9 @@ export const apiGlobalPrefix = 'api/v1';
 export interface ApplicationBootstrapOptions {
   requestLogger?: Pick<LoggerService, 'log'>;
   swaggerEnabled?: boolean;
+  /** Overrides the configured public origin, so a suite can drive the documented server
+   * URL without rewriting the process environment a sibling test file also reads. */
+  publicBaseUrl?: string;
 }
 
 export function configureApplication(
@@ -45,6 +48,10 @@ export function configureApplication(
       whitelist: true,
     }),
   );
-  configureSwagger(app, options.swaggerEnabled ?? configuration.swaggerEnabled);
+  configureSwagger(
+    app,
+    options.swaggerEnabled ?? configuration.swaggerEnabled,
+    options.publicBaseUrl ?? configuration.publicBaseUrl,
+  );
   app.enableShutdownHooks();
 }

@@ -36,3 +36,87 @@ jobs:
 
       - name: Run Harness and project gate
         run: npm run verify
+
+  publish:
+    name: Publish image
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # The deployment host is an Oracle Ampere VM, which is arm64; this runner is amd64.
+      # Without emulation the published image runs everywhere except the one machine it
+      # was built for, and says so only as `exec format error`, at `compose up`, after
+      # everything else in the deploy has already succeeded.
+      - name: Enable cross-architecture builds
+        run: |
+          docker run --privileged --rm \
+            tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 \
+            --install arm64
+          docker buildx create --name hotel --use
+
+      # Built for this runner's own architecture and loaded locally, because a
+      # multi-platform build cannot be loaded into the daemon - it exists only as a
+      # manifest - and the scanner needs an image it can read. One architecture is enough:
+      # the findings come from the Alpine packages and the npm tree, which are the same
+      # versions on both.
+      - name: Build for scanning
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --build-arg GIT_SHA="${GITHUB_SHA}" \
+            --tag "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}" \
+            --load \
+            .
+
+      # Before the push, not after. A published image cannot be recalled: anybody who
+      # pulled it already has it, and deleting the tag leaves the layers in their cache.
+      # Scanning afterwards would tell us what we had already given away.
+      #
+      # Only fixable findings fail. A gate that blocks on a vulnerability with no
+      # available patch is a gate somebody disables, and then it stops catching the ones
+      # that do have patches.
+      - name: Scan the image
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${HOME}/.cache/trivy:/root/.cache/trivy" \
+            aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}"
+
+      # Rebuilt for both architectures and pushed in one step. Nothing is recompiled: the
+      # amd64 layers are in the builder's cache from the scan above, and only arm64 is new.
+      - name: Publish to the registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg GIT_SHA="${GITHUB_SHA}" \
+            --tag "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}" \
+            --tag "ghcr.io/${GITHUB_REPOSITORY,,}:main" \
+            --push \
+            .
+
+      # What the deploy consumes. The digest rather than either tag, because a tag is a
+      # pointer somebody can move and this is the record of what was actually built.
+      - name: Record the published digest
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}"
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          {
+            echo "### Published image"
+            echo
+            echo '```'
+            echo "tag:    ${IMAGE}"
+            echo "digest: ${DIGEST}"
+            echo "APP_IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}@${DIGEST}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"

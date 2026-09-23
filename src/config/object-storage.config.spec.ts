@@ -17,6 +17,7 @@ describe('createObjectStorageConfiguration', () => {
   it('maps managed cloud values without a local endpoint', () => {
     const environment = validateEnvironment({
       NODE_ENV: 'production',
+      PUBLIC_BASE_URL: 'https://api.hotel.example.com',
       OBJECT_STORAGE_REGION: 'ap-southeast-1',
       OBJECT_STORAGE_BUCKET: 'hotel-prod-assets',
       OBJECT_STORAGE_ACCESS_KEY: 'prod-access',

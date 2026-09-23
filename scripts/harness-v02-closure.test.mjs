@@ -83,6 +83,129 @@ test('reviewed CI envelope rejects job-level environment injection', () => {
   );
 });
 
+test('the published image is scanned before it leaves the runner', () => {
+  const workflow = loadWorkflow();
+  const steps = workflow.jobs.publish.steps;
+  const scan = steps.findIndex((step) => step.name === 'Scan the image');
+  const push = steps.findIndex((step) =>
+    String(step.run ?? '').includes('--push'),
+  );
+
+  // Swapping the two steps is a one-line edit that no build, test or deploy notices, and
+  // it cannot be undone afterwards: whoever pulled the image already has it, and deleting
+  // the tag leaves the layers in their cache.
+  [steps[scan], steps[push]] = [steps[push], steps[scan]];
+
+  assert.ok(
+    validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
+      error.includes('must scan the image before pushing it'),
+    ),
+  );
+});
+
+test('publishing waits for the gate, and only on main', () => {
+  for (const [mutate, expected] of [
+    [(workflow) => delete workflow.jobs.publish.needs, 'reviewed job keys'],
+    [
+      (workflow) => {
+        workflow.jobs.publish.needs = 'lint';
+      },
+      'must depend on the verify job',
+    ],
+    [
+      (workflow) => {
+        workflow.jobs.publish.if = "github.event_name == 'push'";
+      },
+      'must run only for main',
+    ],
+  ]) {
+    const workflow = loadWorkflow();
+    mutate(workflow);
+    assert.ok(
+      validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
+        error.includes(expected),
+      ),
+      `expected an error containing ${expected}`,
+    );
+  }
+});
+
+test('the publishing job holds the registry credential and nothing more', () => {
+  for (const permissions of [
+    { contents: 'write', packages: 'write' },
+    { contents: 'read', packages: 'write', 'id-token': 'write' },
+    { packages: 'write' },
+  ]) {
+    const workflow = loadWorkflow();
+    workflow.jobs.publish.permissions = permissions;
+    assert.ok(
+      validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
+        error.includes('contents: read and packages: write'),
+      ),
+    );
+  }
+});
+
+test('what is published is identified by commit, and carries no secret', () => {
+  for (const [mutate, expected] of [
+    [
+      (steps) => {
+        // The tag that cannot answer "what is deployed".
+        steps.find((step) => String(step.run ?? '').includes('--push')).run =
+          'docker buildx build --platform linux/amd64,linux/arm64 --tag ghcr.io/owner/repo:latest --push .';
+      },
+      'must publish a commit-SHA tag',
+    ],
+    [
+      (steps) => {
+        const build = steps.find((step) =>
+          String(step.run ?? '').includes('--build-arg GIT_SHA'),
+        );
+        build.run = build.run.replace(
+          '--build-arg GIT_SHA',
+          '--build-arg NPM_TOKEN="${NPM_TOKEN}" --build-arg GIT_SHA',
+        );
+      },
+      'no build argument other than GIT_SHA',
+    ],
+    [
+      (steps) => {
+        steps.find((step) => step.name === 'Scan the image').run = String(
+          steps.find((step) => step.name === 'Scan the image').run,
+        ).replace('--exit-code 1', '--exit-code 0');
+      },
+      'must fail the job on a finding',
+    ],
+  ]) {
+    const workflow = loadWorkflow();
+    mutate(workflow.jobs.publish.steps);
+    assert.ok(
+      validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
+        error.includes(expected),
+      ),
+      `expected an error containing ${expected}`,
+    );
+  }
+});
+
+test('publishes for the architecture the host actually runs', () => {
+  const workflow = loadWorkflow();
+  const push = workflow.jobs.publish.steps.find((step) =>
+    String(step.run ?? '').includes('--push'),
+  );
+
+  // The failure this prevents is the latest one possible: an amd64-only image passes the
+  // gate, passes the scan, publishes, pulls onto the arm64 host and dies at `compose up`
+  // with `exec format error` - after the migration has already run.
+  push.run = push.run.replace('linux/amd64,linux/arm64', 'linux/amd64');
+
+  assert.ok(
+    validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
+      error.includes('both linux/amd64 and linux/arm64'),
+    ),
+  );
+});
+
 test('reviewed CI envelope rejects job execution-surface expansion', () => {
   for (const mutate of [
     (workflow) => {

@@ -33,6 +33,10 @@ const productionRequiredEnvironment = {
   ...productionAuthEnvironment,
   ...productionMailEnvironment,
   ...productionReportEnvironment,
+  // A deployed API is reached through a proxy, so the host header on the request is the
+  // container's rather than the browser's. Without this the OpenAPI document advertises
+  // an address no client outside the host can reach.
+  PUBLIC_BASE_URL: 'https://api.hotel.example.com',
 };
 
 describe('validateEnvironment', () => {
@@ -152,6 +156,60 @@ describe('validateEnvironment', () => {
     });
 
     expect(environment.SWAGGER_ENABLED).toBe(true);
+  });
+
+  it('requires a public origin in production', () => {
+    const withoutOrigin = { ...productionRequiredEnvironment };
+    delete (withoutOrigin as Partial<typeof withoutOrigin>).PUBLIC_BASE_URL;
+
+    expect(() =>
+      validateEnvironment({
+        NODE_ENV: 'production',
+        MYSQL_PASSWORD: 'production-password',
+        OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
+        OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
+        ...withoutOrigin,
+      }),
+    ).toThrow('PUBLIC_BASE_URL');
+  });
+
+  it('refuses a public origin that is not https in production', () => {
+    // A document served over HTTPS that advertises an `http` server produces a client
+    // every browser blocks as mixed content - and the failure surfaces in the consumer's
+    // console, not here.
+    expect(() =>
+      validateEnvironment({
+        NODE_ENV: 'production',
+        MYSQL_PASSWORD: 'production-password',
+        OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
+        OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
+        ...productionRequiredEnvironment,
+        PUBLIC_BASE_URL: 'http://api.hotel.example.com',
+      }),
+    ).toThrow('PUBLIC_BASE_URL');
+  });
+
+  it.each([
+    'api.hotel.example.com',
+    'https://api.hotel.example.com/api',
+    'https://api.hotel.example.com/',
+  ])('rejects a public origin that is not a bare origin: %s', (value) => {
+    // A path here would be concatenated with every documented route, so `/api` would
+    // produce `/api/api/v1/rooms`. The trailing slash is rejected for the same reason
+    // rather than trimmed: one spelling means one thing to compare against.
+    expect(() => validateEnvironment({ PUBLIC_BASE_URL: value })).toThrow(
+      'PUBLIC_BASE_URL',
+    );
+  });
+
+  it('accepts a local origin outside production', () => {
+    // Useful while developing a generated client, and the reason the scheme rule lives
+    // in the production cross-field check rather than in the pattern.
+    const environment = validateEnvironment({
+      PUBLIC_BASE_URL: 'http://localhost:3000',
+    });
+
+    expect(environment.PUBLIC_BASE_URL).toBe('http://localhost:3000');
   });
 
   it.each(['0', '65536', 'not-a-port'])('rejects invalid port %s', (port) => {

@@ -1,0 +1,33 @@
+# The single door to the deployed host.
+#
+# Caddy obtains and renews the certificate itself: naming the host is the whole
+# configuration, and there is no certbot, no cron renewal and no key on disk to rotate by
+# hand. That is the reason it is here rather than nginx.
+
+{$PUBLIC_HOSTNAME} {
+	# Everything goes to the API, including `/api/docs`. Swagger is served by the
+	# application itself, which is why this phase needs no CORS: the documentation and the
+	# endpoints it documents are the same origin.
+	handle {
+		reverse_proxy api:3000
+	}
+
+	# Mailpit, so a reviewer can read what the outbox actually sent rather than trust that
+	# it left. Nothing on this host receives real mail, and no address outside it is ever
+	# contacted, so what is published here is the demonstration's own messages.
+	handle_path /mail/* {
+		reverse_proxy mailpit:8025
+	}
+
+	encode gzip
+
+	# The proxy speaks HTTPS to the world and plain HTTP to the container network, so the
+	# application has to be told which scheme the client actually used - otherwise every
+	# absolute URL it builds says `http`.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		-Server
+	}
+}

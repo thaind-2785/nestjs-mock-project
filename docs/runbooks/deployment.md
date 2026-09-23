@@ -188,6 +188,9 @@ NOTIFICATION_QUEUE_PREFIX=hotel:prod:notifications
 REPORT_EXPORT_QUEUE_PREFIX=hotel:prod:reports
 RATE_LIMIT_REDIS_KEY_PREFIX=hotel:prod:rate
 
+# A deployed probe crosses a real network; the 1000ms default is sized for Compose.
+HEALTH_CHECK_TIMEOUT_MS=5000
+
 HOTEL_TIMEZONE=Asia/Ho_Chi_Minh
 
 # Off until a dry run has been read. docs/runbooks/retention.md has the sequence.
@@ -279,14 +282,15 @@ a partial migration becomes data loss, and that is a decision for a person.
 Railway - the service - **Deployments** - the failed one - **View logs**. Both processes
 log JSON, one object per line; the first error after a restart is almost always the answer.
 
-| What you see                                | What it means                                                    |
-| ------------------------------------------- | ---------------------------------------------------------------- |
-| `Environment validation failed for: X, Y`   | Those variables are missing from that service                    |
-| `exec format error`                         | An image built for one architecture; the publish job builds both |
-| Readiness `503`, MySQL unreachable          | The `MYSQL_*` references name a service not called `MySQL`       |
-| Uploads fail with `SignatureDoesNotMatch`   | `OBJECT_STORAGE_REGION` is not `auto`                            |
-| Mail fails with `invalid_grant`             | The Gmail refresh token was revoked; issue a new one             |
-| Never becomes ready, and no application log | The tag does not exist, or the package is still private          |
+| What you see                                | What it means                                                                                                                                                       |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Environment validation failed for: X, Y`   | Those variables are missing from that service                                                                                                                       |
+| `exec format error`                         | An image built for one architecture; the publish job builds both                                                                                                    |
+| Readiness `503`, `dependencies: ["mysql"]`  | Usually not the database. Raise `HEALTH_CHECK_TIMEOUT_MS` to 5000: the default bounds the first handshake at one second, which suits Compose and not a real network |
+| `MYSQL_HOST` still shows `${{MySQL...}}`    | The service is not named `MySQL`, so the reference cannot resolve                                                                                                   |
+| Uploads fail with `SignatureDoesNotMatch`   | `OBJECT_STORAGE_REGION` is not `auto`                                                                                                                               |
+| Mail fails with `invalid_grant`             | The Gmail refresh token was revoked; issue a new one                                                                                                                |
+| Never becomes ready, and no application log | The tag does not exist, or the package is still private                                                                                                             |
 
 ## Rolling back by hand
 

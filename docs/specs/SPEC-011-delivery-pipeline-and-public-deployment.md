@@ -76,20 +76,20 @@ pay. `ADR-0009` records the removal so the manifest and the decision agree.
 
 ### Public surface
 
-| Path                                 | Purpose                                           |
-| ------------------------------------ | ------------------------------------------------- |
-| `https://<host>/api/v1/...`          | The API, unchanged from local                     |
-| `https://<host>/api/docs`            | Swagger UI, **enabled in production**             |
-| `https://<host>/api/docs-json`       | OpenAPI document, for front-end client generation |
-| `https://<host>/api/v1/health/live`  | Liveness, used by the container healthcheck       |
-| `https://<host>/api/v1/health/ready` | Readiness, used by the deploy smoke check         |
-| `https://<host>/mail/`               | Mailpit UI, so a reviewer can read what was sent  |
+| Path                                                           | Purpose                                           |
+| -------------------------------------------------------------- | ------------------------------------------------- |
+| `https://hotel-nestjs-mock-pj.duckdns.org/api/v1/...`          | The API, unchanged from local                     |
+| `https://hotel-nestjs-mock-pj.duckdns.org/api/docs`            | Swagger UI, **enabled in production**             |
+| `https://hotel-nestjs-mock-pj.duckdns.org/api/docs-json`       | OpenAPI document, for front-end client generation |
+| `https://hotel-nestjs-mock-pj.duckdns.org/api/v1/health/live`  | Liveness, used by the container healthcheck       |
+| `https://hotel-nestjs-mock-pj.duckdns.org/api/v1/health/ready` | Readiness, used by the deploy smoke check         |
+| `https://hotel-nestjs-mock-pj.duckdns.org/mail/`               | Mailpit UI, so a reviewer can read what was sent  |
 
 ### New configuration
 
-| Variable          | Required   | Meaning                                                    |
-| ----------------- | ---------- | ---------------------------------------------------------- |
-| `PUBLIC_BASE_URL` | production | Absolute origin; Swagger's server URL and the OAuth origin |
+| Variable          | Required   | Meaning                                                                                                                  |
+| ----------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `PUBLIC_BASE_URL` | production | Absolute origin; Swagger's server URL and the OAuth origin. Production value: `https://hotel-nestjs-mock-pj.duckdns.org` |
 
 One new variable. Everything else the deployment needs already exists, because seven
 phases of configuration were written to be supplied from the environment.
@@ -102,7 +102,7 @@ anybody who copies this repository.
 ### Why there is no CORS and no cookie change
 
 Swagger is served by the same application, on the same origin, as the API it documents.
-A request from `https://<host>/api/docs` to `https://<host>/api/v1/...` is same-origin:
+A request from `https://hotel-nestjs-mock-pj.duckdns.org/api/docs` to `https://hotel-nestjs-mock-pj.duckdns.org/api/v1/...` is same-origin:
 the browser sends no preflight and applies no cross-origin rules, and the existing
 `SameSite=Lax` refresh cookie is sent exactly as it is locally.
 
@@ -291,9 +291,10 @@ job-level environment injection`). New cases: the deploy job cannot run before t
 1. The host is an Oracle Cloud Always Free VM, chosen by the owner on 2026-09-23. Any
    SSH-reachable Linux host with Docker satisfies the same contract; the pipeline holds
    the host as configuration, not as an assumption in its code.
-2. The DNS name comes from a free dynamic-DNS service such as DuckDNS, pointed at the
-   VM's public IP. Oracle issues an IP and no name, and Let's Encrypt will not certify a
-   bare IP, so a name is required and buying one is not.
+2. The DNS name is `hotel-nestjs-mock-pj.duckdns.org`, registered by the owner on
+   2026-09-23. Oracle issues an IP and no name, and Let's Encrypt will not certify a bare
+   IP, so a name was required and buying one was not. It still has to be pointed at the
+   VM's public IP once that VM exists, which is the first step of host preparation.
 3. The Google OAuth client can have the production redirect URI added to it. This is a
    manual step in the Google console. Without it, login on the deployed environment
    cannot work, and the demonstration reaches every endpoint except an authenticated
@@ -303,10 +304,9 @@ job-level environment injection`). New cases: the deploy job cannot run before t
 
 ### Open questions
 
-1. **What DNS name?** Needed before the certificate step, not before the image, so it
-   does not block `P8-T01` through `P8-T04`. It is recorded rather than guessed because
-   the same string goes into the Google OAuth client and into `PUBLIC_BASE_URL`, and
-   changing it later means touching both.
+None. The DNS name was the last one and was settled on 2026-09-23. The same string is
+used in three places that must agree — `PUBLIC_BASE_URL`, the Google OAuth client's
+redirect URI, and the certificate — so it is written here once and referenced.
 
 ## Rollout and rollback
 

@@ -37,6 +37,14 @@ entry_commands:
     side_effect: none
     environments: [local, ci]
     forward_env: [CI, LANG, LC_ALL, TZ]
+  delivery_test:
+    command: npm run test:delivery
+    npm_script: test:delivery
+    permission: run_local_checks
+    tool_ref: npm
+    side_effect: none
+    environments: [local, ci]
+    forward_env: [CI, LANG, LC_ALL, TZ]
   compose_config:
     command: npm run compose:config
     npm_script: compose:config

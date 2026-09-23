@@ -178,6 +178,7 @@ export const commandCatalog = Object.freeze({
   harness_test: npmCommand(['run', 'test:harness']),
   harness_eval: npmCommand(['run', 'harness:eval']),
   compose_test: npmCommand(['run', 'test:compose']),
+  delivery_test: npmCommand(['run', 'test:delivery']),
   compose_config: npmCommand(['run', 'compose:config']),
   compose_ci: npmCommand(['run', 'compose:ci']),
   compose_smoke: npmCommand(['run', 'compose:smoke']),

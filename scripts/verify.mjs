@@ -13,6 +13,7 @@ const checks = [
   'harness_test',
   'harness_eval',
   'compose_test',
+  'delivery_test',
   'compose_config',
   'format_check',
   'lint_check',

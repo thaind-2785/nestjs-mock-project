@@ -36,3 +36,61 @@ jobs:
 
       - name: Run Harness and project gate
         run: npm run verify
+
+  publish:
+    name: Publish image
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build the image
+        run: |
+          docker build \
+            --build-arg GIT_SHA="${GITHUB_SHA}" \
+            --tag "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}" \
+            --tag "ghcr.io/${GITHUB_REPOSITORY,,}:main" \
+            .
+
+      # Before the push, not after. A published image cannot be recalled: anybody who
+      # pulled it already has it, and deleting the tag leaves the layers in their cache.
+      # Scanning afterwards would tell us what we had already given away.
+      #
+      # Only fixable findings fail. A gate that blocks on a vulnerability with no
+      # available patch is a gate somebody disables, and then it stops catching the ones
+      # that do have patches.
+      - name: Scan the image
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${HOME}/.cache/trivy:/root/.cache/trivy" \
+            aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}"
+
+      - name: Publish to the registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}"
+          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:main"
+
+      # What the deploy consumes. The digest rather than either tag, because a tag is a
+      # pointer somebody can move and this is the record of what was actually built.
+      - name: Record the published digest
+        run: |
+          DIGEST="$(docker inspect --format '{{index .RepoDigests 0}}' "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}")"
+          {
+            echo "### Published image"
+            echo
+            echo '```'
+            echo "tag:    ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}"
+            echo "digest: ${DIGEST}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"

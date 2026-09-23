@@ -84,8 +84,11 @@ export function validateCiWorkflowEnvelope(workflow, config) {
     );
   }
 
-  if (!hasExactKeys(workflow?.jobs, ['verify'])) {
-    addError(`${rootPath}.jobs`, 'must contain exactly the verify job');
+  if (!hasExactKeys(workflow?.jobs, ['verify', 'publish'])) {
+    addError(
+      `${rootPath}.jobs`,
+      'must contain exactly the verify and publish jobs',
+    );
   }
 
   const job = workflow?.jobs?.verify;
@@ -103,6 +106,119 @@ export function validateCiWorkflowEnvelope(workflow, config) {
       `${rootPath}.jobs.verify.name`,
       'must match the required GitHub check name',
     );
+  }
+
+  errors.push(...validatePublishJob(workflow?.jobs?.publish, rootPath));
+
+  return errors;
+}
+
+/**
+ * The publishing job, held to the same envelope as the gate and to three rules of its
+ * own.
+ *
+ * It is in this workflow rather than a second one for the reason the gate is reviewed at
+ * all: a workflow nobody validates is a workflow anybody can add a step to. One file, one
+ * dependency edge, one policy.
+ */
+function validatePublishJob(job, rootPath) {
+  const errors = [];
+  const addError = (path, message) => errors.push(`${path}: ${message}`);
+  const jobPath = `${rootPath}.jobs.publish`;
+
+  if (
+    !hasExactKeys(job, [
+      'name',
+      'needs',
+      'if',
+      'runs-on',
+      'timeout-minutes',
+      'permissions',
+      'steps',
+    ])
+  ) {
+    addError(
+      jobPath,
+      'must contain exactly the reviewed job keys; env/defaults/container/services are forbidden',
+    );
+    return errors;
+  }
+
+  // Nothing is published from a tree that did not pass the gate, and nothing is published
+  // from a branch. Both halves matter: `needs` alone would still publish every pull
+  // request, and the branch condition alone would publish a red `main`.
+  if (job['needs'] !== 'verify') {
+    addError(`${jobPath}.needs`, 'must depend on the verify job');
+  }
+  if (job['if'] !== "github.ref == 'refs/heads/main'") {
+    addError(`${jobPath}.if`, 'must run only for main');
+  }
+  if (job['runs-on'] !== 'ubuntu-latest') {
+    addError(`${jobPath}.runs-on`, 'must equal ubuntu-latest');
+  }
+
+  // Write access to packages and nothing else. A job holding the registry credential is
+  // the one job in this repository whose token is worth stealing.
+  if (
+    !hasExactKeys(job.permissions, ['contents', 'packages']) ||
+    job.permissions.contents !== 'read' ||
+    job.permissions.packages !== 'write'
+  ) {
+    addError(
+      `${jobPath}.permissions`,
+      'must grant exactly contents: read and packages: write',
+    );
+  }
+
+  const steps = Array.isArray(job.steps) ? job.steps : [];
+  const indexOfStep = (needle) =>
+    steps.findIndex((step) => String(step?.run ?? '').includes(needle));
+  const scanIndex = indexOfStep('aquasec/trivy@sha256:');
+  const pushIndex = indexOfStep('docker push');
+
+  if (scanIndex === -1) {
+    addError(
+      `${jobPath}.steps`,
+      'must scan the image with a digest-pinned scanner',
+    );
+  }
+  if (pushIndex === -1) {
+    addError(`${jobPath}.steps`, 'must push the image');
+  }
+  // The rule this job exists to keep. A published image cannot be recalled, so a scan
+  // after the push reports what has already been given away.
+  if (scanIndex !== -1 && pushIndex !== -1 && scanIndex > pushIndex) {
+    addError(`${jobPath}.steps`, 'must scan the image before pushing it');
+  }
+
+  const scanCommand = scanIndex === -1 ? '' : String(steps[scanIndex].run);
+  if (!scanCommand.includes('--exit-code 1')) {
+    addError(`${jobPath}.steps`, 'the scan must fail the job on a finding');
+  }
+  if (!scanCommand.includes('--severity HIGH,CRITICAL')) {
+    addError(`${jobPath}.steps`, 'the scan must cover HIGH and CRITICAL');
+  }
+
+  // Tagged by commit, never by a moving pointer alone: `latest` cannot answer "what is
+  // deployed", and a deploy that resolves it gets whatever was pushed most recently.
+  const pushCommand = pushIndex === -1 ? '' : String(steps[pushIndex].run);
+  if (!pushCommand.includes('${GITHUB_SHA}')) {
+    addError(`${jobPath}.steps`, 'must publish a commit-SHA tag');
+  }
+  if (/:latest\b/.test(pushCommand)) {
+    addError(`${jobPath}.steps`, 'must not publish a latest tag');
+  }
+
+  // The image needs no secret to build, and a build argument is readable by anybody who
+  // pulls the result.
+  for (const step of steps) {
+    const command = String(step?.run ?? '');
+    if (/--build-arg\s+(?!GIT_SHA)/.test(command)) {
+      addError(
+        `${jobPath}.steps`,
+        'must pass no build argument other than GIT_SHA',
+      );
+    }
   }
 
   return errors;

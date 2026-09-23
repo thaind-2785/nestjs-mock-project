@@ -206,12 +206,21 @@ export function validateCiWorkflow(workflow, config) {
 
   const job = workflow?.jobs?.verify;
   const jobIds = Object.keys(workflow?.jobs ?? {});
-  if (jobIds.length !== 1 || jobIds[0] !== 'verify') {
+  // Two jobs and no more: the gate, and the publish that `P8-T04` gave it. Their shapes
+  // are checked here and in harness-ci-policy.mjs; what each one may contain is stated
+  // there, and the pair is fixed here so a third job cannot appear unreviewed.
+  if (
+    jobIds.length !== 2 ||
+    jobIds[0] !== 'verify' ||
+    jobIds[1] !== 'publish'
+  ) {
     addError(
       'runtime_contract.ci_workflow.jobs',
-      'must contain only the reviewed verify job',
+      'must contain only the reviewed verify and publish jobs, in that order',
     );
   }
+  // The gate reads; it never needs a write. The publish job is the exception and declares
+  // its own narrower grant, which harness-ci-policy.mjs pins to packages: write.
   if (job && 'permissions' in job) {
     addError(
       'runtime_contract.ci_workflow.jobs.verify.permissions',
@@ -231,6 +240,18 @@ export function validateCiWorkflow(workflow, config) {
   ) {
     addError(
       'runtime_contract.ci_workflow.jobs.verify.timeout-minutes',
+      `must be positive and no greater than ${maxTimeoutMinutes}`,
+    );
+  }
+
+  const publishJob = workflow?.jobs?.publish;
+  if (
+    !Number.isInteger(publishJob?.['timeout-minutes']) ||
+    publishJob['timeout-minutes'] < 1 ||
+    publishJob['timeout-minutes'] > maxTimeoutMinutes
+  ) {
+    addError(
+      'runtime_contract.ci_workflow.jobs.publish.timeout-minutes',
       `must be positive and no greater than ${maxTimeoutMinutes}`,
     );
   }

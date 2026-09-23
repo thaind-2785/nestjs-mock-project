@@ -174,7 +174,7 @@ function validatePublishJob(job, rootPath) {
   const indexOfStep = (needle) =>
     steps.findIndex((step) => String(step?.run ?? '').includes(needle));
   const scanIndex = indexOfStep('aquasec/trivy@sha256:');
-  const pushIndex = indexOfStep('docker push');
+  const pushIndex = indexOfStep('--push');
 
   if (scanIndex === -1) {
     addError(
@@ -184,6 +184,22 @@ function validatePublishJob(job, rootPath) {
   }
   if (pushIndex === -1) {
     addError(`${jobPath}.steps`, 'must push the image');
+  }
+
+  // The host is arm64 and this runner is amd64. An image built for one architecture runs
+  // everywhere except the machine it is for, and announces that as `exec format error` at
+  // `compose up` - after the migration has already run.
+  if (pushIndex !== -1) {
+    const platforms = String(steps[pushIndex].run);
+    if (
+      !platforms.includes('linux/amd64') ||
+      !platforms.includes('linux/arm64')
+    ) {
+      addError(
+        `${jobPath}.steps`,
+        'must publish for both linux/amd64 and linux/arm64',
+      );
+    }
   }
   // The rule this job exists to keep. A published image cannot be recalled, so a scan
   // after the push reports what has already been given away.

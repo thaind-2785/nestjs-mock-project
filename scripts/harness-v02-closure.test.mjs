@@ -88,7 +88,7 @@ test('the published image is scanned before it leaves the runner', () => {
   const steps = workflow.jobs.publish.steps;
   const scan = steps.findIndex((step) => step.name === 'Scan the image');
   const push = steps.findIndex((step) =>
-    String(step.run ?? '').includes('docker push'),
+    String(step.run ?? '').includes('--push'),
   );
 
   // Swapping the two steps is a one-line edit that no build, test or deploy notices, and
@@ -151,15 +151,17 @@ test('what is published is identified by commit, and carries no secret', () => {
     [
       (steps) => {
         // The tag that cannot answer "what is deployed".
-        steps.find((step) =>
-          String(step.run ?? '').includes('docker push'),
-        ).run = 'docker push ghcr.io/owner/repo:latest';
+        steps.find((step) => String(step.run ?? '').includes('--push')).run =
+          'docker buildx build --platform linux/amd64,linux/arm64 --tag ghcr.io/owner/repo:latest --push .';
       },
       'must publish a commit-SHA tag',
     ],
     [
       (steps) => {
-        steps[1].run = steps[1].run.replace(
+        const build = steps.find((step) =>
+          String(step.run ?? '').includes('--build-arg GIT_SHA'),
+        );
+        build.run = build.run.replace(
           '--build-arg GIT_SHA',
           '--build-arg NPM_TOKEN="${NPM_TOKEN}" --build-arg GIT_SHA',
         );
@@ -184,6 +186,24 @@ test('what is published is identified by commit, and carries no secret', () => {
       `expected an error containing ${expected}`,
     );
   }
+});
+
+test('publishes for the architecture the host actually runs', () => {
+  const workflow = loadWorkflow();
+  const push = workflow.jobs.publish.steps.find((step) =>
+    String(step.run ?? '').includes('--push'),
+  );
+
+  // The failure this prevents is the latest one possible: an amd64-only image passes the
+  // gate, passes the scan, publishes, pulls onto the arm64 host and dies at `compose up`
+  // with `exec format error` - after the migration has already run.
+  push.run = push.run.replace('linux/amd64,linux/arm64', 'linux/amd64');
+
+  assert.ok(
+    validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
+      error.includes('both linux/amd64 and linux/arm64'),
+    ),
+  );
 });
 
 test('reviewed CI envelope rejects job execution-surface expansion', () => {

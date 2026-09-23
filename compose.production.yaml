@@ -25,6 +25,11 @@ services:
   caddy:
     image: caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
     restart: unless-stopped
+    environment:
+      # The certificate's name. `:?` because a Caddyfile whose site address is empty
+      # starts and serves nothing, which looks like a network problem for as long as it
+      # takes somebody to read the config.
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:?}
     ports:
       - 80:80
       - 443:443

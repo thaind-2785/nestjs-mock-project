@@ -7,6 +7,23 @@ authentication and RBAC: Google JIT users, rotating application sessions, JWT
 guards, `/me`, audited user activation/deactivation, and first-admin bootstrap.
 Local MySQL/Redis/MinIO/Mailpit dependencies remain managed through Compose.
 
+## The deployed environment
+
+A demonstration deployment runs the same image this repository publishes, on Railway,
+with a managed MySQL, Redis, Filebase object storage and Gmail delivery.
+
+- **Swagger**: <https://api-production-3c0a.up.railway.app/api/docs>
+- **Readiness**: <https://api-production-3c0a.up.railway.app/api/v1/health/ready>
+- **[Deployment console](https://claude.ai/artifact/EXbJqLj2thsvbM6zYU8a33)** — every
+  dashboard the deployment spans, the demonstration order, and what each failure symptom
+  means. Open this one before a demonstration.
+- **[`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)** — the full sequence:
+  creating the services, the environment, the first migration, and the everyday deploy.
+
+Sign in from a browser rather than from Swagger: `/api/v1/auth/google` answers with a
+redirect, and Swagger renders the response instead of following it. Google sign-in is
+limited to accounts listed as test users on the OAuth consent screen.
+
 ## Runtime requirements
 
 - Node.js 22 (`.nvmrc`)

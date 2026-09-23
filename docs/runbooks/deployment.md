@@ -20,6 +20,56 @@ no real customer data. Every choice below assumes that.
 Railway holds two processes and a queue. Everything that keeps state is outside it, which
 is what makes a failed deploy safe to retry without thinking.
 
+## Every console, and what each one answers
+
+The deployment spans six services, each with its own dashboard. This is the table to
+open before a demonstration, and the one to open when something is wrong.
+
+| To check                        | Where                                                                                                                                                                                    | What you are looking for                                                          |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| The API itself                  | [`/api/docs`](https://api-production-3c0a.up.railway.app/api/docs)                                                                                                                       | Swagger. Everything is demonstrated from here                                     |
+| Is it up                        | [`/api/v1/health/ready`](https://api-production-3c0a.up.railway.app/api/v1/health/ready)                                                                                                 | `{"status":"ok"}`. A `503` names the dependency in `details`                      |
+| Logs, restarts, variables       | [Railway project](https://railway.com/project/4f97eb5f-dd70-46d2-9ac0-06bdcf921cba)                                                                                                      | Service → Deployments → View logs. One JSON object per line                       |
+| Which image is deployed         | Railway → service → Settings → Source                                                                                                                                                    | A digest, not a tag, once `P8-T05` lands                                          |
+| Was the image published         | [GitHub Packages](https://github.com/thaind-2785/nestjs-mock-project/pkgs/container/nestjs-mock-project)                                                                                 | A version tagged with the commit SHA, and `main`                                  |
+| Why a build failed              | [GitHub Actions](https://github.com/thaind-2785/nestjs-mock-project/actions)                                                                                                             | `Verify repository` then `Publish image`; the scan runs inside the second         |
+| Uploaded images and exports     | [Filebase console](https://console.filebase.com/)                                                                                                                                        | Bucket `hotel-media`. Room images and generated XLSX land here                    |
+| Mail that was actually sent     | [Gmail, Sent folder](https://mail.google.com/mail/u/0/#sent) of the sending account                                                                                                      | The rendered message. The outbox says it was accepted; this says it arrived       |
+| Login is refused                | [OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent)                                                                                                        | **Test users**. Anyone not listed cannot sign in while the app is in Testing      |
+| `redirect_uri_mismatch`         | [OAuth credentials](https://console.cloud.google.com/apis/credentials)                                                                                                                   | Authorized redirect URIs must match `GOOGLE_REDIRECT_URI` character for character |
+| Mail fails with `invalid_grant` | [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com) enabled, then a new refresh token from [OAuth Playground](https://developers.google.com/oauthplayground) | The refresh token was revoked or the API was disabled                             |
+
+Two of these are the ones nobody thinks of first.
+
+**Test users** is invisible to the owner: the project owner can always sign in, whatever
+the list says, so the demonstration works perfectly until somebody else opens it. Add the
+reviewer before sending the link, not after they report it broken.
+
+**Gmail's Sent folder** is the only place that proves delivery. The outbox and the
+`email_deliveries` table record that the provider _accepted_ the message; they cannot see
+what happened next.
+
+## Demonstrating it
+
+In this order, because each step exercises something the previous one did not:
+
+| Step                                           | What it proves                                                             |
+| ---------------------------------------------- | -------------------------------------------------------------------------- |
+| Sign in with Google, then `GET /api/v1/me`     | OAuth round trip, session, the refresh cookie                              |
+| Create a room type, then a room                | MySQL writes inside a transaction                                          |
+| Upload a room image                            | Filebase, and a server-generated object key                                |
+| Create a booking, approve it, read its history | Row locks, the state machine, immutable history                            |
+| Request an export, then download it            | The whole chain: outbox → Redis → Worker Thread → Filebase → presigned URL |
+| Open Gmail's Sent folder                       | Mail left the building                                                     |
+| `npm run ops:retention:prod -- --dry-run`      | Retention reads real data and deletes nothing                              |
+
+The export is the one worth showing: it is the only step that touches every component at
+once, and it is the reason the worker is a separate process.
+
+Sign in from the browser, not from Swagger — `/api/v1/auth/google` answers with a redirect
+to Google, and Swagger renders the response instead of following it. After the callback
+the browser lands back on `/api/docs` with the cookie set.
+
 ---
 
 # Part 1 - one-time setup
@@ -188,6 +238,9 @@ NOTIFICATION_QUEUE_PREFIX=hotel:prod:notifications
 REPORT_EXPORT_QUEUE_PREFIX=hotel:prod:reports
 RATE_LIMIT_REDIS_KEY_PREFIX=hotel:prod:rate
 
+# A deployed probe crosses a real network; the 1000ms default is sized for Compose.
+HEALTH_CHECK_TIMEOUT_MS=5000
+
 HOTEL_TIMEZONE=Asia/Ho_Chi_Minh
 
 # Off until a dry run has been read. docs/runbooks/retention.md has the sequence.
@@ -279,14 +332,15 @@ a partial migration becomes data loss, and that is a decision for a person.
 Railway - the service - **Deployments** - the failed one - **View logs**. Both processes
 log JSON, one object per line; the first error after a restart is almost always the answer.
 
-| What you see                                | What it means                                                    |
-| ------------------------------------------- | ---------------------------------------------------------------- |
-| `Environment validation failed for: X, Y`   | Those variables are missing from that service                    |
-| `exec format error`                         | An image built for one architecture; the publish job builds both |
-| Readiness `503`, MySQL unreachable          | The `MYSQL_*` references name a service not called `MySQL`       |
-| Uploads fail with `SignatureDoesNotMatch`   | `OBJECT_STORAGE_REGION` is not `auto`                            |
-| Mail fails with `invalid_grant`             | The Gmail refresh token was revoked; issue a new one             |
-| Never becomes ready, and no application log | The tag does not exist, or the package is still private          |
+| What you see                                | What it means                                                                                                                                                       |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Environment validation failed for: X, Y`   | Those variables are missing from that service                                                                                                                       |
+| `exec format error`                         | An image built for one architecture; the publish job builds both                                                                                                    |
+| Readiness `503`, `dependencies: ["mysql"]`  | Usually not the database. Raise `HEALTH_CHECK_TIMEOUT_MS` to 5000: the default bounds the first handshake at one second, which suits Compose and not a real network |
+| `MYSQL_HOST` still shows `${{MySQL...}}`    | The service is not named `MySQL`, so the reference cannot resolve                                                                                                   |
+| Uploads fail with `SignatureDoesNotMatch`   | `OBJECT_STORAGE_REGION` is not `auto`                                                                                                                               |
+| Mail fails with `invalid_grant`             | The Gmail refresh token was revoked; issue a new one                                                                                                                |
+| Never becomes ready, and no application log | The tag does not exist, or the package is still private                                                                                                             |
 
 ## Rolling back by hand
 

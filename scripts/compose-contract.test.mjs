@@ -16,10 +16,14 @@ const expectedImages = {
     'axllent/mailpit:v1.31.0@sha256:c96991d9bef73594c246d89ca81411d4e916f03e76a7d2d72fa2ab5dd3c9ce24',
 };
 
-test('pins the dependency-only Compose topology to reviewed images', () => {
+test('pins every third-party Compose image to a reviewed digest', () => {
+  // The application services joined this file in `P8-T02` and are deliberately not in
+  // `expectedImages`: they are built from the Dockerfile beside them, not pulled, so
+  // there is no digest to pin and pinning one would mean pinning the project to its own
+  // past.
   assert.deepEqual(
     Object.keys(compose.services).sort(),
-    Object.keys(expectedImages).sort(),
+    [...Object.keys(expectedImages), 'api', 'worker'].sort(),
   );
 
   for (const [serviceName, image] of Object.entries(expectedImages)) {
@@ -33,6 +37,44 @@ test('pins the dependency-only Compose topology to reviewed images', () => {
       ),
     );
   }
+});
+
+test('keeps the application behind a profile, on one image, waiting for its dependencies', () => {
+  for (const serviceName of ['api', 'worker']) {
+    const service = compose.services[serviceName];
+
+    // Behind a profile, so `docker compose up` still means "start the dependencies" for
+    // anybody debugging the application from their terminal, and does not take port 3000
+    // away from the process they are debugging.
+    assert.deepEqual(service.profiles, ['app']);
+
+    // One image name for both. Compose otherwise derives a name per service and builds
+    // the same context twice, which is two artifacts in a design whose entire argument is
+    // that there is one. Measured, not assumed: before this line the two containers ran
+    // `<project>-api` and `<project>-worker`.
+    assert.equal(service.image, 'hotel-management:local');
+    assert.equal(service.build.context, '.');
+
+    // `.env.example` is the floor and is committed; `.env` is the developer's override
+    // and may be absent. Order matters - the last file wins - and so does `required`.
+    assert.deepEqual(service.env_file, [
+      { path: '.env.example', required: true },
+      { path: '.env', required: false },
+    ]);
+
+    // Started only once every dependency answers, so a failed `up` is a failure rather
+    // than a container restarting behind a database that was not listening yet.
+    for (const dependency of ['mysql', 'redis', 'minio', 'mailpit']) {
+      assert.equal(service.depends_on[dependency].condition, 'service_healthy');
+    }
+  }
+
+  // The one line that makes "one artifact, two processes" true rather than intended.
+  assert.deepEqual(compose.services.worker.command, ['node', 'dist/worker']);
+
+  // The worker has no HTTP surface, so it declares no healthcheck. Asserted rather than
+  // left as an omission: a fabricated port to probe would report health it never checked.
+  assert.equal(compose.services.worker.healthcheck, undefined);
 });
 
 test('declares persistent volumes and disables external update checks', () => {

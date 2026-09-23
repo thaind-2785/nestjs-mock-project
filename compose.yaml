@@ -82,6 +82,97 @@ services:
       retries: 20
       start_period: 5s
 
+  # --- the application itself -------------------------------------------------
+  #
+  # Behind a profile, so `docker compose up` keeps meaning what it has meant for seven
+  # phases: start the dependencies, then run the application from the terminal with
+  # `npm run start:dev`. Without the profile, every developer who wanted a database
+  # would also get an API holding port 3000 against the one they are debugging.
+  #
+  # `docker compose --profile app up -d` is the whole stack, and it is the check that
+  # `OPS-01` asks for: the image built here is the image the deployment runs, so a
+  # failure that needs a container to reproduce is reproducible on a laptop.
+  api:
+    profiles: [app]
+    build:
+      context: .
+    # Named, and named the same as the worker below. Without this, Compose derives an
+    # image name per service and builds the identical context twice, producing
+    # `<project>-api` and `<project>-worker`: two artifacts where the whole argument for
+    # one Dockerfile was that there is one. They would drift the moment a build is not
+    # reproducible, which is exactly the failure a single image exists to prevent.
+    image: hotel-management:local
+    restart: unless-stopped
+    env_file:
+      # `.env.example` first, as the floor: it carries all 72 names with values that work
+      # against these very containers, so a fresh clone brings the stack up without anyone
+      # writing a file. `.env` then overrides whatever a developer actually set - it is
+      # usually short, because most variables have development defaults, and the image
+      # runs NODE_ENV=production where the schema is stricter and those defaults are gone.
+      # A missing `.env` is not an error; a missing `.env.example` would be, and it is
+      # committed.
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    environment:
+      # Inside the network the dependencies answer to their service names, whatever the
+      # host's .env says about reaching them from outside.
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      MAIL_SMTP_HOST: mailpit
+      MAIL_SMTP_PORT: 1025
+    ports:
+      - 127.0.0.1:${API_PORT:-3000}:3000
+    depends_on:
+      mysql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      mailpit: { condition: service_healthy }
+
+  worker:
+    profiles: [app]
+    build:
+      context: .
+    image: hotel-management:local
+    restart: unless-stopped
+    # The same image, a different command. This is the line that makes "one artifact,
+    # two processes" true rather than merely intended.
+    command: [node, dist/worker]
+    env_file:
+      # `.env.example` first, as the floor: it carries all 72 names with values that work
+      # against these very containers, so a fresh clone brings the stack up without anyone
+      # writing a file. `.env` then overrides whatever a developer actually set - it is
+      # usually short, because most variables have development defaults, and the image
+      # runs NODE_ENV=production where the schema is stricter and those defaults are gone.
+      # A missing `.env` is not an error; a missing `.env.example` would be, and it is
+      # committed.
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      MAIL_SMTP_HOST: mailpit
+      MAIL_SMTP_PORT: 1025
+    # No healthcheck, and the absence is deliberate rather than overlooked. The worker
+    # has no HTTP surface; the only honest check would be "the process is alive", which
+    # is what Docker already reports, and inventing a port to probe would be a check that
+    # proves less than it appears to. What it is doing is visible in its JSON logs and in
+    # the outbox and ledger rows it writes.
+    depends_on:
+      mysql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      mailpit: { condition: service_healthy }
+
 volumes:
   mysql_data:
   redis_data:

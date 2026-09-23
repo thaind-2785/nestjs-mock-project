@@ -44,7 +44,7 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:compose": "node --test scripts/compose-cli.test.mjs scripts/compose-contract.test.mjs",
-    "test:delivery": "node --test scripts/image-contract.test.mjs",
+    "test:delivery": "node --test scripts/image-contract.test.mjs scripts/production-compose-contract.test.mjs",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:integration": "jest --config ./test/jest-integration.json --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",

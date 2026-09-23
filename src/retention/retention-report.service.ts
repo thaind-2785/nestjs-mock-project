@@ -44,7 +44,7 @@ export class RetentionReportService {
       // the API is serving is a burst an operator did not ask for, and nothing here is
       // waiting on anything slow enough to be worth overlapping.
       const sample = await this.due.sample(
-        dataSource.manager,
+        dataSource,
         predicate,
         this.configuration.windows,
         this.configuration.run.statementTimeoutMs,

@@ -191,11 +191,16 @@ test('requires implementation evidence for active tools', () => {
 });
 
 test('requires implementation evidence for active observability', () => {
+  // Built by removing the evidence from a sink that is already active, rather than by
+  // promoting one that happens to be planned today. Naming a planned sink made this
+  // assertion a fact about the registry's current contents: the day that sink shipped,
+  // the test stopped checking the rule and started failing for having been fixed.
   const activeSink = structuredClone(loaded.config);
-  const applicationLogs = activeSink.observability.sinks.find(
-    (sink) => sink.id === 'application_json_logs',
+  const evidenced = activeSink.observability.sinks.find(
+    (sink) => sink.status === 'active' && sink.implementation_ref,
   );
-  applicationLogs.status = 'active';
+  assert.ok(evidenced, 'no active sink carries implementation evidence');
+  delete evidenced.implementation_ref;
   assert.ok(
     validate(activeSink).some((error) =>
       error.includes('is required for an active sink'),

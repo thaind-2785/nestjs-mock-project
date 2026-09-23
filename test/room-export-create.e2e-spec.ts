@@ -21,7 +21,7 @@ import { applicationEntities } from '../src/database/application-entities';
 import { createTypeOrmOptions } from '../src/database/database.options';
 import { AdminBootstrapService } from '../src/users/admin-bootstrap.service';
 import { applicationMigrations } from './fixtures/application-migrations';
-import { startE2eServer } from './fixtures/e2e-server';
+import { startE2eServer } from './fixtures/http-server';
 
 jest.setTimeout(30_000);
 

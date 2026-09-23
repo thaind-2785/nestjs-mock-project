@@ -411,6 +411,134 @@ describe('Phase 7 run ledger and singleton claim', () => {
     });
   });
 
+  describe('the ledger readings', () => {
+    it('does not count a deliberate handback as a process that died', async () => {
+      const claim = await claimOrThrow();
+      await runs.fail(
+        dataSource,
+        claim,
+        { errorCode: retentionErrorCodes.budgetSpent, retryable: true },
+        { auth_sessions: 10 },
+        maxAttempts,
+      );
+
+      // A handback expires its own lease and leaves the status alone, which is the exact
+      // row shape a crash leaves. Counting the shape rather than the intent made every
+      // ordinary budget-spent run look like a death in the reading the runbook tells an
+      // operator to watch.
+      const health = await runs.health(dataSource, 7);
+      expect(health.staleClaims).toBe(0);
+    });
+
+    it('counts a claim whose process died after taking over a handback', async () => {
+      const claim = await claimOrThrow();
+      await runs.fail(
+        dataSource,
+        claim,
+        { errorCode: retentionErrorCodes.budgetSpent, retryable: true },
+        { auth_sessions: 1 },
+        maxAttempts,
+      );
+      // Recovered, then killed. The window still carries the previous attempt's
+      // continuation code, so a reading that asked about the code rather than about the
+      // holder would have hidden this stale claim forever.
+      await claimOrThrow();
+      await expireLease();
+
+      expect((await runs.health(dataSource, 7)).staleClaims).toBe(1);
+    });
+
+    it('forgets a failure older than the horizon', async () => {
+      await insertFailedWindowDaysAgo(2, retentionErrorCodes.taskFailed);
+      await insertFailedWindowDaysAgo(30, retentionErrorCodes.taskFailed);
+
+      // Nothing rewrites a FAILED row, so an unscoped count fires forever - including
+      // long after the cause is fixed, which is how an alert stops being read.
+      expect((await runs.health(dataSource, 7)).failedWindows).toBe(1);
+    });
+
+    it('does not alert on a window the day simply rolled over', async () => {
+      await insertFailedWindowDaysAgo(1, retentionErrorCodes.stopped);
+
+      // Closed because nothing will continue it, but it is not a crash: the next window
+      // redoes the work, and firing for a week over that is what makes the reading
+      // useless.
+      expect((await runs.health(dataSource, 7)).failedWindows).toBe(0);
+    });
+
+    it('closes a window left claimed by an earlier day', async () => {
+      await insertClaimedWindowDaysAgo(1);
+      const today = localDayStart(await databaseNow(), 'Asia/Ho_Chi_Minh');
+
+      expect(await runs.closeAbandonedBefore(dataSource, today)).toBe(1);
+      const rows: Array<Record<string, unknown>> = await dataSource.query(
+        'SELECT status, last_error_code FROM scheduled_runs',
+      );
+      expect(String(rows[0].status)).toBe(ScheduledRunStatus.Failed);
+      expect(String(rows[0].last_error_code)).toBe(retentionErrorCodes.stopped);
+    });
+  });
+
+  describe('the attempt budget', () => {
+    it('does not charge a continuation that deleted something', async () => {
+      const first = await claimOrThrow();
+      await runs.fail(
+        dataSource,
+        first,
+        { errorCode: retentionErrorCodes.budgetSpent, retryable: true },
+        { auth_sessions: 400 },
+        maxAttempts,
+      );
+
+      const second = await claimOrThrow();
+      // `attempts` bounds retries of a broken task. A backlog that is merely large would
+      // otherwise give up after three continuations - about fifteen minutes of honest
+      // work - and need a human.
+      expect(second.attempt).toBe(1);
+    });
+
+    it('charges a continuation that deleted nothing', async () => {
+      const first = await claimOrThrow();
+      await runs.fail(
+        dataSource,
+        first,
+        { errorCode: retentionErrorCodes.storageIncomplete, retryable: true },
+        {},
+        maxAttempts,
+      );
+
+      // A window making no progress is not continuing. Without this, a task failing
+      // against a dead provider is reclaimed every tick forever and never reaches FAILED.
+      expect((await claimOrThrow()).attempt).toBe(2);
+    });
+
+    it('asks about this attempt, not about everything the window ever deleted', async () => {
+      // The counts column accumulates by design, so a progress test that reads it asks
+      // whether the window has *ever* deleted anything - which stays true forever after
+      // the first success, defeating the budget for exactly the task that needs it.
+      const first = await claimOrThrow();
+      await runs.fail(
+        dataSource,
+        first,
+        { errorCode: retentionErrorCodes.storageIncomplete, retryable: true },
+        { auth_sessions: 5 },
+        maxAttempts,
+      );
+      const second = await claimOrThrow();
+      expect(second.attempt).toBe(1);
+
+      // Second attempt deletes nothing: the window's lifetime still says 5.
+      await runs.fail(
+        dataSource,
+        second,
+        { errorCode: retentionErrorCodes.storageIncomplete, retryable: true },
+        {},
+        maxAttempts,
+      );
+      expect((await claimOrThrow()).attempt).toBe(2);
+    });
+  });
+
   describe('outcomes', () => {
     it('records what a successful run deleted, per table', async () => {
       const claim = await claimOrThrow();
@@ -494,10 +622,12 @@ describe('Phase 7 run ledger and singleton claim', () => {
           [taskName, window],
         );
       expect(count_type).toBe('INTEGER');
-      // And the reason the window needed a second attempt survives its success, so one
-      // row still tells the whole story.
       expect(row.status).toBe(ScheduledRunStatus.Succeeded);
-      expect(row.last_error_code).toBe(retentionErrorCodes.statementTimeout);
+      // The attempt count is what survives to say the window needed a second try. The
+      // error code does not: it describes the claim that is live, and the takeover
+      // cleared it - which is what lets the stale-claim reading tell a handback from a
+      // process that died, since both leave the same row shape.
+      expect(row.last_error_code).toBeNull();
       expect(row.attempts).toBe(2);
     });
 
@@ -547,6 +677,41 @@ describe('Phase 7 run ledger and singleton claim', () => {
       expect(row.last_error_code).toBe(retentionErrorCodes.taskFailed);
     });
   });
+
+  async function insertFailedWindowDaysAgo(
+    days: number,
+    errorCode: string,
+  ): Promise<void> {
+    await dataSource.query(
+      `INSERT INTO scheduled_runs
+         (id, task_name, scheduled_for, status, attempts, started_at, finished_at,
+          last_error_code)
+       VALUES (?, ?, NOW(6) - INTERVAL ? DAY, 'FAILED', 3, NOW(6), NOW(6), ?)`,
+      [
+        randomUUID(),
+        `task-${days}-${randomUUID().slice(0, 8)}`,
+        days,
+        errorCode,
+      ],
+    );
+  }
+
+  async function insertClaimedWindowDaysAgo(days: number): Promise<void> {
+    await dataSource.query(
+      `INSERT INTO scheduled_runs
+         (id, task_name, scheduled_for, status, locked_by, lock_expires_at, attempts,
+          started_at, last_error_code)
+       VALUES (?, ?, NOW(6) - INTERVAL ? DAY, 'CLAIMED', ?, NOW(6) - INTERVAL 1 HOUR,
+               1, NOW(6), ?)`,
+      [
+        randomUUID(),
+        `task-old-${randomUUID().slice(0, 8)}`,
+        days,
+        randomUUID(),
+        retentionErrorCodes.budgetSpent,
+      ],
+    );
+  }
 
   async function claimOrThrow() {
     const result = await runs.claim(dataSource, {

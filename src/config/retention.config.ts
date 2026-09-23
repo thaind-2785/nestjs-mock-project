@@ -57,6 +57,51 @@ const runBudgetMs = 300_000;
 const leaseSafetyMarginMs = 30_000;
 
 /**
+ * How long shutdown waits for retention.
+ *
+ * One batch, not one run. A run may keep going for its whole budget, and waiting for
+ * that on every deploy would make the worker's drain five minutes per task; instead the
+ * run is interruptible - it stops after the batch in flight and hands the window back,
+ * which is the same path a budget-truncated run already takes. So this only has to cover
+ * the slowest single batch: one bounded claim read plus one bounded provider call.
+ */
+const shutdownDrainMs = 90_000;
+
+/**
+ * How often the backlog reading is written.
+ *
+ * A minute, matching the tick: the readings worth having are the ones a stopped
+ * scheduler produces, so sampling on the run's schedule would go quiet exactly when
+ * something is wrong.
+ */
+const backlogSampleIntervalMs = 60_000;
+
+/**
+ * How long a delete inside a chain transaction may wait for a lock.
+ *
+ * `MAX_EXECUTION_TIME` bounds reads and not writes, so this is what actually bounds a
+ * `DELETE`. MySQL's default is fifty seconds per statement, which puts a three-step chain
+ * at two and a half minutes - past the drain, which is how a batch could survive shutdown
+ * with the window still claimed under a live lease.
+ */
+const lockWaitSeconds = 10;
+
+/** The longest chain: send attempts, deliveries, then the event. */
+const chainSteps = 3;
+
+const millisecondsPerSecond = 1_000;
+
+/**
+ * How far back the failed-window reading looks.
+ *
+ * It needs a horizon because nothing ever rewrites a `FAILED` row: an unscoped count
+ * latches and fires forever, including long after the cause is fixed, which is how an
+ * alert stops being read. A week is long enough that a failure cannot be missed over a
+ * weekend and short enough that a fixed one stops shouting.
+ */
+const recentFailureWindowDays = 7;
+
+/**
  * How long a claimed run stays the claimer's before another replica may take it over.
  *
  * Generous against the worst case above rather than tight against the common one: the
@@ -103,6 +148,10 @@ const hoursPerDay = 24;
 
 export interface RetentionRunConfiguration {
   tickIntervalMs: number;
+  shutdownDrainMs: number;
+  backlogSampleIntervalMs: number;
+  lockWaitSeconds: number;
+  recentFailureWindowDays: number;
   batchSize: number;
   statementTimeoutMs: number;
   runBudgetMs: number;
@@ -119,6 +168,11 @@ export interface RetentionWindowConfiguration {
 }
 
 export interface RetentionConfiguration {
+  /**
+   * Read in the worker, where it gates the scheduler. The operator command ignores it:
+   * running retention by hand is what the rollout does before this is ever turned on.
+   */
+  enabled: boolean;
   run: RetentionRunConfiguration;
   windows: RetentionWindowConfiguration;
 }
@@ -127,8 +181,13 @@ export function createRetentionConfiguration(
   environment: EnvironmentVariables,
 ): RetentionConfiguration {
   const configuration: RetentionConfiguration = {
+    enabled: environment.RETENTION_ENABLED,
     run: {
       tickIntervalMs,
+      shutdownDrainMs,
+      backlogSampleIntervalMs,
+      lockWaitSeconds,
+      recentFailureWindowDays,
       batchSize,
       statementTimeoutMs,
       runBudgetMs,
@@ -185,6 +244,19 @@ export function assertRetentionBounds(
   // so every run would stop having done nothing and the backlog would only grow.
   if (run.runBudgetMs < run.statementTimeoutMs) {
     unbounded.push('run.runBudgetMs');
+  }
+  // The drain has to cover the slowest batch, and the slowest batch is a chain: one
+  // bounded claim read, then a transaction of three deletes that cannot be interrupted
+  // between its steps, because a crash there would orphan rows nothing can find. So the
+  // bound is the read plus the chain's own lock waits plus slack. Checking it against a
+  // statement budget described no batch this code actually runs.
+  if (
+    run.shutdownDrainMs <
+    run.statementTimeoutMs +
+      chainSteps * run.lockWaitSeconds * millisecondsPerSecond +
+      leaseSafetyMarginMs
+  ) {
+    unbounded.push('run.shutdownDrainMs');
   }
   // Zero attempts is a task that can never run; it would look like a task with nothing
   // due rather than like a misconfiguration.

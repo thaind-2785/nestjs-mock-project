@@ -38,8 +38,19 @@ export class RetentionRunService {
     private readonly configuration: ConfigType<typeof retentionConfig>,
   ) {}
 
-  /** Every task, in the order that puts the ones with no dependents first. */
-  async runAll(batchSize?: number): Promise<RetentionRunOutcome[]> {
+  /**
+   * Every task, in the order that puts the ones with no dependents first.
+   *
+   * `shouldStop` is how shutdown gets out without abandoning anything. Asked between
+   * tasks and between batches, never mid-statement, so the worst a drain waits for is
+   * one batch - and whatever was left is handed back as incomplete rather than recorded
+   * as done. Waiting for a whole run instead would make the worker's drain five minutes
+   * per task on every deploy.
+   */
+  async runAll(
+    batchSize?: number,
+    shouldStop?: () => boolean,
+  ): Promise<RetentionRunOutcome[]> {
     const dataSource = await this.databaseConnection.ensureInitialized();
     // Resolved once for the whole run. Resolving it per task meant a run that started at
     // 23:58 and spent two minutes on the first task claimed day D for the first two and
@@ -48,14 +59,32 @@ export class RetentionRunService {
     // reporting success.
     const scheduledFor = await this.currentWindow(dataSource);
 
+    // Anything left claimed from an earlier day is nobody's: a run only ever claims the
+    // current window, so a continuation that did not get reclaimed before the local day
+    // rolled over would sit there forever with its work silently unowned.
+    const closed = await this.runs.closeAbandonedBefore(
+      dataSource,
+      scheduledFor,
+    );
+    if (closed > 0) {
+      this.logger.warn({
+        event: 'retention_windows_abandoned',
+        closed,
+        before: scheduledFor.toISOString(),
+      });
+    }
+
     const outcomes: RetentionRunOutcome[] = [];
     for (const taskName of retentionTaskNames) {
+      if (shouldStop?.()) break;
       try {
         // Serially, and one task's failure must not stop the rest: a full bucket must
         // not prevent three empty ones from draining. The guard is here rather than
         // inside `runTask` because the parts before its own `try` - the clock read and
         // the claim - can throw too, and an unguarded push would take the loop with it.
-        outcomes.push(await this.runTask(taskName, batchSize, scheduledFor));
+        outcomes.push(
+          await this.runTask(taskName, batchSize, scheduledFor, shouldStop),
+        );
       } catch (error) {
         const errorCode = classify(error);
         this.logger.error({
@@ -82,6 +111,7 @@ export class RetentionRunService {
     taskName: RetentionTaskName,
     batchSize?: number,
     window?: Date,
+    shouldStop?: () => boolean,
   ): Promise<RetentionRunOutcome> {
     const dataSource = await this.databaseConnection.ensureInitialized();
     const { run } = this.configuration;
@@ -116,6 +146,7 @@ export class RetentionRunService {
     const counts: Record<string, number> = {};
     let batches = 0;
     let budgetSpent = false;
+    let interrupted = false;
     let retryableFailures = 0;
     // The process clock, and the only place in this phase where one decides anything.
     // It is measuring elapsed work rather than naming an instant, so there is no second
@@ -129,6 +160,11 @@ export class RetentionRunService {
           taskName,
           size,
           deadline,
+          // Passed in, not only consulted between batches. A batch is a loop of bounded
+          // provider calls, and one that cannot be interrupted outlives the drain - the
+          // process then exits non-zero with the window still claimed under a live lease,
+          // unrecoverable by any replica for its full ten minutes.
+          () => shouldStop?.() ?? false,
         );
         batches += 1;
         retryableFailures += outcome.retryableFailures ?? 0;
@@ -136,6 +172,10 @@ export class RetentionRunService {
           counts[table] = (counts[table] ?? 0) + removed;
         }
         if (!outcome.moreWaiting) break;
+        if (shouldStop?.()) {
+          interrupted = true;
+          break;
+        }
         if (Date.now() >= deadline) {
           budgetSpent = true;
           break;
@@ -194,11 +234,13 @@ export class RetentionRunService {
     // for anything larger than one budget, and the ledger would report SUCCEEDED every
     // night while the backlog grew. Handing the window back instead reuses the retry
     // path: the next run continues it, and the attempt budget still bounds the day.
-    const incomplete = budgetSpent || retryableFailures > 0;
+    const incomplete = budgetSpent || interrupted || retryableFailures > 0;
     if (incomplete) {
-      const errorCode = budgetSpent
-        ? retentionErrorCodes.budgetSpent
-        : retentionErrorCodes.storageIncomplete;
+      const errorCode = interrupted
+        ? retentionErrorCodes.shutdown
+        : budgetSpent
+          ? retentionErrorCodes.budgetSpent
+          : retentionErrorCodes.storageIncomplete;
       const handedBack = await this.runs.fail(
         dataSource,
         claim.claim,
@@ -213,6 +255,7 @@ export class RetentionRunService {
         attempt: claim.claim.attempt,
         batches,
         budgetSpent,
+        interrupted,
         retryableFailures,
         errorCode,
         recorded: handedBack,

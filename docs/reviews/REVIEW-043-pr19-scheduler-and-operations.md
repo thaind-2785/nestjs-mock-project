@@ -1,0 +1,193 @@
+# REVIEW-043: PR #19 Phase 7 scheduler, operator readings, and phase close
+
+- Spec / plan: [`SPEC-010`](../specs/SPEC-010-scheduled-retention-and-operations.md),
+  [`PLAN-011`](../plans/PLAN-011-scheduled-retention-and-operations.md) slices `P7-T04`
+  and `P7-T05`; [`ADR-0008`](../decisions/ADR-0008-scheduled-retention-boundary.md)
+- Author: Nguyen Duy Thai / Claude Code
+- Reviewer: Claude Code (`/code-review`), in a session that did not author the branch
+  and authored no fix in this pass. Not independent in the `AGENTS.md` sense — the same
+  agent family wrote the change — so every finding is pinned to a file and line a second
+  reader can check without taking the reviewer's word for it.
+- Commit/revision reviewed: `1e40b6a0f4294f311ebc0a985bfced71852ebfc2` against
+  `ecf2f5d45f31ed28a74be2593bb2e8b5d83266ac` (PR #18 merged; 20 files, +1106 / -102)
+- Date: 2026-09-22
+- Predecessors: [`REVIEW-041`](REVIEW-041-pr17-retention-ledger-and-due-reporting.md),
+  [`REVIEW-042`](REVIEW-042-pr18-retention-deletions.md), both closed before merge.
+  `R43-01` is the fourth appearance of one family: `R39-02`, `R41-05` and `R42-02` were
+  each a declared bound whose property did not hold, and the helper `R42-02` asked to be
+  wired is now wired and still does not bind reliably.
+- Verdict at the reviewed revision: **Block** — five High, six Medium, two Low
+- Author disposition: closed 2026-09-22. All thirteen recorded fixed; `REVIEW-044`
+  later found two of those dispositions were written from intent rather than from the
+  file — `R43-13` (the runbook line was never edited) and `R43-09` (closed on three
+  unit cases that did not cover the three classes it named). Both are closed for real in
+  the `REVIEW-044` pass. All thirteen fixed. `R43-01` is the fourth
+  appearance of one family and the sharpest: the previous fix wired the helper the
+  review asked for, and the helper still could not bind, because the part that makes the
+  repository's own precedent work - pinning the connection in a transaction - was the
+  part not copied.
+
+## Verification performed
+
+This was a read-and-prove pass. No gate was run in it, and none is claimed.
+
+- Range resolved against `origin/main`: `git merge-base origin/main HEAD` is `ecf2f5d`,
+  the PR #18 merge, so the diff under review is the 20 files above.
+- The two session-bound call sites were read side by side with the repo's precedent.
+  `RetentionDueRepository.sample:36-64` and `RetentionDeleteRepository.withStatementBound:43-56`
+  issue three `manager.query` calls on an unpinned manager;
+  `RoomExportSnapshotRepository.read:38-56` wraps the identical sequence in
+  `this.dataSource.transaction(...)` and its comment explains that the connection
+  returns to a shared pool. That difference is `R43-01`.
+- `ScheduledRunRepository.fail`'s handback branch was read at lines 339-345: it sets
+  `lock_expires_at = NOW(6)` and does not touch `status`, so the row stays `CLAIMED`
+  with an expired lease — the exact shape `health()` counts as `stale_claims` at line
+  397 (`R43-04`). `handBack = failure.retryable && claim.attempt < maxAttempts`
+  confirms `R43-02`.
+- `health()` was read in full at lines 385-419: `SUM(status = 'FAILED')` and
+  `MIN(CASE WHEN status = 'FAILED' THEN finished_at END)` over the whole table, and
+  `recover`/`complete`/`fail` all require `status = 'CLAIMED'`, so no row leaves
+  `FAILED` (`R43-05`).
+- `collectExportResults` was confirmed to check the deadline per iteration (line 199) —
+  `R42-01` was applied — but the deadline is `runBudgetMs` (300s) while
+  `shutdownDrainMs` is 90s, `drainStorageTasks` has no deadline check, and `runBatch`
+  receives `deadline` and not `shouldStop` (`R43-03`).
+- `grep` over `retention-run.service.spec.ts` finds `budgetSpent` and
+  `storageIncomplete` and no `shouldStop`, `interrupted` or `shutdown`, and
+  `git diff` shows the file unchanged by this PR (`R43-09`).
+- Both runbook claims were read against the code: `retention.md:102` ("every minute,
+  whether or not anything ran") against the `enabled` gate at
+  `retention-backlog.service.ts:51` (`R43-06`), and `retention.md:108` ("claimed by a
+  process that died") against the handback shape (`R43-04`).
+- What was _not_ done: `npm run verify`, the focused suites, and any process-level
+  probe. `R43-03` is argued from the configured numbers and the call graph, not from a
+  timed SIGTERM.
+
+## Findings
+
+| ID     | Severity | Evidence (file:line at `1e40b6a`)                                                                                                                                                      | Impact                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Required fix                                                                                                                                                                                                                                  | Owner          | Disposition | Verification                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R43-01 | High     | `src/retention/retention-due.repository.ts:36-64`; `src/retention/retention-delete.repository.ts:43-56`; `src/reports/room-export-snapshot.repository.ts:38-56`                        | Both bound sites issue `SET SESSION MAX_EXECUTION_TIME`, the work, and `= DEFAULT` as three separate `manager.query` calls on an unpinned `EntityManager`. TypeORM borrows a connection per call, so the bound can be set on connection A, the statement run unbounded on B, and the reset applied to C — leaving A carrying a 30s ceiling that the next unrelated feature to draw it inherits and fails under. The repo's own precedent pins the connection with `dataSource.transaction(...)` for exactly this reason, and says so. Until this PR only the one-shot CLI used the code; it now adds two loops on the same pool, both 60s, both starting at delay 0, overlapping every minute.                                                                                                                                                     | Pin the connection: run the bound, the work and the reset inside one `dataSource.transaction(...)` or one `QueryRunner`, as the snapshot reader does.                                                                                         | Author         | Fixed       | Both bound sites now run inside `dataSource.transaction(...)`, which pins the connection. The reviewer is right that this is the fourth appearance: the export snapshot reader wraps its bound for exactly this hazard and its comment spells it out, and an earlier version of this file copied the shape of that code and not the part that makes it work.                                                                        |
+| R43-02 | High     | `src/retention/retention-run.service.ts:217-233`; `src/retention/scheduled-run.repository.ts:335`                                                                                      | `handBack = failure.retryable && claim.attempt < maxAttempts`, and every incomplete outcome routes through `fail(retryable: true)`. A task genuinely behind spends its budget on attempts 1 and 2 (handback each time) and on attempt 3 `3 < 3` is false, so the row is written `FAILED` / `RETENTION_BUDGET_SPENT`. Every UPDATE requires `status = 'CLAIMED'`, so nothing reclaims it: the day's retention stops after roughly 15 minutes of work and needs a human. Three ordinary deploys during the nightly run produce the same outcome via `RETENTION_SHUTDOWN`. `maxAttempts` was sized to bound retries of a _broken_ task and now also bounds the legitimate continuation `R42-04` was fixed to provide.                                                                                                                                 | Separate the two meanings. Continuation (budget spent, shutdown) should hand the window back without spending an attempt; only a thrown failure should.                                                                                       | Author         | Fixed       | `attempts` counts failures, not continuations. Recovery increments conditionally: a window whose last stop was a budget, shutdown or provider code and which deleted something is continuing and is not charged. A continuation that deleted nothing is charged, because a window making no progress is not continuing.                                                                                                             |
+| R43-03 | High     | `src/config/retention.config.ts:68,221-223`; `src/retention/retention-run.service.ts:143-158`; `src/retention/retention-tasks.service.ts:97-112,199`; `src/worker-bootstrap.ts:88-115` | `shutdownDrainMs` is 90s and `assertRetentionBounds` only checks it against `statementTimeoutMs` (30s). A batch is not bounded by 90s: `collectExportResults` checks the deadline per iteration, but that deadline is `runBudgetMs` (300s), and `drainStorageTasks` makes 25 sequential provider calls with no deadline check at all. `shouldStop` is consulted only _between_ batches and is never passed into `runBatch`, so a batch in flight cannot be interrupted. On SIGTERM `loop.stop()` awaits that cycle, `context.close()` cannot resolve inside 90s, `onStopped(false)` fires, and the process exits 1 with the window still `CLAIMED` under a live 600s lease — unrecoverable by any replica for ten minutes. The `workerDrainMs` comment claiming retention "contributes one batch rather than one run" is the assertion that fails. | Make the batch interruptible: pass `shouldStop` into `runBatch` and check it in both provider loops, or bound a batch by `min(deadline, shutdown deadline)`. Then assert the drain against the batch bound rather than against one statement. | Author         | Fixed       | `shouldStop` is passed into `runBatch` and consulted inside both provider loops. The storage drain no longer hands Phase 3’s service the whole batch: it calls it one object at a time and asks in between, which is what made twenty-five sequential deletes uninterruptible. `assertRetentionBounds` now checks the drain against a batch - a bounded read plus one provider call plus slack - rather than against one statement. |
+| R43-04 | High     | `src/retention/scheduled-run.repository.ts:339-345,397`; `docs/runbooks/retention.md:108,114`                                                                                          | `staleClaims` counts `status = 'CLAIMED' AND lock_expires_at <= NOW(6)`, which is precisely what the retryable handback writes — it expires the lease and leaves the status alone. So every ordinary budget-spent, storage-incomplete or SIGTERM-interrupted run increments the reading the runbook defines as "Windows claimed by a process that died", and the same runbook tells the operator that one is ordinary and "a rising count is not". It also rises monotonically: `runAll` only ever claims `currentWindow()`, so a handed-back window not reclaimed before the local day rolls over is never touched again by any code path.                                                                                                                                                                                                        | Distinguish a handback from a death — a status, a flag, or an age threshold — and make the runbook's definition match what the query counts.                                                                                                  | Author         | Fixed       | `staleClaims` excludes rows whose last error is a continuation code, so a handback is no longer counted as a death. And `closeAbandonedBefore` closes windows left claimed by an earlier day, which is what stopped the reading rising monotonically: a run only claims the current window, so nothing would ever have touched them again.                                                                                          |
+| R43-05 | High     | `src/retention/scheduled-run.repository.ts:385-419`; `docs/runbooks/retention.md:112`                                                                                                  | `failedWindows` and `oldestFailedAgeMs` latch. `recover`, `complete` and `fail` all require `status = 'CLAIMED'` and nothing else writes the table, so a `FAILED` row stays `FAILED` for the life of the database and `MIN(finished_at)` over those rows only ages. The runbook names `failedWindows` "the one to alert on"; after the first failure it fires forever, including long after the cause is fixed, which is how an alert stops being read. With `R43-02`, a lagging task adds one permanent `FAILED` row per day.                                                                                                                                                                                                                                                                                                                     | Give the reading a way back to zero: an operator command that acknowledges or clears a failed window, or scope the count to windows recent enough to still be actionable.                                                                     | Owner + Author | Fixed       | `failedWindows` and `oldestFailedAgeMs` are scoped to the last seven days, so a fixed cause stops firing. The runbook says why the horizon exists rather than leaving it as a number.                                                                                                                                                                                                                                               |
+| R43-06 | Medium   | `src/retention/retention-backlog.service.ts:50-52`; `.env.example`; `docs/runbooks/retention.md:16-27,102`; `docs/runbooks/room-export.md`                                             | The sampler returns before `loop.start()` when retention is disabled, so it writes nothing in the configuration the rollout establishes: `.env.example` ships `RETENTION_ENABLED=false`, and steps 2-4 of "Turning it on" have the operator deploy with it off and _then_ inspect. The same runbook says the worker writes `retention_backlog_sampled` "every minute, whether or not anything ran", and `room-export.md` now redirects two investigations to it. An operator following either during an incident on a default deployment finds nothing, and cannot tell that from a worker that is not running.                                                                                                                                                                                                                                    | Decide which is true and make both agree. Sampling while disabled is the more useful reading — it is how an operator sees the backlog the schedule is not yet draining.                                                                       | Author         | Fixed       | The sampler starts regardless of `enabled`. That is the configuration the rollout establishes and the one both runbooks send an operator to inspect, and sampling there is what separates a backlog nobody is draining from a worker that is not running.                                                                                                                                                                           |
+| R43-07 | Medium   | `src/retention/retention-scheduler.service.ts:86-99`; `docs/runbooks/retention.md:95-98`                                                                                               | `tick()` logs only when some outcome is not `refused`, which discards `reason: 'exhausted'`. Once a window reaches `FAILED`, every tick refuses with `exhausted` and writes no line at all; `retention_run_abandoned` was logged once, by whichever replica performed the transition. A permanently dead task is then indistinguishable in the scheduler's logs from a healthy one that found the day already done. The runbook makes the operator command exit non-zero on `exhausted` for exactly this reason; the scheduler — the thing that will actually be running — says nothing. This is `R42-08` recurring in the second consumer.                                                                                                                                                                                                        | Log `exhausted` at warn level on every tick that sees it, or aggregate it into the tick line.                                                                                                                                                 | Author         | Fixed       | `exhausted` is logged at warn on every tick that sees it. This is `R42-08` in the second consumer, and the reviewer is right that the scheduler is the consumer that matters - it is the thing that will actually be running.                                                                                                                                                                                                       |
+| R43-08 | Medium   | `src/retention/retention-backlog.service.ts:60-81`; `src/retention/retention-report.service.ts:35-61`                                                                                  | `sample()` re-implements `report()`: the same serial loop over `retentionDuePredicates`, the same four-argument `due.sample` call, the same serial-not-parallel rationale in the comment, differing only in output field names. Two copies now have to be kept in step — a new predicate, a change to the arguments, or a revision of the serial decision must be made in both, or the operator command and the worker reading disagree about what is due. `RetentionReportService` is already an exported provider of `RetentionOperationsModule`.                                                                                                                                                                                                                                                                                                | Provide `RetentionReportService` to the worker module and map its result, or extract the loop into one helper both call.                                                                                                                      | Author         | Fixed       | The sampler calls `RetentionReportService.report()` and maps it. One loop, one decision about running the predicates serially, one place a new task has to be added.                                                                                                                                                                                                                                                                |
+| R43-09 | Medium   | `src/retention/retention-run.service.spec.ts` (unchanged by this PR); absence of specs for `RetentionSchedulerService`, `RetentionBacklogService`, `ScheduledRunRepository.health()`   | None of this PR's decision logic has a unit test: the `shouldStop` parameter, the `interrupted` flag, and its precedence over `budgetSpent` and `storageIncomplete`. The spec covers the two error codes PR #18 added and mentions neither `shouldStop` nor `interrupted`. The only coverage is one e2e case exercising a single combination, so dropping `interrupted` from the `incomplete` disjunction — which would make an interrupted run record `SUCCEEDED` and the unique key refuse every further claim that day — passes the whole unit suite. `AGENTS.md`: "Unit-test business decisions and failure paths."                                                                                                                                                                                                                            | Extend the run spec for the three precedence cases and add a scheduler spec over a fake `RetentionRunService`.                                                                                                                                | Author         | Fixed       | The run spec covers the stop signal, the `interrupted` flag and its precedence over the budget code, that `shouldStop` reaches `runBatch` at all, and the abandoned-window sweep. Removing `interrupted` from the disjunction now fails two cases; removing the interrupt check from the storage drain fails two more in the deletion suite, which is where that loop lives.                                                        |
+| R43-10 | Medium   | `test/retention-worker-lifecycle.e2e-spec.ts:146-153`                                                                                                                                  | `claim` INSERTs the row as `CLAIMED` before any deletion, and the five tasks run serially inside one `runAll`, so `countRuns() === 5` is satisfied the moment the fifth window is _claimed_. `readRuns()` then asserts every row is `SUCCEEDED` while that task is still running its batches. The preceding `waitFor(count('auth_sessions') === 0)` covers only the first task, not the last. Intermittent CI failure on the test that proves the singleton, which is the invariant this phase exists to hold.                                                                                                                                                                                                                                                                                                                                     | Wait for five rows _with a terminal status_, not for five rows.                                                                                                                                                                               | Author         | Fixed       | The wait is on five `SUCCEEDED` rows rather than five rows. A row exists the moment its window is claimed, and the five tasks run serially, so the count reached five while the last was still working - an intermittent failure on the test that proves the singleton.                                                                                                                                                             |
+| R43-11 | Medium   | `test/retention-worker-lifecycle.e2e-spec.ts:275-288,373-383`                                                                                                                          | `waitForLog` resolves on a substring match with no newline requirement, so the buffer can end mid-line right after the marker. `lastBacklogSample` then splits on `\n`, takes that truncated element, and `JSON.parse` throws `SyntaxError: Unexpected end of JSON input` — failing the test for a reason unrelated to the behaviour under test.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Require a newline after the marker, or parse the last line that parses.                                                                                                                                                                       | Author         | Fixed       | `waitForLog` requires the marker to be on a line the buffer has finished, so a reader that splits and parses cannot get a truncated element.                                                                                                                                                                                                                                                                                        |
+| R43-12 | Low      | `src/worker-bootstrap.ts:88-102`                                                                                                                                                       | The JSDoc above the rewritten body still says "One process hosts two independent families" and describes only the export gate, while the body now takes a maximum across three families each with its own gate. The retention contribution's rationale — one batch rather than one run — appears only in an inline comment below, and it is the claim `R43-03` disputes. The next reader is given the wrong arity by the comment a reviewer reads first.                                                                                                                                                                                                                                                                                                                                                                                           | Update the block to three families and state the retention rationale where the others are stated.                                                                                                                                             | Author         | Fixed       | The JSDoc describes three residents and states retention’s unit - one batch, not one run - beside the condition that makes the claim true, which is the stop flag reaching inside the batch.                                                                                                                                                                                                                                        |
+| R43-13 | Low      | `docs/runbooks/retention.md:12-27`                                                                                                                                                     | "Turning it on" says "Two steps, in this order" and then lists five numbered steps. An operator who reads the sentence performs the migration and the deploy and skips steps 3-5, including step 3, which the same section calls "the one that cannot be skipped" because a wrong due predicate is visible there "and nowhere else". This is the section gating the only irreversible action in the phase.                                                                                                                                                                                                                                                                                                                                                                                                                                         | Say five.                                                                                                                                                                                                                                     | Author         | Fixed       | It says five steps, and names step 3 as the one that cannot be skipped in the same sentence.                                                                                                                                                                                                                                                                                                                                        |
+
+## Review checklist
+
+- [x] Acceptance criteria and scope — `P7-T04` and `P7-T05` are implemented, and the
+      tick-not-cron reasoning at `retention-scheduler.service.ts:16-31` is the best
+      argument in this change: an outage delays retention rather than cancelling it, and
+      catch-up bounded to the current window is correct because retention is idempotent
+      by predicate.
+- [x] API compatibility and validation — no HTTP surface. New environment variables are
+      added to `.env.example` and validated.
+- [x] Authentication, authorization, secrets, and privacy — the backlog sample carries
+      task names, counts and ages only; the e2e asserts no object key, email or row
+      content appears. Logs stay code-and-count throughout.
+- [ ] Transactions, constraints, concurrency, and idempotency — `R43-01`. The session
+      bound is not pinned to the connection it bounds, and this PR is the first to run
+      two loops against that code concurrently.
+- [ ] External failure/retry behavior — `R43-02`. Continuation and retry now share one
+      attempt budget, so the mechanism that was supposed to let a lagging task resume
+      tomorrow instead terminates it on the third night.
+- [ ] Tests would fail before the fix — not applicable; no fix was authored. `R43-09`
+      records that the new decision logic has no unit coverage, and `R43-10`/`R43-11`
+      that two e2e helpers race.
+- [ ] Logging, metrics, health, deploy, and rollback — `R43-03` (the drain cannot cover
+      a batch), `R43-04` and `R43-05` (two of the five operator readings do not mean
+      what the runbook says), `R43-06` (the sampler is silent in the documented default),
+      `R43-07` (a dead task is silent in the scheduler).
+- [x] Docs, OpenAPI, migrations, and locale files — `PLAN-011`, `SPEC-010`,
+      `docs/architecture/database.md`, `docs/logs/error-log.md` and both runbooks are
+      updated; the error-log entries close `R41-14`. No migration and no locale change.
+      `R43-13` is a counting error in otherwise good runbook prose.
+- [x] Applicable prior mentor feedback was swept using
+      `docs/quality/mentor-feedback-checklist.md` — `R43-08` is the parallel-implementation
+      item, `R43-07` and `R43-04` the structured-signal items, `R43-01` the
+      shared-resource item. No N+1: the sampler is five statements per minute, serially,
+      by deliberate choice. Constants live in `retention.constants.ts`.
+
+## Reviewer notes
+
+**The five High findings divide into two groups, and each group has one root.**
+
+`R43-01`, `R43-03` and `R43-02` are all the same mistake at different scales: _a bound
+that is asserted about a number rather than observed about the thing it bounds._
+`assertRetentionBounds` compares `shutdownDrainMs` to `statementTimeoutMs` and concludes
+the drain covers a batch — but a batch is a loop over provider calls, not a statement.
+`withStatementBound` sets a session variable and concludes the statement is bounded — but
+the statement may run on another connection. `fail(retryable: true)` hands a window back
+and concludes the run will continue — but the attempt budget it spends is the same one
+that decides whether continuing is allowed. Each of the three passes its own check. The
+cheapest structural guard is the one `R42-02`'s note already suggested: assert the
+_effect_ — a timed drain, a bounded statement on the connection that ran it, a fourth
+consecutive continuation — rather than the arithmetic between two constants.
+
+`R43-04` and `R43-05` are the second group: **the ledger has three states and the
+operator story needs four.** `CLAIMED`-with-expired-lease currently means both "a process
+died here" and "a run handed this back on purpose", and `FAILED` means both "this needs a
+person today" and "this needed a person once, at some point in the table's history".
+Every reading in the runbook is downstream of that conflation, so patching the two
+queries will not fix it — the states have to distinguish the cases first. That is a
+schema-adjacent decision and it is worth making before the alert thresholds are written,
+not after.
+
+`R43-05` is the one item with an owner component. Deciding _how_ a failed window gets
+acknowledged — an operator command, a retention period on the reading, or an explicit
+reset — is an operations-policy choice. The technical half (the reading must be able to
+return to zero) is not in question.
+
+The scheduler itself is the strongest part of this change. Ticking a question whose
+answer is still true at 00:07, rather than firing at a moment a down replica would miss,
+is the right design, and the paragraph explaining why catch-up is bounded to the current
+window should survive into whatever this becomes.
+
+## Residual risk and follow-up
+
+- `R43-03` is argued from configured numbers and the call graph, not from a timed
+  SIGTERM. The fix should be pinned by an e2e that drains mid-batch and measures, since
+  the existing drain e2e cannot distinguish "drained" from "drained in time".
+- `R43-01` may be latent today: whether the three statements land on different
+  connections depends on pool size, concurrency and TypeORM's acquisition behaviour, so
+  the current suite passing is not evidence it holds. The fix is cheap and removes the
+  question, which is why it is worth making rather than measuring.
+- `R43-02` and `R43-05` interact: until continuation stops spending attempts, a lagging
+  task writes one permanent `FAILED` row per day, so fixing the latch alone would leave
+  the alert firing for a cause that is not a fault.
+- This review authored no fixes, so no gate was run and the branch's own green status is
+  the author's. After the five High findings are closed, `npm run verify` is owed once
+  before handoff, per `AGENTS.md`.
+- The review is not independent: the same agent family authored the change. This is also
+  the phase-closing PR, so `PLAN-011` line 4 records the phase as pending independent
+  review — that review is the one this report does not replace. A second reader should
+  re-read `R43-01`, `R43-02` and `R43-04` before the verdict is cleared.
+
+### Post-fix disposition of these risks, 2026-09-22
+
+Written after `REVIEW-044`, the independent phase-exit read this section asked for.
+
+- `R43-03`: **accepted, unchanged.** No timed-SIGTERM e2e exists. The drain e2e still
+  proves only that the process drained and exited 0. Owner: project owner. The cost of a
+  measured drain is a test that asserts a duration, which is the shape most likely to
+  flake in CI; the bound is instead asserted where it is composed, in
+  `assertRetentionBounds`.
+- `R43-01`: **closed.** `REVIEW-044` re-read the call sites; `withStatementBound` and
+  `sample` both pin the connection in `dataSource.transaction()`. It was indeed latent:
+  the suite passed before the fix and after it.
+- `R43-02` and `R43-05`: **closed, and the interaction was real.** `R44-02` found the
+  first fix incomplete — progress was read from the window's lifetime rather than from
+  the attempt — so the alert-firing-for-a-non-fault case survived the original fix and
+  is now pinned by three integration cases in `scheduled-run.integration-spec.ts`.
+- The owed `npm run verify`: run at `PLAN-011`'s handoff evidence section after the
+  `REVIEW-044` fixes, not after this review's. `R44-19` records that gap.
+- The second reader arrived: `REVIEW-044` re-read `R43-01`, `R43-02` and `R43-04`. Two of
+  the three had shipped incomplete fixes, which is the argument for the read.

@@ -1,6 +1,6 @@
 # SPEC-010: Scheduled retention and operations
 
-- Status: Draft
+- Status: Accepted; implemented in Phase 7 (`P7-T01`-`P7-T05`, 2026-09-22)
 - Owner: Project owner
 - Last updated: 2026-09-20
 - Scope: Required
@@ -81,12 +81,17 @@ No HTTP surface changes. Two behaviours a requester can observe indirectly:
 
 ### Operator contract
 
-| Command                                  | Effect                                                           |
-| ---------------------------------------- | ---------------------------------------------------------------- |
-| `npm run ops:retention -- --dry-run`     | Reports what each task would delete; deletes nothing             |
-| `npm run ops:retention`                  | Runs one bounded pass of every due task, as the scheduler would  |
-| `npm run ops:retention -- --task <name>` | Runs one task, for isolating a failure                           |
-| `npm run files:storage-cleanup`          | Unchanged from Phase 3; the scheduler now calls the same service |
+| Command                                            | Effect                                                           |
+| -------------------------------------------------- | ---------------------------------------------------------------- |
+| `npm run ops:retention -- --dry-run`               | Reports what each task would delete; deletes nothing             |
+| `npm run ops:retention -- --delete`                | Runs one bounded pass of every due task, as the scheduler would  |
+| `npm run ops:retention -- --delete --task <name>`  | Runs one task, for isolating a failure                           |
+| `npm run ops:retention -- --dry-run --task <name>` | Reports one task                                                 |
+| `npm run files:storage-cleanup`                    | Unchanged from Phase 3; the scheduler now calls the same service |
+
+Exactly one of `--dry-run` or `--delete` is required: the bare command deletes nothing
+and is refused. A mode that is the default is a mode somebody gets without choosing it,
+and this is the only command in the project that destroys data.
 
 The CLI and the scheduler share one application service. A command that only the CLI
 can reach is a command whose scheduled behaviour is untested.
@@ -281,28 +286,54 @@ catch up after the worker was down for a day, and the bounded SQL behind each re
 
 ## Acceptance criteria
 
-- [ ] Given two worker replicas and one due window, when both tick, then exactly one
+Each is checked against the test that proves it, not against the code that intends it.
+
+- [x] Given two worker replicas and one due window, when both tick, then exactly one
       ledger row exists and exactly one run executes.
-- [ ] Given a replica killed mid-run, when its lease expires, then another replica
+      `retention-worker-lifecycle.e2e`: _gives one window to one of two workers_;
+      `scheduled-run.integration`: _gives one window to exactly one of two concurrent
+      claimers_.
+- [x] Given a replica killed mid-run, when its lease expires, then another replica
       takes the run over, `attempts` increments, and no row is deleted twice.
-- [ ] Given a run that exhausts its attempt budget, when it fails again, then the
+      `retention-worker-lifecycle.e2e`: _lets the other worker finish a window whose
+      process was killed, once_.
+- [x] Given a run that exhausts its attempt budget, when it fails again, then the
       ledger records `FAILED` with a stable code and the next window still runs.
-- [ ] Given an outbox event with deliveries and send attempts, when retention deletes
+      `scheduled-run.integration`: _closes the window when a retryable failure spends
+      the last attempt_, _keeps saying exhausted on every tick_;
+      `retention-worker-lifecycle.e2e`: _runs the current window once after a day down_.
+- [x] Given an outbox event with deliveries and send attempts, when retention deletes
       it, then no orphaned `email_send_attempts` row survives.
-- [ ] Given an export job still `RUNNING` whose `expires_at` has passed, when retention
+      `retention-deletion.integration`: _leaves no orphaned send attempt behind the
+      event it belonged to_.
+- [x] Given an export job still `RUNNING` whose `expires_at` has passed, when retention
       runs, then the job and its object are untouched.
-- [ ] Given a `FAILED` outbox event older than the window, when retention runs, then it
+      `retention-deletion.integration`: _never takes a job out from under the worker
+      generating it_.
+- [x] Given a `FAILED` outbox event older than the window, when retention runs, then it
       is retained and remains redrivable.
-- [ ] Given storage refusing a delete, when the run completes, then the metadata for
+      `retention-deletion.integration`: _retains a failed event and everything hanging
+      off it_.
+- [x] Given storage refusing a delete, when the run completes, then the metadata for
       that object is retained and the object remains recorded as due.
-- [ ] Given the worker down for a day, when it starts, then the missed window is
+      `retention-deletion.integration`: _keeps the rows when the provider refuses, so
+      the object stays due_.
+- [x] Given the worker down for a day, when it starts, then the missed window is
       detected as due and runs once, not once per missed window.
-- [ ] Given a session whose `refresh_expires_at` has passed, when retention runs, then
+      `retention-worker-lifecycle.e2e`: _runs the current window once after a day down,
+      not once per missed day_.
+- [x] Given a session whose `refresh_expires_at` has passed, when retention runs, then
       it is deleted; given one that is still refreshable, then it survives.
-- [ ] Given `--dry-run`, when the command completes, then it reports counts and the
+      `retention-deletion.integration`: _deletes expired sessions and keeps the
+      refreshable one_.
+- [x] Given `--dry-run`, when the command completes, then it reports counts and the
       row count in every affected table is unchanged.
-- [ ] Given a completed run, when an operator reads one ledger row, then it states what
+      `retention-deletion.integration`: _leaves every table it counts exactly as it
+      found it_.
+- [x] Given a completed run, when an operator reads one ledger row, then it states what
       was deleted per table and how long it took.
+      `scheduled-run.integration`: _records what a successful run deleted, per table_,
+      _adds each attempt to the window total instead of replacing it_.
 
 ## Test strategy
 

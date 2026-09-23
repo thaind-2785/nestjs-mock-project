@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import {
   microsecondsPerMillisecond,
+  retentionContinuationCodes,
   retentionErrorCodes,
   type RetentionTaskName,
 } from './retention.constants';
@@ -44,6 +45,14 @@ function errno(error: unknown): number | undefined {
  * They are not data - every one is a key the caller built from `retentionDuePredicates`
  * - and the counts themselves stay bound.
  */
+function progressedAtExpression(counts: Record<string, number>): string {
+  // Stamped only by a write that removed rows. A finalizer reporting zeros leaves the
+  // previous value alone, so the attempt budget sees no progress for this attempt.
+  return Object.values(counts).some((removed) => removed > 0)
+    ? 'NOW(6)'
+    : 'progressed_at';
+}
+
 function accumulateCounts(counts: Record<string, number>): {
   expression: string;
   parameters: number[];
@@ -169,6 +178,20 @@ export class ScheduledRunRepository {
    * a lease that is still live belongs to whoever holds it, and finding that out after
    * starting to delete would be too late. `attempts < ?` is what stops a task that
    * crashes every time from being retried on every tick forever.
+   *
+   * The increment is conditional, and that distinction is load-bearing. `attempts`
+   * counts failures; a window handed back because its budget ran out, a deploy
+   * interrupted it, or a provider was refusing is *continuing*, and charging it would
+   * mean a genuinely large backlog gave up after three continuations - roughly fifteen
+   * minutes of honest work - and needed a human. Three deploys during a nightly run did
+   * the same.
+   *
+   * Progress is measured on the attempt that stopped, not on the window's lifetime.
+   * `deleted_counts` accumulates by design, so asking whether it is non-empty asked
+   * whether this window had *ever* deleted anything - which a task failing against a
+   * dead provider satisfies forever after its first success, so it would have been
+   * reclaimed every tick and never reached `FAILED`. `progressed_at` is stamped only by
+   * a write that removed rows, and is compared against this attempt's `started_at`.
    */
   private async recover(
     manager: EntityManager,
@@ -184,7 +207,20 @@ export class ScheduledRunRepository {
       `UPDATE scheduled_runs
        SET locked_by = ?,
            lock_expires_at = NOW(6) + INTERVAL ? MICROSECOND,
-           attempts = attempts + 1,
+           attempts = attempts + IF(
+             last_error_code IN (${retentionContinuationCodes.map(() => '?').join(', ')})
+               AND progressed_at IS NOT NULL
+               AND progressed_at >= started_at,
+             0,
+             1
+           ),
+           -- Cleared on takeover, so the column describes the claim that is live rather
+           -- than the window's history. Left in place, a window handed back, recovered
+           -- and then killed would keep a continuation code forever, and the stale-claim
+           -- reading - which has to exclude those codes, because a handback and a crash
+           -- leave the same row shape - could never see it. The attempt count remains
+           -- durable record that the window needed more than one try.
+           last_error_code = NULL,
            started_at = NOW(6)
        WHERE task_name = ?
          AND scheduled_for = ?
@@ -194,6 +230,7 @@ export class ScheduledRunRepository {
       [
         input.claimToken,
         input.leaseMs * microsecondsPerMillisecond,
+        ...retentionContinuationCodes,
         input.taskName,
         input.scheduledFor,
         ScheduledRunStatus.Claimed,
@@ -302,7 +339,8 @@ export class ScheduledRunRepository {
            locked_by = NULL,
            lock_expires_at = NULL,
            finished_at = NOW(6),
-           deleted_counts = ${counts.expression}
+           deleted_counts = ${counts.expression},
+           progressed_at = ${progressedAtExpression(deletedCounts)}
        WHERE locked_by = ?
          AND status = ?
          AND lock_expires_at > NOW(6)`,
@@ -323,7 +361,10 @@ export class ScheduledRunRepository {
    *
    * A retryable failure with budget left hands the window back by expiring its own
    * lease, which makes the retry path and the crash-recovery path the same mechanism
-   * rather than two that have to agree. Anything else is terminal and loud.
+   * rather than two that have to agree. The holder stays stamped, because the table's
+   * state check requires a `CLAIMED` row to name one; what a handback leaves behind is
+   * therefore distinguishable only by its error code. Anything else is terminal and
+   * loud.
    */
   async fail(
     dataSource: DataSource,
@@ -339,6 +380,7 @@ export class ScheduledRunRepository {
         ? `UPDATE scheduled_runs
            SET lock_expires_at = NOW(6),
                deleted_counts = ${counts.expression},
+               progressed_at = ${progressedAtExpression(deletedCounts)},
                last_error_code = ?
            WHERE locked_by = ?
              AND status = ?
@@ -349,6 +391,7 @@ export class ScheduledRunRepository {
                lock_expires_at = NULL,
                finished_at = NOW(6),
                deleted_counts = ${counts.expression},
+               progressed_at = ${progressedAtExpression(deletedCounts)},
                last_error_code = ?
            WHERE locked_by = ?
              AND status = ?
@@ -371,6 +414,123 @@ export class ScheduledRunRepository {
     const applied = (result.affectedRows ?? 0) > 0;
     if (!applied) this.warnClaimLost(claim, deletedCounts, 'fail');
     return applied;
+  }
+
+  /**
+   * What the ledger says about retention as a whole, rather than about one window.
+   *
+   * Both readings are narrower than they first were, and both for the same reason: a
+   * number an operator is told to alert on has to be able to return to zero, and has to
+   * count only what its name says.
+   *
+   * `failedWindows` is scoped to recent windows. Nothing ever rewrites a `FAILED` row,
+   * so an unscoped count latches: it fires forever, including long after the cause is
+   * fixed, which is how an alert stops being read.
+   *
+   * `staleClaims` excludes a window that was handed back on purpose. A continuation
+   * expires its own lease and leaves the status alone, which is byte-identical to what a
+   * dead process leaves - the table's state check requires a `CLAIMED` row to name a
+   * holder, so the error code is the only thing left to tell them apart. Counting the
+   * shape instead made every ordinary budget-spent run look like a crash, and an
+   * overnight one look like a crash until the day rolled over.
+   */
+  async health(
+    dataSource: DataSource,
+    recentWindowDays: number,
+  ): Promise<{
+    failedWindows: number;
+    staleClaims: number;
+    oldestFailedAgeMs: number;
+  }> {
+    const continuations = retentionContinuationCodes.map(() => '?').join(', ');
+    const rows: Array<{
+      failed_windows: number;
+      stale_claims: number;
+      oldest_failed_age_us: string | number;
+    }> = await dataSource.manager.query(
+      `SELECT
+         SUM(
+           status = ?
+           AND scheduled_for >= NOW(6) - INTERVAL ? DAY
+           AND last_error_code <> ?
+         ) AS failed_windows,
+         SUM(
+           status = ?
+           AND lock_expires_at <= NOW(6)
+           AND (last_error_code IS NULL OR last_error_code NOT IN (${continuations}))
+         ) AS stale_claims,
+         COALESCE(
+           TIMESTAMPDIFF(
+             MICROSECOND,
+             MIN(
+               CASE
+                 WHEN status = ?
+                   AND scheduled_for >= NOW(6) - INTERVAL ? DAY
+                   AND last_error_code <> ?
+                 THEN finished_at
+               END
+             ),
+             NOW(6)
+           ),
+           0
+         ) AS oldest_failed_age_us
+       FROM scheduled_runs`,
+      [
+        ScheduledRunStatus.Failed,
+        recentWindowDays,
+        retentionErrorCodes.stopped,
+        ScheduledRunStatus.Claimed,
+        ...retentionContinuationCodes,
+        ScheduledRunStatus.Failed,
+        recentWindowDays,
+        retentionErrorCodes.stopped,
+      ],
+    );
+    return {
+      failedWindows: Number(rows[0].failed_windows ?? 0),
+      staleClaims: Number(rows[0].stale_claims ?? 0),
+      oldestFailedAgeMs: Math.floor(
+        Number(rows[0].oldest_failed_age_us) / microsecondsPerMillisecond,
+      ),
+    };
+  }
+
+  /**
+   * Closes windows from earlier days that nobody will continue.
+   *
+   * A run only ever claims the current window, so one left `CLAIMED` when the local day
+   * rolled over is touched by nothing again: it stays claimed forever and the work it
+   * left is silently nobody's.
+   *
+   * `RETENTION_STOPPED` rather than `RETENTION_RUN_ABANDONED`, and it is a distinct code
+   * on purpose. Most of these are the case continuation exists to support - a backlog
+   * still running at midnight, or a deploy near it - and recording those as an
+   * abandonment made the reading the runbook calls "the one to alert on" fire for a week
+   * over work the next window simply redoes. The window still has to be closed, because
+   * nothing will continue it; what it must not do is look like a crash.
+   */
+  async closeAbandonedBefore(
+    dataSource: DataSource,
+    currentWindow: Date,
+  ): Promise<number> {
+    const result: { affectedRows?: number } = await dataSource.manager.query(
+      `UPDATE scheduled_runs
+       SET status = ?,
+           locked_by = NULL,
+           lock_expires_at = NULL,
+           finished_at = NOW(6),
+           last_error_code = ?
+       WHERE status = ?
+         AND scheduled_for < ?
+         AND lock_expires_at <= NOW(6)`,
+      [
+        ScheduledRunStatus.Failed,
+        retentionErrorCodes.stopped,
+        ScheduledRunStatus.Claimed,
+        currentWindow,
+      ],
+    );
+    return result.affectedRows ?? 0;
   }
 
   /**

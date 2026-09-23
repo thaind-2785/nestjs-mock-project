@@ -5,6 +5,7 @@ import {
   notificationsConfig,
 } from './config/notifications.config';
 import { reportsConfig } from './config/reports.config';
+import { retentionConfig } from './config/retention.config';
 
 export const workerShutdownSignals = ['SIGTERM', 'SIGINT'] as const;
 
@@ -43,6 +44,7 @@ export async function bootstrapNotificationWorker(
   const drainMs = workerDrainMs(
     configuration,
     context.get<ConfigType<typeof reportsConfig>>(reportsConfig.KEY),
+    context.get<ConfigType<typeof retentionConfig>>(retentionConfig.KEY),
   );
 
   let stopping = false;
@@ -86,29 +88,48 @@ export async function bootstrapNotificationWorker(
 /**
  * The drain this process gets: the largest of the families it actually hosts.
  *
- * One process hosts two independent families with two different bounded units of work,
- * and only one number can be the drain. The mail family's 30 seconds is sized for a
- * single provider send; an export attempt holds a Worker Thread for up to a bounded 60
- * seconds, so draining on the mail bound alone would `SIGKILL` a generation that was
- * about to succeed on every ordinary deploy - and it would do so while
- * `assertRoomExportBounds` was still checking the export drain against the generation
- * timeout, because nothing read the value it was checking.
+ * One process hosts three residents with three different bounded units of work, and only
+ * one number can be the drain. The mail family's 30 seconds is sized for a single
+ * provider send; an export attempt holds a Worker Thread for up to a bounded 60 seconds,
+ * so draining on the mail bound alone would `SIGKILL` a generation that was about to
+ * succeed on every ordinary deploy - and it would do so while `assertRoomExportBounds`
+ * was still checking the export drain against the generation timeout, because nothing
+ * read the value it was checking.
  *
- * The export bound only counts when exports are enabled. A deployment that has not
- * turned them on registers no consumer and has no generation to protect, and giving it
- * the longer drain would make every restart of a mail-only worker wait for work it
- * cannot be doing.
+ * Retention's unit is one batch rather than one run. A run may keep going for its whole
+ * five-minute budget, so draining on that would make every deploy wait five minutes per
+ * task; instead the run is interruptible and a batch is a bounded claim read followed by
+ * at most one provider call before the stop flag is consulted again. That is what
+ * `assertRetentionBounds` checks the drain against, and the claim only holds because the
+ * stop flag reaches inside the batch - checking it between batches was the version that
+ * let a batch outlive the drain entirely, leaving the window claimed under a live lease.
+ *
+ * A bound only counts when its resident is enabled. A deployment that has turned exports
+ * or retention off has no work of that kind to protect, and giving it the longer drain
+ * would make every restart wait for something it cannot be doing.
  */
 export function workerDrainMs(
   notifications: ConfigType<typeof notificationsConfig>,
   reports: ConfigType<typeof reportsConfig>,
+  retention: ConfigType<typeof retentionConfig>,
 ): number {
-  return reports.enabled
-    ? Math.max(
-        notifications.worker.shutdownDrainMs,
-        reports.worker.shutdownDrainMs,
-      )
-    : notifications.worker.shutdownDrainMs;
+  // The maximum across the families this process actually hosts. A family that is
+  // switched off contributes nothing, because it has no work to drain - and including it
+  // would make every deploy wait for a drain nobody needs.
+  //
+  // Retention contributes one batch rather than one run: its run is interruptible and
+  // hands the window back, so shutdown never waits for a whole budget.
+  // Retention contributes unconditionally, because one of its residents starts
+  // unconditionally: the backlog sampler runs while the scheduler is disabled, which is
+  // the configuration the rollout establishes and the one an operator inspects. Gating
+  // the drain on `enabled` left a default deployment draining on the mail bound while a
+  // sample was mid-flight, so an ordinary deploy reported `drained:false` and exited
+  // non-zero.
+  return Math.max(
+    notifications.worker.shutdownDrainMs,
+    reports.enabled ? reports.worker.shutdownDrainMs : 0,
+    retention.run.shutdownDrainMs,
+  );
 }
 
 export interface NotificationWorkerStopOptions {

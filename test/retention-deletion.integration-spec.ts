@@ -23,6 +23,8 @@ import { RoomExportStorageService } from '../src/reports/room-export-storage.ser
 import { NestFactory } from '@nestjs/core';
 import { RetentionOperationsModule } from '../src/retention/retention-operations.module';
 import { RetentionReportService } from '../src/retention/retention-report.service';
+import { RetentionDueRepository } from '../src/retention/retention-due.repository';
+import { DatabaseConnectionService } from '../src/database/database-connection.service';
 import { retentionDuePredicates } from '../src/retention/retention-due';
 import { retentionConfig } from '../src/config/retention.config';
 import { reportsConfig } from '../src/config/reports.config';
@@ -60,6 +62,7 @@ describe('Phase 7 deletions', () => {
   let windows: RetentionWindowConfiguration;
   let userId: string;
   let storage: { deleteObject: jest.Mock };
+  let storageCleanup: { run: jest.Mock };
 
   beforeAll(async () => {
     loadRepositoryEnvironment();
@@ -99,21 +102,28 @@ describe('Phase 7 deletions', () => {
     await dataSource.runMigrations();
 
     storage = { deleteObject: jest.fn().mockResolvedValue(undefined) };
+    storageCleanup = {
+      run: jest
+        .fn()
+        .mockResolvedValue({ claimed: 0, deleted: 0, retryable: 0 }),
+    };
     const moduleRef = await Test.createTestingModule({
       providers: [
         RetentionTasksService,
         RetentionDeleteRepository,
+        RetentionReportService,
+        RetentionDueRepository,
+        {
+          // The one boundary worth stubbing here: this suite owns a disposable database
+          // and hands it to every other call as an argument. The real service resolves
+          // the process-wide one, and the wiring test below covers it.
+          provide: DatabaseConnectionService,
+          useValue: { ensureInitialized: () => Promise.resolve(dataSource) },
+        },
         { provide: ObjectStorageProvider, useValue: storage },
         // Its own suite covers it; here it would only bring MinIO into a test about
         // deletion order.
-        {
-          provide: StorageCleanupService,
-          useValue: {
-            run: jest
-              .fn()
-              .mockResolvedValue({ claimed: 0, deleted: 0, retryable: 0 }),
-          },
-        },
+        { provide: StorageCleanupService, useValue: storageCleanup },
         {
           provide: retentionConfig.KEY,
           useValue: createRetentionConfiguration(environment),
@@ -132,12 +142,16 @@ describe('Phase 7 deletions', () => {
 
   beforeEach(async () => {
     storage.deleteObject.mockReset().mockResolvedValue(undefined);
+    storageCleanup.run
+      .mockReset()
+      .mockResolvedValue({ claimed: 0, deleted: 0, retryable: 0 });
     await dataSource.query('DELETE FROM email_send_attempts');
     await dataSource.query('DELETE FROM email_deliveries');
     await dataSource.query('DELETE FROM export_jobs');
     await dataSource.query('DELETE FROM outbox_events');
     await dataSource.query('DELETE FROM auth_sessions');
     await dataSource.query('DELETE FROM idempotency_keys');
+    await dataSource.query('DELETE FROM storage_cleanup_tasks');
   });
 
   afterAll(async () => {
@@ -369,6 +383,82 @@ describe('Phase 7 deletions', () => {
     });
   });
 
+  describe('the storage drain', () => {
+    it('stops between provider calls when asked, instead of finishing its loop', async () => {
+      // Phase 3's service loops internally over sequential object deletes. Handing it the
+      // whole drain size means twenty-five of them with nothing able to interrupt - which
+      // is how a batch outlives a ninety-second drain even though every call is bounded.
+      // One call at a time, asking in between, is what makes the batch interruptible.
+      let calls = 0;
+      storageCleanup.run.mockImplementation(() => {
+        calls += 1;
+        return Promise.resolve({ claimed: 1, deleted: 1, retryable: 0 });
+      });
+
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'storage-tasks',
+        10,
+        farFuture,
+        () => calls >= 2,
+      );
+
+      expect(calls).toBe(2);
+      expect(outcome.counts).toEqual({ storage_cleanup_tasks: 2 });
+      // And it says so. A drain that stopped because it was asked to stop has not
+      // finished the backlog, but it reported `claimed < batchSize` - which reads as
+      // "nothing left", so the run was recorded SUCCEEDED and the day's remaining rows
+      // were never retried. The window's insert is an election, so the next tick could
+      // not reopen it either.
+      expect(outcome.moreWaiting).toBe(true);
+    });
+
+    it('stops early when the run budget is already spent', async () => {
+      storageCleanup.run.mockResolvedValue({
+        claimed: 1,
+        deleted: 1,
+        retryable: 0,
+      });
+
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'storage-tasks',
+        10,
+        Date.now() - 1,
+      );
+
+      expect(storageCleanup.run).not.toHaveBeenCalled();
+      expect(outcome.counts).toEqual({});
+      // Nothing was even looked at, so nothing is known to be done.
+      expect(outcome.moreWaiting).toBe(true);
+    });
+  });
+
+  describe('the report path', () => {
+    it('leaves every table it counts exactly as it found it', async () => {
+      // The acceptance criterion for the mode the runbook tells an operator to trust
+      // before enabling the schedule. Coverage stopped at the argument parser and at an
+      // array length, neither of which can tell a read from a write - and this is the
+      // only phase in the project that deletes anything.
+      await insertSession(oldEnough(windows.sessionHours));
+      await insertIdempotencyKey(oldEnough(0));
+      await insertStorageTask(oldEnough(0));
+      await insertDueNotificationEvent();
+      await insertTerminalExportJob(`exports/rooms/${randomUUID()}.xlsx`);
+
+      const before = await countEach();
+      const reports = await context.get(RetentionReportService).report();
+
+      expect(await countEach()).toEqual(before);
+      // And it really did look: a report of five zeroes would pass the assertion above
+      // without reading a row.
+      expect(reports).toHaveLength(retentionDuePredicates.length);
+      for (const report of reports) {
+        expect(report.dueCount).toBeGreaterThan(0);
+      }
+    });
+  });
+
   describe('wiring', () => {
     it('boots the real module and reaches the database through it', async () => {
       // The check that would have caught both wiring defects in this slice. Importing
@@ -560,6 +650,22 @@ describe('Phase 7 deletions', () => {
       ],
     );
     return id;
+  }
+
+  async function insertStorageTask(availableAt: string): Promise<void> {
+    await dataSource.query(
+      `INSERT INTO storage_cleanup_tasks (id, object_key, reason, available_at)
+       VALUES (?, ?, 'DETACHED_OBJECT', ${availableAt})`,
+      [randomUUID(), `exports/rooms/${randomUUID()}.xlsx`],
+    );
+  }
+
+  async function countEach(): Promise<Record<string, number>> {
+    const counts: Record<string, number> = {};
+    for (const predicate of retentionDuePredicates) {
+      counts[predicate.table] = await count(predicate.table);
+    }
+    return counts;
   }
 
   async function count(table: string): Promise<number> {

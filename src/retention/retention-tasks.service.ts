@@ -36,30 +36,37 @@ export class RetentionTasksService {
   ) {}
 
   /**
-   * `deadline` is passed in rather than owned here because a batch can be long.
+   * A batch is interruptible, and both of its reasons to stop are passed in.
    *
-   * The run's budget used to be checked only between batches, which was sound while a
-   * batch was one statement and wrong as soon as one became hundreds of provider calls:
-   * a single export batch against a degraded object store could outlive the lease
-   * entirely, and a second replica would recover a window this one was still deleting
-   * inside. The loops below stop at the deadline and report what they did.
+   * `deadline` is the run's budget; `shouldStop` is shutdown. Checking them only between
+   * batches was sound while a batch was one statement and wrong as soon as one became a
+   * loop of provider calls - a single batch against a degraded object store could outlive
+   * both the lease and the process's drain, and the drain would then expire with the
+   * window still claimed under a live lease, unrecoverable by anybody for its full ten
+   * minutes. Both provider loops below ask between iterations and report what they did.
    */
   async runBatch(
     dataSource: DataSource,
     taskName: RetentionTaskName,
     batchSize: number,
     deadline: number,
+    shouldStop: () => boolean = () => false,
   ): Promise<RetentionBatchOutcome> {
+    const interrupted = () => shouldStop() || Date.now() >= deadline;
     switch (taskName) {
       case 'auth-sessions':
       case 'idempotency-keys':
         return this.purge(dataSource, taskName, batchSize);
       case 'storage-tasks':
-        return this.drainStorageTasks();
+        return this.drainStorageTasks(interrupted);
       case 'notification-events':
-        return this.collectNotificationEvents(dataSource, batchSize);
+        return this.collectNotificationEvents(
+          dataSource,
+          batchSize,
+          interrupted,
+        );
       case 'export-results':
-        return this.collectExportResults(dataSource, batchSize, deadline);
+        return this.collectExportResults(dataSource, batchSize, interrupted);
     }
   }
 
@@ -94,20 +101,38 @@ export class RetentionTasksService {
    * and a second implementation here would be a second opinion about which of those
    * rows is safe to remove.
    */
-  private async drainStorageTasks(): Promise<RetentionBatchOutcome> {
-    // Its own bound, not `batchSize`. That number means rows one statement may delete,
-    // and this service uses its argument as a loop counter over sequential provider
-    // calls - handing it five hundred turns one batch into five hundred round trips.
-    const result = await this.storageCleanup.run({
-      batchSize: storageDrainBatchSize,
-    });
+  private async drainStorageTasks(
+    interrupted: () => boolean,
+  ): Promise<RetentionBatchOutcome> {
+    // One provider call at a time, so the batch can be stopped between them. Handing
+    // Phase 3's service the whole drain size instead makes it loop internally over
+    // twenty-five sequential deletes with nothing able to interrupt it - which is how a
+    // batch outlives a ninety-second drain even though every individual call is bounded.
+    let deleted = 0;
+    let claimed = 0;
+    let retryable = 0;
+    let truncated = false;
+    for (let call = 0; call < storageDrainBatchSize; call += 1) {
+      if (interrupted()) {
+        truncated = true;
+        break;
+      }
+      const result = await this.storageCleanup.run({ batchSize: 1 });
+      if (result.claimed === 0) break;
+      claimed += result.claimed;
+      deleted += result.deleted;
+      retryable += result.retryable;
+    }
     return {
-      counts:
-        result.deleted > 0 ? { storage_cleanup_tasks: result.deleted } : {},
-      moreWaiting: result.claimed === storageDrainBatchSize,
+      counts: deleted > 0 ? { storage_cleanup_tasks: deleted } : {},
+      // `truncated` is what stops an interrupted drain from reporting that nothing is
+      // waiting. The run breaks on `!moreWaiting` before it consults its stop flag, so
+      // without this a drain cut short by a deploy recorded the window `SUCCEEDED` - and
+      // the unique key then refused every further claim that day.
+      moreWaiting: truncated || claimed === storageDrainBatchSize,
       // A provider that refused is not a task that failed: the row stays due and the
       // next run tries again, which is the contract Phase 3 already established.
-      retryableFailures: result.retryable,
+      retryableFailures: retryable,
     };
   }
 
@@ -123,10 +148,17 @@ export class RetentionTasksService {
   private async collectNotificationEvents(
     dataSource: DataSource,
     batchSize: number,
+    interrupted: () => boolean,
   ): Promise<RetentionBatchOutcome> {
+    // Asked before the batch rather than inside it. The three deletes are one
+    // transaction and have to stay one - a crash between them leaves children whose
+    // parent is gone with nothing to find them by - so the interrupt point is the
+    // boundary, and the drain has to cover the transaction rather than interrupt it.
+    if (interrupted()) return { counts: {}, moreWaiting: true };
+
     const predicate = retentionDuePredicate('notification-events');
     const batch = await this.deletes.claimEventBatch(
-      dataSource.manager,
+      dataSource,
       predicate,
       this.configuration.windows,
       batchSize,
@@ -136,22 +168,31 @@ export class RetentionTasksService {
 
     // One transaction per batch: the three steps are a unit, and a crash between them
     // would leave children whose parent is gone with nothing to find them by.
-    const counts = await dataSource.transaction(async (manager) => {
-      const attempts = await this.deletes.deleteSendAttempts(
+    const counts = await dataSource.transaction(async (manager) =>
+      this.deletes.withLockWaitBound(
         manager,
-        batch.eventIds,
-      );
-      const deliveries = await this.deletes.deleteDeliveries(
-        manager,
-        batch.eventIds,
-      );
-      const events = await this.deletes.deleteEvents(manager, batch.eventIds);
-      return {
-        email_send_attempts: attempts,
-        email_deliveries: deliveries,
-        outbox_events: events,
-      };
-    });
+        this.configuration.run.lockWaitSeconds,
+        async () => {
+          const attempts = await this.deletes.deleteSendAttempts(
+            manager,
+            batch.eventIds,
+          );
+          const deliveries = await this.deletes.deleteDeliveries(
+            manager,
+            batch.eventIds,
+          );
+          const events = await this.deletes.deleteEvents(
+            manager,
+            batch.eventIds,
+          );
+          return {
+            email_send_attempts: attempts,
+            email_deliveries: deliveries,
+            outbox_events: events,
+          };
+        },
+      ),
+    );
 
     return {
       counts: Object.fromEntries(
@@ -174,11 +215,11 @@ export class RetentionTasksService {
   private async collectExportResults(
     dataSource: DataSource,
     batchSize: number,
-    deadline: number,
+    interrupted: () => boolean,
   ): Promise<RetentionBatchOutcome> {
     const predicate = retentionDuePredicate('export-results');
     const batch = await this.deletes.claimExportBatch(
-      dataSource.manager,
+      dataSource,
       predicate,
       this.configuration.windows,
       batchSize,
@@ -195,8 +236,8 @@ export class RetentionTasksService {
     for (const job of batch.jobs) {
       // Checked inside the loop, not only between batches: each iteration is a bounded
       // provider call, and five hundred of them against a slow store is how a batch
-      // outlives the lease it was supposed to fit inside.
-      if (Date.now() >= deadline) {
+      // outlives both the lease and the drain it was supposed to fit inside.
+      if (interrupted()) {
         truncated = true;
         break;
       }
@@ -238,17 +279,23 @@ export class RetentionTasksService {
       };
     }
 
-    const counts = await dataSource.transaction(async (manager) => {
-      const jobs = await this.deletes.deleteExportJobs(
+    const counts = await dataSource.transaction(async (manager) =>
+      this.deletes.withLockWaitBound(
         manager,
-        removable.map((job) => job.id),
-      );
-      const events = await this.deletes.deleteEvents(
-        manager,
-        removable.map((job) => job.outboxEventId),
-      );
-      return { export_jobs: jobs, outbox_events: events };
-    });
+        this.configuration.run.lockWaitSeconds,
+        async () => {
+          const jobs = await this.deletes.deleteExportJobs(
+            manager,
+            removable.map((job) => job.id),
+          );
+          const events = await this.deletes.deleteEvents(
+            manager,
+            removable.map((job) => job.outboxEventId),
+          );
+          return { export_jobs: jobs, outbox_events: events };
+        },
+      ),
+    );
 
     return {
       counts: {

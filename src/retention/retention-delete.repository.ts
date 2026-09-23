@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { EntityManager } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import type { RetentionWindowConfiguration } from '../config/retention.config';
 import type { RetentionDuePredicate } from './retention-due';
 import type {
@@ -40,19 +40,44 @@ export class RetentionDeleteRepository {
    *
    * The reset is in `finally` because the session outlives this query.
    */
-  private async withStatementBound<T>(
-    manager: EntityManager,
+  private withStatementBound<T>(
+    dataSource: DataSource,
     statementTimeoutMs: number,
+    work: (manager: EntityManager) => Promise<T>,
+  ): Promise<T> {
+    // The transaction is what pins the connection. `SET SESSION` belongs to one, and an
+    // unpinned manager borrows a different connection per call - so the bound could land
+    // on one, the read run unbounded on another, and the reset apply to a third, leaving
+    // the first carrying a ceiling for whatever feature draws it next.
+    return dataSource.transaction(async (manager) => {
+      await manager.query('SET SESSION MAX_EXECUTION_TIME = ?', [
+        statementTimeoutMs,
+      ]);
+      try {
+        return await work(manager);
+      } finally {
+        await manager.query('SET SESSION MAX_EXECUTION_TIME = DEFAULT');
+      }
+    });
+  }
+
+  /**
+   * Bounds how long a delete inside this transaction will wait for a lock.
+   *
+   * `MAX_EXECUTION_TIME` does not apply to a `DELETE`, so it is not what bounds one -
+   * `innodb_lock_wait_timeout` is, and its default of fifty seconds per statement puts a
+   * three-step chain well past the worker's drain. Setting it per transaction is what
+   * makes the drain arithmetic describe the work rather than assume it.
+   */
+  async withLockWaitBound<T>(
+    manager: EntityManager,
+    lockWaitSeconds: number,
     work: () => Promise<T>,
   ): Promise<T> {
-    await manager.query('SET SESSION MAX_EXECUTION_TIME = ?', [
-      statementTimeoutMs,
+    await manager.query('SET SESSION innodb_lock_wait_timeout = ?', [
+      lockWaitSeconds,
     ]);
-    try {
-      return await work();
-    } finally {
-      await manager.query('SET SESSION MAX_EXECUTION_TIME = DEFAULT');
-    }
+    return work();
   }
 
   /**
@@ -81,16 +106,16 @@ export class RetentionDeleteRepository {
 
   /** The parent rows one chain batch will work through. */
   async claimEventBatch(
-    manager: EntityManager,
+    dataSource: DataSource,
     predicate: RetentionDuePredicate,
     windows: RetentionWindowConfiguration,
     batchSize: number,
     statementTimeoutMs: number,
   ): Promise<RetentionEventBatch> {
     const rows: Array<{ id: string }> = await this.withStatementBound(
-      manager,
+      dataSource,
       statementTimeoutMs,
-      () =>
+      (manager) =>
         manager.query(
           `SELECT id FROM ${predicate.table}
            WHERE ${predicate.where}
@@ -103,7 +128,7 @@ export class RetentionDeleteRepository {
   }
 
   async claimExportBatch(
-    manager: EntityManager,
+    dataSource: DataSource,
     predicate: RetentionDuePredicate,
     windows: RetentionWindowConfiguration,
     batchSize: number,
@@ -113,14 +138,17 @@ export class RetentionDeleteRepository {
       id: string;
       object_key: string | null;
       outbox_event_id: string;
-    }> = await this.withStatementBound(manager, statementTimeoutMs, () =>
-      manager.query(
-        `SELECT id, object_key, outbox_event_id FROM ${predicate.table}
+    }> = await this.withStatementBound(
+      dataSource,
+      statementTimeoutMs,
+      (manager) =>
+        manager.query(
+          `SELECT id, object_key, outbox_event_id FROM ${predicate.table}
          WHERE ${predicate.where}
          ORDER BY ${predicate.anchorColumn}, id
          LIMIT ?`,
-        [...predicate.parameters(windows), batchSize],
-      ),
+          [...predicate.parameters(windows), batchSize],
+        ),
     );
     return {
       jobs: rows.map((row) => ({

@@ -36,10 +36,36 @@ export const retentionErrorCodes = {
    * rows it would otherwise have taken. Retryable, and the window is handed back. */
   budgetSpent: 'RETENTION_BUDGET_SPENT',
   storageIncomplete: 'RETENTION_STORAGE_INCOMPLETE',
+  /** The process was asked to stop. The batch in flight finished and the window went
+   * back; nothing was abandoned and nothing was recorded as done. */
+  shutdown: 'RETENTION_SHUTDOWN',
+  /** The local day rolled over while the window was still being continued. Nothing will
+   * pick it up - a run only claims the current window - so it is closed, but it is not a
+   * crash and does not belong in the failure reading an operator alerts on. */
+  stopped: 'RETENTION_STOPPED',
 } as const;
 
 export type RetentionErrorCode =
   (typeof retentionErrorCodes)[keyof typeof retentionErrorCodes];
+
+/**
+ * The codes that mean a run stopped, not that it went wrong.
+ *
+ * `attempts` bounds how often a *broken* task is retried. A task that is merely behind -
+ * out of budget, interrupted by a deploy, waiting on a provider - is continuing, and
+ * charging it an attempt each time meant a genuinely large backlog exhausted its budget
+ * after about fifteen minutes of honest work and had to be cleared by hand. Three
+ * ordinary deploys during a nightly run did the same.
+ *
+ * So recovery increments `attempts` only when the previous stop was a failure. A window
+ * that keeps continuing without deleting anything is still charged, because that is no
+ * longer continuation.
+ */
+export const retentionContinuationCodes: readonly string[] = [
+  retentionErrorCodes.budgetSpent,
+  retentionErrorCodes.storageIncomplete,
+  retentionErrorCodes.shutdown,
+];
 
 /** Longest `task_name` the column accepts. Asserted against the list above rather than
  * trusted: a longer name would be refused at insert, and the window would never run. */

@@ -285,7 +285,7 @@ describe('Phase 7 due work', () => {
 
   async function sample(taskName: Parameters<typeof retentionDuePredicate>[0]) {
     return due.sample(
-      dataSource.manager,
+      dataSource,
       retentionDuePredicate(taskName),
       windows,
       statementTimeoutMs,

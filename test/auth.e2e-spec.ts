@@ -26,7 +26,7 @@ import { UserRoleHistory } from '../src/users/entities/user-role-history.entity'
 import { UserStatusHistory } from '../src/users/entities/user-status-history.entity';
 import { User } from '../src/users/entities/user.entity';
 import { UserStatus } from '../src/users/entities/user.enums';
-import { startE2eServer } from './fixtures/e2e-server';
+import { startE2eServer } from './fixtures/http-server';
 
 jest.setTimeout(30_000);
 

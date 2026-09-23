@@ -23,25 +23,26 @@ flowchart LR
     Q --> WT[Worker Thread: XLSX]
     Q --> GM[Gmail adapter]
     Q --> S
-    CRON[Nest scheduler] --> DB
-    CRON --> R
+    Q --> RET[Retention scheduler: interval tick + run ledger]
+    RET --> DB
+    RET --> S
 ```
 
 ## Module boundaries
 
-| Module          | Owns                                                                     |
-| --------------- | ------------------------------------------------------------------------ |
-| `auth`          | Google identity/JIT provisioning, JWT, rotating refresh sessions, guards |
-| `users`         | Profile, status, role administration                                     |
-| `rooms`         | Room/type/amenity catalog, bookable windows, search, availability        |
-| `bookings`      | Request lifecycle, concurrency rules, price snapshots/history            |
-| `reviews`       | Optional eligibility and moderation                                      |
-| `payments`      | Optional checkout and verified webhook transitions                       |
-| `files`         | Upload policy, object keys, cloud adapter, attachments                   |
-| `notifications` | Outbox relay, templates, email deliveries/retries                        |
-| `reports`       | Queries, export jobs, Worker Thread bridge                               |
-| `scheduling`    | Singleton cron orchestration and run ledger                              |
-| `health`        | Liveness/readiness for deploy gates                                      |
+| Module          | Owns                                                                            |
+| --------------- | ------------------------------------------------------------------------------- |
+| `auth`          | Google identity/JIT provisioning, JWT, rotating refresh sessions, guards        |
+| `users`         | Profile, status, role administration                                            |
+| `rooms`         | Room/type/amenity catalog, bookable windows, search, availability               |
+| `bookings`      | Request lifecycle, concurrency rules, price snapshots/history                   |
+| `reviews`       | Optional eligibility and moderation                                             |
+| `payments`      | Optional checkout and verified webhook transitions                              |
+| `files`         | Upload policy, object keys, cloud adapter, attachments                          |
+| `notifications` | Outbox relay, templates, email deliveries/retries                               |
+| `reports`       | Queries, export jobs, Worker Thread bridge                                      |
+| `retention`     | Daily deletion windows, the run ledger that elects one runner, backlog readings |
+| `health`        | Liveness/readiness for deploy gates                                             |
 
 ## Reliability and security
 

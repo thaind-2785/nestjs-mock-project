@@ -5,7 +5,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
 import { configureApplication } from '../src/bootstrap';
-import { startE2eServer } from './fixtures/e2e-server';
+import { startE2eServer } from './fixtures/http-server';
 
 jest.setTimeout(60_000);
 

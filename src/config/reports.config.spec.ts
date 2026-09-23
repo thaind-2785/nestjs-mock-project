@@ -92,6 +92,7 @@ describe('createReportsConfiguration', () => {
   it('requires an export queue namespace in production', () => {
     const production = {
       NODE_ENV: 'production',
+      PUBLIC_BASE_URL: 'https://api.hotel.example.com',
       MYSQL_PASSWORD: 'production-password',
       OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
       OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',

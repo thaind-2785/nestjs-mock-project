@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { publicBaseUrlPattern } from '../common/openapi/swagger.constants';
 
 export const nodeEnvironments = ['development', 'test', 'production'] as const;
 
@@ -43,6 +44,7 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   NODE_ENV: NodeEnvironment;
   PORT: number;
   SWAGGER_ENABLED: boolean;
+  PUBLIC_BASE_URL?: string;
   MYSQL_HOST: string;
   MYSQL_PORT: number;
   MYSQL_DATABASE: string;
@@ -119,6 +121,17 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .default('development'),
   PORT: Joi.number().integer().min(1).max(65_535).default(3000),
   SWAGGER_ENABLED: Joi.boolean().sensitive(true).optional(),
+  // The origin this deployment answers on, which the OpenAPI document advertises as its
+  // server. Optional, because seven phases of local work never needed it; required in
+  // production by checkCrossFieldBounds, because behind a reverse proxy the request's
+  // own host header is the container's, not the public name.
+  PUBLIC_BASE_URL: Joi.string()
+    .trim()
+    .pattern(publicBaseUrlPattern)
+    .message(
+      'PUBLIC_BASE_URL must be an absolute origin with no path, such as https://example.org',
+    )
+    .optional(),
   MYSQL_HOST: Joi.string().hostname().default('127.0.0.1'),
   MYSQL_PORT: Joi.number().integer().min(1).max(65_535).default(3306),
   MYSQL_DATABASE: Joi.string()
@@ -552,6 +565,16 @@ export function validateEnvironment(
  */
 function checkCrossFieldBounds(environment: EnvironmentVariables): string[] {
   const unbounded: string[] = [];
+  // A deployed API has to know its own public origin, because the request that reaches
+  // it carries the proxy's host header rather than the browser's. Without this, the
+  // document served from the public host would advertise the container's address, and a
+  // client generated from it would be generated against something unreachable.
+  if (
+    environment.NODE_ENV === 'production' &&
+    !environment.PUBLIC_BASE_URL?.startsWith('https://')
+  ) {
+    unbounded.push('PUBLIC_BASE_URL');
+  }
   // A safeguard must outlive the bounded storage call it protects, or the cleanup
   // runner could delete an object whose upload is still in flight.
   if (

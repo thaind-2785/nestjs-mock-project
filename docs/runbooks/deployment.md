@@ -1,209 +1,180 @@
 # Runbook: deploying the hotel management system
 
-This is the one-time host preparation and the everyday deploy. Written for somebody who
-has never touched this host, because the first person to follow it will not have.
+One-time setup, then the everyday deploy. Written for somebody who has not seen this
+deployment before, because the first person to follow it will not have.
 
-The deployment is a demonstration environment: one host, one replica of each process, no
-real customer data. Everything below assumes that.
+This is a demonstration environment: one replica of each process, one reviewer at a time,
+no real customer data. Every choice below assumes that.
 
-- **Public name**: `hotel-nestjs-mock-pj.duckdns.org`
-- **Host**: Oracle Cloud Always Free, Ampere A1 (arm64)
-- **Database**: managed MySQL 8, outside the host
-- **Everything else**: containers on the host, behind one reverse proxy
+## What runs where
+
+| Piece          | Where                     | Why not somewhere else                                                               |
+| -------------- | ------------------------- | ------------------------------------------------------------------------------------ |
+| API, worker    | Railway, one service each | They are the same image with different commands                                      |
+| Redis          | Railway                   | Transport only; losing it loses no work, the outbox holds it                         |
+| MySQL 8        | Aiven, managed            | A database inside the thing that redeploys is a database a redeploy can destroy      |
+| Object storage | Cloudflare R2             | Room images and export files are the only things here the database cannot regenerate |
+| Mail           | Gmail over OAuth2         | What Phase 5 built; a refresh token, not a password                                  |
+| Domain + TLS   | Railway                   | Issued and renewed automatically; nothing to configure                               |
+
+Railway holds two processes and a queue. Everything that keeps state is outside it, which
+is what makes a failed deploy safe to retry without thinking.
 
 ---
 
-# Part 1 — one-time host preparation
+# Part 1 - one-time setup
 
-Done once, by hand. Steps 1-3 are the ones that most often go wrong, and step 2 is the
-one nobody expects.
+Roughly an hour, most of it waiting for other people's consoles. Steps 3 and 4 each have
+one detail that is easy to miss and fails later rather than sooner.
 
-## 0. Get an Oracle Cloud account
+## 1. Railway account and project
 
-[cloud.oracle.com](https://cloud.oracle.com) → **Sign up for free**. Three things about
-this are worth knowing before starting, because two of them cannot be undone.
+[railway.com](https://railway.com) - sign in with GitHub. The **Free Trial** gives $5 of
+credit for 30 days and asks for no card.
 
-**A credit card is required for identity verification.** About a dollar is held and
-released. Always Free is not a trial that starts charging: it stays free, and the account
-is not upgraded without an explicit decision.
+Create an empty project. Keep the tab open; service IDs come from it later.
 
-**The home region is chosen once and cannot be changed.** Always Free resources belong to
-it. The trade-off is capacity against latency: Singapore, Tokyo and Osaka are close to
-Vietnam and are also where everybody else is, so Ampere capacity is scarcest there. A
-quieter region is easier to get an ARM instance in and adds latency that a demonstration
-does not notice.
+## 2. Make the image public
 
-**The first 30 days are a trial with credit attached.** When it ends the account becomes
-Always Free and anything built on an Always-Free-eligible shape keeps running. Ampere
-A1.Flex up to 4 OCPU and 24 GB is such a shape; a larger one created during the trial is
-not, and stops when the credit does.
+Railway pulls private images only on the Pro plan. This image holds no secret - no
+`.env`, no credentials, only compiled code - so publishing it costs nothing and skips
+that requirement.
 
-## 1. Create the VM
+GitHub - the repository - **Packages** - `nestjs-mock-project` - Package settings -
+Change visibility - **Public**.
 
-Oracle Cloud console → **Compute → Instances → Create instance**.
+The package appears only after the first merge to `main` has published an image. If it is
+not there yet, come back after that merge.
 
-| Field   | Value                                                          |
-| ------- | -------------------------------------------------------------- |
-| Image   | Canonical Ubuntu 24.04                                         |
-| Shape   | **Ampere → VM.Standard.A1.Flex**, 4 OCPU, 24 GB                |
-| SSH key | Upload your public key, or let Oracle generate one and save it |
+## 3. Database: Aiven MySQL
 
-Ampere capacity runs out often. "Out of capacity" is not a configuration error — wait and
-retry, sometimes across a few hours. Do not switch to `VM.Standard.E2.1.Micro`: it is
-x86_64 with 1 GB of RAM, and this stack wants more than that.
+[aiven.io](https://aiven.io/free-mysql-database) - create a **free MySQL 8** service. No
+card required. Free services power down when idle and take about a minute to wake, which
+is why readiness has a generous start period.
 
-Write down the **public IP** when the instance is running.
+From the service overview, keep: host, port, database name, user, password.
+
+MySQL 8 and not a MySQL-compatible endpoint. This codebase depends on InnoDB behaviour it
+has measured: `SELECT ... FOR UPDATE` in eleven places, `innodb_lock_wait_timeout`, and
+the `1205`-versus-`1062` distinction the Phase 7 election is built on. A Vitess- or
+TiDB-backed service answers those differently.
+
+**Easy to miss:** the port is not 3306. Take it from the panel exactly as given.
+
+## 4. Object storage: Cloudflare R2
+
+[dash.cloudflare.com](https://dash.cloudflare.com) - R2 - create a bucket, for example
+`hotel-media`. 10 GB is free and stays free; a payment method is required even so.
+
+Then **R2 - Manage API tokens - Create API token**, scoped to Object Read & Write for that
+bucket. Keep the Access Key ID and Secret Access Key; the secret is shown once.
+
+Keep the **endpoint** from the bucket settings:
+`https://<account-id>.r2.cloudflarestorage.com`.
+
+**Easy to miss:** R2's region is the literal string `auto`, not a region name. Anything
+else is accepted at startup and rejected at the first upload, as `SignatureDoesNotMatch`.
+
+## 5. Mail: a Gmail sending token
+
+Use an account that does nothing else. The demonstration is publicly reachable and its
+Swagger page accepts any address, so whatever this account sends, it sends on your behalf.
+
+In the Google Cloud console, on the same project as the login client:
+
+1. Enable the **Gmail API**.
+2. Create an **OAuth 2.0 Client ID**, or reuse the existing web client and add
+   `https://developers.google.com/oauthplayground` as a redirect URI.
+3. At [OAuth 2.0 Playground](https://developers.google.com/oauthplayground), open the gear
+   icon, tick _Use your own OAuth credentials_, paste the client ID and secret, authorise
+   the scope `https://mail.google.com/`, then exchange the code for a **refresh token**.
+
+Keep the client ID, client secret and refresh token. No password is involved anywhere.
+
+## 6. Create the Railway services
+
+In the project, **New - Docker Image** for each application service, both pointing at the
+same image:
+
+```
+ghcr.io/thaind-2785/nestjs-mock-project:main
+```
+
+| Service | Name     | Start command                              |
+| ------- | -------- | ------------------------------------------ |
+| API     | `api`    | _(leave empty - the image defaults to it)_ |
+| Worker  | `worker` | `node dist/worker`                         |
+
+Then **New - Database - Redis**.
+
+Two services from one image is the point rather than a convenience: the API and the worker
+cannot be different revisions of an application that shares a database.
+
+## 7. Give the API a public address
+
+On the `api` service - Settings - Networking - **Generate Domain**, port `3000`. Railway
+returns something like `hotel-api-production.up.railway.app` and issues the certificate
+itself.
+
+That name is `PUBLIC_BASE_URL`. Add the callback to the Google OAuth client now:
+
+```
+https://<railway-subdomain>/api/v1/auth/google/callback
+```
+
+This step waits until here because the URL does not exist before the service does.
+
+## 8. Environment variables
+
+On **both** `api` and `worker`: Railway - the service - Variables. Railway holds these;
+they never enter the image and never enter the repository.
 
 ```bash
-ssh ubuntu@<public-ip>      # confirm you can get in before going further
-```
-
-## 2. Open ports 80 and 443 — in two places
-
-This is the step that wastes afternoons. Oracle filters traffic **twice**, and fixing one
-looks exactly like fixing neither.
-
-**a. The virtual network**, in the console:
-
-Networking → Virtual Cloud Networks → your VCN → Security Lists → default → **Add Ingress
-Rules**:
-
-| Source CIDR | Protocol | Destination port |
-| ----------- | -------- | ---------------- |
-| `0.0.0.0/0` | TCP      | 80               |
-| `0.0.0.0/0` | TCP      | 443              |
-
-**b. The machine's own firewall**, over SSH. Oracle's Ubuntu images ship an iptables
-ruleset that rejects everything but SSH:
-
-```bash
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
-sudo netfilter-persistent save
-```
-
-Check both are open from your own machine, not from the VM:
-
-```bash
-nc -zv <public-ip> 80 && nc -zv <public-ip> 443
-```
-
-If this fails, nothing later works, and Let's Encrypt will report a DNS problem that is
-not a DNS problem.
-
-## 3. Point the name at the IP
-
-At [duckdns.org](https://duckdns.org), set `hotel-nestjs-mock-pj` to the public IP. Then,
-from your own machine:
-
-```bash
-dig +short hotel-nestjs-mock-pj.duckdns.org
-```
-
-It must print the IP before you continue. A certificate cannot be issued for a name that
-does not resolve yet.
-
-## 4. Install Docker
-
-```bash
-curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker ubuntu
-exit                                   # the group only applies to a new session
-```
-
-Reconnect and confirm:
-
-```bash
-docker run --rm hello-world
-docker compose version
-```
-
-## 5. Create the managed database
-
-At [aiven.io](https://aiven.io/free-mysql-database), create a **free MySQL 8** service.
-Free services are powered off when idle and take a minute to wake; that is acceptable for
-a demonstration and is the reason readiness has a generous start period.
-
-From its connection details, keep the host, port, database name, user and password.
-
-MySQL 8 specifically, and not a MySQL-compatible service: this codebase depends on InnoDB
-behaviour it has measured — `SELECT ... FOR UPDATE` in eleven places,
-`innodb_lock_wait_timeout`, and the `1205`-versus-`1062` distinction the Phase 7 election
-is built on.
-
-## 6. Tell Google about the public callback
-
-Google Cloud console → APIs & Services → Credentials → your OAuth 2.0 Client ID →
-**Authorized redirect URIs**, add exactly:
-
-```
-https://hotel-nestjs-mock-pj.duckdns.org/api/v1/auth/google/callback
-```
-
-Skipping this leaves a demonstration that reaches every endpoint except the ones behind a
-login, which is most of them.
-
-## 7. Lay out the host
-
-```bash
-sudo mkdir -p /srv/hotel
-sudo chown ubuntu:ubuntu /srv/hotel
-cd /srv/hotel
-```
-
-Copy the two files the deploy needs from your workstation:
-
-```bash
-scp compose.production.yaml Caddyfile ubuntu@<public-ip>:/srv/hotel/
-```
-
-## 8. Write the environment file
-
-On the host, `/srv/hotel/.env`. This is the only place production secrets exist: not in
-the image, not in the repository, not in GitHub.
-
-```bash
-cat > /srv/hotel/.env <<'ENV'
 NODE_ENV=production
 PORT=3000
-PUBLIC_HOSTNAME=hotel-nestjs-mock-pj.duckdns.org
-PUBLIC_BASE_URL=https://hotel-nestjs-mock-pj.duckdns.org
+PUBLIC_BASE_URL=https://<railway-subdomain>
 
 # Swagger is off by default in production. This environment turns it on deliberately:
-# it is the demonstration surface, and it holds no real data.
+# it is the demonstration surface and holds no real data.
 SWAGGER_ENABLED=true
 
-# Managed MySQL, from Aiven's connection details.
+# Aiven. The port is not 3306.
 MYSQL_HOST=<aiven-host>
 MYSQL_PORT=<aiven-port>
 MYSQL_DATABASE=<aiven-database>
 MYSQL_USER=<aiven-user>
 MYSQL_PASSWORD=<aiven-password>
 
-# Google login. The redirect URI must match step 6 exactly.
+# Railway substitutes these from the Redis service in the same project.
+REDIS_HOST=${{Redis.REDISHOST}}
+REDIS_PORT=${{Redis.REDISPORT}}
+REDIS_PASSWORD=${{Redis.REDISPASSWORD}}
+
+# Google login.
 GOOGLE_AUTH_ENABLED=true
 GOOGLE_CLIENT_ID=<client-id>
 GOOGLE_CLIENT_SECRET=<client-secret>
-GOOGLE_REDIRECT_URI=https://hotel-nestjs-mock-pj.duckdns.org/api/v1/auth/google/callback
+GOOGLE_REDIRECT_URI=https://<railway-subdomain>/api/v1/auth/google/callback
 AUTH_SUCCESS_REDIRECT_URI=/api/docs
 
-# At least 32 characters, and not reused from anywhere.
-JWT_ACCESS_SECRET=<generate: openssl rand -hex 32>
+# openssl rand -hex 32
+JWT_ACCESS_SECRET=<generated>
 
-# Object storage is MinIO on this host; these are the credentials it starts with.
-OBJECT_STORAGE_ACCESS_KEY=<generate: openssl rand -hex 12>
-OBJECT_STORAGE_SECRET_KEY=<generate: openssl rand -hex 24>
+# Cloudflare R2. The region is the literal string auto.
+OBJECT_STORAGE_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+OBJECT_STORAGE_ACCESS_KEY=<r2-access-key-id>
+OBJECT_STORAGE_SECRET_KEY=<r2-secret-access-key>
 OBJECT_STORAGE_BUCKET=hotel-media
-OBJECT_STORAGE_REGION=us-east-1
+OBJECT_STORAGE_REGION=auto
 OBJECT_STORAGE_FORCE_PATH_STYLE=true
 
-# Mail is caught by Mailpit on this host and never delivered. The Gmail values are
-# required by the schema and are not used, because MAIL_SMTP_HOST points at Mailpit.
-MAIL_FROM_ADDRESS=bookings@hotel-nestjs-mock-pj.duckdns.org
-MAIL_GMAIL_USER=unused@example.com
-MAIL_GMAIL_CLIENT_ID=unused
-MAIL_GMAIL_CLIENT_SECRET=unused
-MAIL_GMAIL_REFRESH_TOKEN=unused
+# Gmail over OAuth2.
+MAIL_PROVIDER=GMAIL_SMTP
+MAIL_FROM_ADDRESS=<sending-account>@gmail.com
+MAIL_GMAIL_USER=<sending-account>@gmail.com
+MAIL_GMAIL_CLIENT_ID=<client-id>
+MAIL_GMAIL_CLIENT_SECRET=<client-secret>
+MAIL_GMAIL_REFRESH_TOKEN=<refresh-token>
 
 # Namespaces, so nothing here can consume another deployment's jobs.
 NOTIFICATION_QUEUE_PREFIX=hotel:prod:notifications
@@ -212,35 +183,42 @@ RATE_LIMIT_REDIS_KEY_PREFIX=hotel:prod:rate
 
 HOTEL_TIMEZONE=Asia/Ho_Chi_Minh
 
-# Off until the dry run below has been read. docs/runbooks/retention.md is the sequence.
+# Off until a dry run has been read. docs/runbooks/retention.md has the sequence.
 RETENTION_ENABLED=false
-ENV
-
-chmod 600 /srv/hotel/.env
 ```
 
-Generate the three secrets rather than inventing them:
+The application refuses to start when one of these is missing and names the ones it wants
+without printing their values. That line in the deploy log is the fastest way to find a
+typo here.
+
+## 9. Run the migration, once
+
+The schema does not exist yet. From your own machine:
 
 ```bash
-openssl rand -hex 32    # JWT_ACCESS_SECRET
-openssl rand -hex 12    # OBJECT_STORAGE_ACCESS_KEY
-openssl rand -hex 24    # OBJECT_STORAGE_SECRET_KEY
+MYSQL_HOST=<aiven-host> MYSQL_PORT=<aiven-port> \
+MYSQL_DATABASE=<aiven-db> MYSQL_USER=<aiven-user> MYSQL_PASSWORD=<aiven-password> \
+npm run migration:run:prod
 ```
 
-## 9. Give the pipeline a way in
+It applies the whole history against an empty schema. Then redeploy both Railway services
+so they start against a database they can read.
 
-On GitHub: **Settings → Secrets and variables → Actions → New repository secret**.
+## 10. Pipeline credentials
 
-| Name             | Value                                                         |
-| ---------------- | ------------------------------------------------------------- |
-| `ORACLE_HOST`    | the public IP                                                 |
-| `ORACLE_USER`    | `ubuntu`                                                      |
-| `ORACLE_SSH_KEY` | the **private** key, whole file including the BEGIN/END lines |
+Railway - Account Settings - **Tokens** - create one. Then on GitHub, **Settings - Secrets
+and variables - Actions**:
 
-These three are the only secrets GitHub holds. It never carries the application's
-environment: that lives on the host and the deploy only issues commands.
+| Name                        | Value                                         |
+| --------------------------- | --------------------------------------------- |
+| `RAILWAY_TOKEN`             | the token                                     |
+| `RAILWAY_API_SERVICE_ID`    | from the `api` service's URL in the dashboard |
+| `RAILWAY_WORKER_SERVICE_ID` | the same, for `worker`                        |
 
-## 10. Make the gate a required check
+GitHub never holds the application's own environment. It holds the key to the door and
+nothing behind it.
+
+## 11. Make the gate a required check
 
 ```bash
 gh api -X PUT repos/thaind-2785/nestjs-mock-project/branches/main/protection --input - <<'JSON'
@@ -255,102 +233,73 @@ gh api -X PUT repos/thaind-2785/nestjs-mock-project/branches/main/protection --i
 JSON
 ```
 
-## 11. First start, by hand
-
-The first deploy is done manually so that a failure here is a failure of the host and not
-of the pipeline. Resolve an image the publish job has already produced — its digest is in
-that job's summary — and start:
+## 12. Check it
 
 ```bash
-cd /srv/hotel
-export APP_IMAGE=ghcr.io/thaind-2785/nestjs-mock-project@sha256:<digest>
-
-docker compose -f compose.production.yaml pull
-docker compose -f compose.production.yaml --profile migrate run --rm migrate
-docker compose -f compose.production.yaml up -d
+curl -i https://<railway-subdomain>/api/v1/health/ready
+open https://<railway-subdomain>/api/docs
 ```
 
-The migration runs against an empty schema and applies the whole history. Then, from your
-own machine:
-
-```bash
-curl -i https://hotel-nestjs-mock-pj.duckdns.org/api/v1/health/ready
-open https://hotel-nestjs-mock-pj.duckdns.org/api/docs
-```
-
-The certificate is obtained by Caddy on first request and can take a few seconds.
+Then, through Swagger, the flows this project actually built: Google login, a booking
+created and approved and cancelled, a room image uploaded, an export requested and
+downloaded, and `ops:retention --dry-run` read from the logs.
 
 ---
 
-# Part 2 — the everyday deploy
+# Part 2 - the everyday deploy
 
-Merging to `main` publishes an image; the deploy workflow ships it. Nothing else is
-needed, and nothing about the sequence differs from the manual one above — it is the same
-three commands over SSH.
+Merging to `main` publishes an image and the deploy workflow ships it.
 
-## What the deploy does, in order
+## What it does, in order
 
-1. Resolves the digest that was published for this commit.
-2. Runs the migration as a one-shot container **before** replacing anything. A failure
-   here leaves the previous revision serving and the job exits non-zero.
-3. Starts the new containers.
+1. Resolves the digest published for this commit.
+2. Runs the migration against the production database **before** anything is replaced. A
+   failure here leaves the running revision serving and the job exits non-zero.
+3. Points both Railway services at the new digest and waits for them to redeploy.
 4. Polls `/health/ready` until it answers `200` or the budget expires.
 5. On failure, restores the previously recorded digest, re-checks readiness, and exits
    non-zero.
 
 Migrations are never reverted automatically. They are expand-only by project rule, so
 rolling the _code_ back over a migrated database is safe; rolling a migration back is how
-a partial migration becomes data loss, and it is a decision for a person.
+a partial migration becomes data loss, and that is a decision for a person.
 
 ## Reading a failed deploy
 
-```bash
-ssh ubuntu@<host>
-cd /srv/hotel
-cat .digest.current .digest.previous          # what it tried, what it came back to
-docker compose -f compose.production.yaml ps
-docker compose -f compose.production.yaml logs --tail 100 api
-docker compose -f compose.production.yaml logs --tail 100 worker
-```
+Railway - the service - **Deployments** - the failed one - **View logs**. Both processes
+log JSON, one object per line; the first error after a restart is almost always the answer.
 
-Both processes log JSON, one object per line. The first error in `api` after a restart is
-almost always the answer.
-
-| What you see                              | What it means                                                       |
-| ----------------------------------------- | ------------------------------------------------------------------- |
-| `Environment validation failed for: X, Y` | `/srv/hotel/.env` is missing those names                            |
-| `exec format error`                       | An amd64-only image on this arm64 host; the publish job builds both |
-| Readiness `503` with MySQL unreachable    | Aiven service asleep or credentials wrong                           |
-| Caddy cannot obtain a certificate         | Port 80 blocked — check **both** places in step 2                   |
+| What you see                                | What it means                                                    |
+| ------------------------------------------- | ---------------------------------------------------------------- |
+| `Environment validation failed for: X, Y`   | Those variables are missing from that service                    |
+| `exec format error`                         | An image built for one architecture; the publish job builds both |
+| Readiness `503`, MySQL unreachable          | Aiven asleep, or the port is 3306 rather than Aiven's            |
+| Uploads fail with `SignatureDoesNotMatch`   | `OBJECT_STORAGE_REGION` is not `auto`                            |
+| Mail fails with `invalid_grant`             | The Gmail refresh token was revoked; issue a new one             |
+| Never becomes ready, and no application log | The tag does not exist, or the package is still private          |
 
 ## Rolling back by hand
 
-```bash
-cd /srv/hotel
-export APP_IMAGE="$(cat .digest.previous)"
-docker compose -f compose.production.yaml up -d
-curl -fsS https://hotel-nestjs-mock-pj.duckdns.org/api/v1/health/ready
-```
+Railway - the service - Deployments - a previous successful one - **Redeploy**. Do both
+services, so the API and the worker stay on one revision.
 
 ## Turning retention on
 
-Only after a dry run has been read. The sequence and what each reading means are in
-[`retention.md`](retention.md); in short:
+Only after a dry run has been read; [`retention.md`](retention.md) explains each reading.
 
 ```bash
-cd /srv/hotel
-docker compose -f compose.production.yaml run --rm api npm run ops:retention:prod -- --dry-run
-# read the counts, then:
-sed -i 's/RETENTION_ENABLED=false/RETENTION_ENABLED=true/' .env
-docker compose -f compose.production.yaml up -d worker
+npm run ops:retention:prod -- --dry-run
 ```
 
-## Stopping it
+Then set `RETENTION_ENABLED=true` on the **worker** service only, and redeploy it. The API
+runs no scheduler.
 
-```bash
-docker compose -f compose.production.yaml down          # keeps the volumes
-docker compose -f compose.production.yaml down -v       # deletes Redis, MinIO, Mailpit data
-```
+## Cost, and what happens when the credit runs out
 
-Neither touches the database: it is managed and outside this file, which is the reason it
-is outside this file.
+The trial is $5 for 30 days. Three Railway services running continuously will consume it
+before then. When it does, the services stop - and the database, the object store, the
+mail account and the published images are all outside Railway and are untouched.
+
+`compose.production.yaml` and `Caddyfile` in this repository describe the same system on a
+single Linux host with Docker. That is the fallback if this environment needs to outlive
+the credit.

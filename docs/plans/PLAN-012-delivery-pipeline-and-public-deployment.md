@@ -156,31 +156,33 @@ environment injection`) are extended rather than duplicated.
 secrets are scoped.
 
 ```
-ssh host <<'REMOTE'
-  cd /srv/hotel
-  echo "$NEW_DIGEST" > .digest.new
-  docker compose -f compose.production.yaml pull
-  docker compose -f compose.production.yaml run --rm migrate   # migration:run
-  docker compose -f compose.production.yaml up -d
-REMOTE
-poll https://<host>/api/v1/health/ready until 200 or budget
-on failure: restore .digest.previous, up -d, re-poll, exit 1
+resolve the digest published for this commit
+run migration:run:prod against the production database
+point both Railway services at the digest, wait for each to redeploy
+poll https://<subdomain>/api/v1/health/ready until 200 or the budget expires
+on failure: restore the previous digest on both services, re-poll, exit 1
 ```
 
-The migration runs as `run --rm`, a one-shot container of the same image, so it uses the
-same code and the same credentials and cannot drift from what will serve.
+The migration runs from the workflow rather than from a container on the platform,
+because Railway has no one-shot job primitive: a service is a thing that stays running. It
+uses the same compiled entrypoint the image would (`migration:run:prod`), against the same
+database, before either service is repointed - so a failed migration leaves the running
+revision serving, which is the property that mattered.
 
-**Host preparation** is one documented manual pass, in `docs/runbooks/deployment.md`:
-Docker installed, `/srv/hotel` created, `.env` written with `600`, DNS name pointed at the
-IP, the reverse proxy's certificate obtained, the Google OAuth client given the production
-redirect URI, `RETENTION_ENABLED=false`.
+**Both services are repointed to the same digest**, and that is the rule this step exists
+to keep. Repointing one and failing on the other leaves an API and a worker on different
+revisions of an application that shares a database - the exact failure a single image was
+chosen to make impossible.
+
+**Platform preparation** is one documented manual pass in `docs/runbooks/deployment.md`:
+the Railway project and its services, the image made public, Aiven MySQL, Cloudflare R2,
+the Gmail refresh token, the environment on both services, the first migration, and the
+three GitHub secrets.
 
 **Evidence, and its honest limit:** the deploy job's log, the recorded digest, `curl`
-output from `/health/ready` and `/api/docs-json` over HTTPS, and a screenshot of Swagger.
-Rollback is proven by deliberately deploying a digest whose readiness fails and recording
-that the previous one came back.
-
----
+against `/health/ready` and `/api/docs-json` over HTTPS, and the acceptance flows walked
+through Swagger once. Rollback is proven by deliberately deploying a digest whose
+readiness fails and recording that the previous one came back.
 
 ## `P8-T06` — closing the project
 
@@ -250,6 +252,19 @@ _Recorded as slices land. `ADR-0009` holds the durable ones._
   able to send mail to a stranger who was typed into a Swagger field, and benefits from a
   reviewer being able to read the rendered message. The adapter is unchanged and remains
   selectable by environment.
+- 2026-09-23 — the deployment target changed from an Oracle Cloud Always Free VM to
+  Railway, after Oracle refused the owner's account repeatedly. Nothing in `P8-T01`
+  through `P8-T04` changed: the image, the gate and the publish are the same, which is the
+  argument for an artifact in a registry being the unit of deployment.
+  `compose.production.yaml` and the `Caddyfile` describe a single-host deployment nothing
+  now runs; they are kept as the documented fallback for when the trial credit ends, and
+  are removed in `P8-T06` if that is not wanted.
+- 2026-09-23 — MinIO and Mailpit dropped from the deployed environment in favour of
+  Cloudflare R2 and Gmail. Both were inherited from the single-host design, where a
+  container is free and a managed service is another account; on Railway a container is
+  billed and holds state a redeploy can lose. The owner also asked for the production path
+  rather than the local stand-ins, and `MAIL_PROVIDER` and `OBJECT_STORAGE_ENDPOINT` were
+  already the switches for it - no application code changed.
 - 2026-09-23 — Phase 9 optional slices are not taken. The owner declared Phase 8 final.
   `feature-scope.md` already treats them as optional, and room export was the one selected
   optional; recorded so "unfinished" and "deliberately not taken" are distinguishable to a

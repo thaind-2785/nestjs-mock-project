@@ -76,20 +76,19 @@ pay. `ADR-0009` records the removal so the manifest and the decision agree.
 
 ### Public surface
 
-| Path                                                           | Purpose                                           |
-| -------------------------------------------------------------- | ------------------------------------------------- |
-| `https://hotel-nestjs-mock-pj.duckdns.org/api/v1/...`          | The API, unchanged from local                     |
-| `https://hotel-nestjs-mock-pj.duckdns.org/api/docs`            | Swagger UI, **enabled in production**             |
-| `https://hotel-nestjs-mock-pj.duckdns.org/api/docs-json`       | OpenAPI document, for front-end client generation |
-| `https://hotel-nestjs-mock-pj.duckdns.org/api/v1/health/live`  | Liveness, used by the container healthcheck       |
-| `https://hotel-nestjs-mock-pj.duckdns.org/api/v1/health/ready` | Readiness, used by the deploy smoke check         |
-| `https://hotel-nestjs-mock-pj.duckdns.org/mail/`               | Mailpit UI, so a reviewer can read what was sent  |
+| Path                                              | Purpose                                           |
+| ------------------------------------------------- | ------------------------------------------------- |
+| `https://<railway-subdomain>/api/v1/...`          | The API, unchanged from local                     |
+| `https://<railway-subdomain>/api/docs`            | Swagger UI, **enabled in production**             |
+| `https://<railway-subdomain>/api/docs-json`       | OpenAPI document, for front-end client generation |
+| `https://<railway-subdomain>/api/v1/health/live`  | Liveness, used by the container healthcheck       |
+| `https://<railway-subdomain>/api/v1/health/ready` | Readiness, used by the deploy smoke check         |
 
 ### New configuration
 
-| Variable          | Required   | Meaning                                                                                                                  |
-| ----------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `PUBLIC_BASE_URL` | production | Absolute origin; Swagger's server URL and the OAuth origin. Production value: `https://hotel-nestjs-mock-pj.duckdns.org` |
+| Variable          | Required   | Meaning                                                                                             |
+| ----------------- | ---------- | --------------------------------------------------------------------------------------------------- |
+| `PUBLIC_BASE_URL` | production | Absolute origin; Swagger's server URL and the OAuth origin. Production value: the Railway subdomain |
 
 One new variable. Everything else the deployment needs already exists, because seven
 phases of configuration were written to be supplied from the environment.
@@ -102,7 +101,7 @@ anybody who copies this repository.
 ### Why there is no CORS and no cookie change
 
 Swagger is served by the same application, on the same origin, as the API it documents.
-A request from `https://hotel-nestjs-mock-pj.duckdns.org/api/docs` to `https://hotel-nestjs-mock-pj.duckdns.org/api/v1/...` is same-origin:
+A request from `https://<railway-subdomain>/api/docs` to `https://<railway-subdomain>/api/v1/...` is same-origin:
 the browser sends no preflight and applies no cross-origin rules, and the existing
 `SameSite=Lax` refresh cookie is sent exactly as it is locally.
 
@@ -177,14 +176,30 @@ change the answers to those.
 
 ## External services, async work, and failure behavior
 
-| Concern        | Production choice                              | If it fails                                                           |
-| -------------- | ---------------------------------------------- | --------------------------------------------------------------------- |
-| MySQL 8        | Managed instance, credentials as secrets       | App fails readiness; deploy rolls back                                |
-| Redis          | Container on the host, with a persisted volume | Mail/export queues stall; outbox retains the work, so nothing is lost |
-| Object storage | MinIO container on the host, persisted volume  | Uploads and exports fail; rows are retained and stay due              |
-| SMTP           | Mailpit container on the host                  | Outbox retries with backoff                                           |
-| DNS            | Free dynamic-DNS name pointed at the VM's IP   | Certificate cannot be issued; the host is reachable only by IP        |
-| TLS            | Reverse proxy with automatic certificates      | Deploy fails readiness over HTTPS and rolls back                      |
+| Concern        | Production choice                       | If it fails                                                           |
+| -------------- | --------------------------------------- | --------------------------------------------------------------------- |
+| Compute        | Railway, one service per process        | Deploy fails readiness and rolls back                                 |
+| MySQL 8        | Aiven managed instance, outside Railway | App fails readiness; deploy rolls back                                |
+| Redis          | Railway service                         | Mail/export queues stall; outbox retains the work, so nothing is lost |
+| Object storage | Cloudflare R2, S3-compatible            | Uploads and exports fail; rows are retained and stay due              |
+| SMTP           | Gmail over OAuth2, as Phase 5 specified | Outbox retries with backoff                                           |
+| DNS + TLS      | Railway's own subdomain and certificate | Nothing to configure; Railway issues and renews it                    |
+
+**Every managed service is outside the thing that redeploys.** The database, the object
+store and the mail provider each survive a deployment that destroys everything else,
+which is the property that lets a deploy be retried without thinking about it. Railway
+holds only the two processes and the queue.
+
+**Gmail rather than a catcher, decided by the owner on 2026-09-23.** The earlier draft
+specified Mailpit on the reasoning that a public demonstration should not be able to mail
+a stranger typed into a Swagger field. The owner chose real delivery: this is a project
+for learning, the audience is one reviewer, and OAuth2 refresh-token delivery is part of
+what Phase 5 built. The compensating measure is an account used for nothing else - the
+credential is a refresh token scoped to sending, not a password.
+
+**Cloudflare R2 rather than a container.** An object store that lives in the deployment is
+an object store a redeploy can lose, and room images and export results are the two things
+here that cannot be regenerated from the database.
 
 **Mailpit rather than Gmail**, and the choice is deliberate. Phase 5 specified Gmail for a
 real deployment, and the adapter is unchanged and still selected by configuration. But a
@@ -288,17 +303,17 @@ job-level environment injection`). New cases: the deploy job cannot run before t
 
 ### Assumptions
 
-1. The host is an Oracle Cloud Always Free VM, chosen by the owner on 2026-09-23. Any
-   SSH-reachable Linux host with Docker satisfies the same contract; the pipeline holds
-   the host as configuration, not as an assumption in its code.
-2. The DNS name is `hotel-nestjs-mock-pj.duckdns.org`, registered by the owner on
-   2026-09-23. Oracle issues an IP and no name, and Let's Encrypt will not certify a bare
-   IP, so a name was required and buying one was not. It still has to be pointed at the
-   VM's public IP once that VM exists, which is the first step of host preparation.
-3. The Google OAuth client can have the production redirect URI added to it. This is a
-   manual step in the Google console. Without it, login on the deployed environment
-   cannot work, and the demonstration reaches every endpoint except an authenticated
-   one — which is most of them.
+1. The platform is Railway, chosen by the owner on 2026-09-23 after Oracle Cloud refused
+   the account repeatedly. The pipeline holds the platform as configuration - an image in
+   a registry and a deploy command - so moving again costs one workflow file and no
+   application code.
+2. The public name is the subdomain Railway assigns, with a certificate it issues and
+   renews. The DuckDNS name registered earlier is unused: it existed because an Oracle VM
+   has an IP and no name, and Railway has the opposite problem.
+3. The Google OAuth client can have the production redirect URI added to it, and a Gmail
+   account can issue a sending refresh token. Both are manual steps in the Google console.
+   Without the first, login on the deployed environment cannot work and the demonstration
+   reaches every endpoint except an authenticated one — which is most of them.
 4. The demonstration is performed by one person at a time. Nothing is sized for
    concurrent traffic, and the acceptance criteria are checks a human runs, not load.
 

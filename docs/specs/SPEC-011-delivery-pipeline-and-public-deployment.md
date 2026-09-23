@@ -176,19 +176,28 @@ change the answers to those.
 
 ## External services, async work, and failure behavior
 
-| Concern        | Production choice                       | If it fails                                                           |
-| -------------- | --------------------------------------- | --------------------------------------------------------------------- |
-| Compute        | Railway, one service per process        | Deploy fails readiness and rolls back                                 |
-| MySQL 8        | Aiven managed instance, outside Railway | App fails readiness; deploy rolls back                                |
-| Redis          | Railway service                         | Mail/export queues stall; outbox retains the work, so nothing is lost |
-| Object storage | Cloudflare R2, S3-compatible            | Uploads and exports fail; rows are retained and stay due              |
-| SMTP           | Gmail over OAuth2, as Phase 5 specified | Outbox retries with backoff                                           |
-| DNS + TLS      | Railway's own subdomain and certificate | Nothing to configure; Railway issues and renews it                    |
+| Concern        | Production choice                           | If it fails                                                           |
+| -------------- | ------------------------------------------- | --------------------------------------------------------------------- |
+| Compute        | Railway, one service per process            | Deploy fails readiness and rolls back                                 |
+| MySQL 8        | Railway managed service, official MySQL 8.4 | App fails readiness; deploy rolls back                                |
+| Redis          | Railway service                             | Mail/export queues stall; outbox retains the work, so nothing is lost |
+| Object storage | Cloudflare R2, S3-compatible                | Uploads and exports fail; rows are retained and stay due              |
+| SMTP           | Gmail over OAuth2, as Phase 5 specified     | Outbox retries with backoff                                           |
+| DNS + TLS      | Railway's own subdomain and certificate     | Nothing to configure; Railway issues and renews it                    |
 
-**Every managed service is outside the thing that redeploys.** The database, the object
-store and the mail provider each survive a deployment that destroys everything else,
-which is the property that lets a deploy be retried without thinking about it. Railway
-holds only the two processes and the queue.
+**Nothing that keeps state is part of what a deploy replaces.** A deploy repoints the two
+application services and touches nothing else: the database, the object store and the mail
+account each outlive it. That is the property that makes a failed deploy safe to retry.
+
+The database is a Railway service rather than an external one, and the reasoning is worth
+recording because the first draft said the opposite. On a single host, `compose down -v`
+deletes a database declared beside the application, so it had to live elsewhere. On
+Railway a database is a separate service with its own volume and a redeploy of the
+application does not reach it, so that argument does not transfer. What remained was cost,
+against two real costs of the alternative: a free external instance powers down when idle
+and answers the first request a minute later, which in a demonstration reads as a broken
+deployment, and it is one more account holding one more credential. Should the trial
+credit run out, moving the database out is five environment variables.
 
 **Gmail rather than a catcher, decided by the owner on 2026-09-23.** The earlier draft
 specified Mailpit on the reasoning that a public demonstration should not be able to mail

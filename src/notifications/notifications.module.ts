@@ -63,6 +63,7 @@ import { OutboxDispatcherService } from './outbox-dispatcher.service';
         const client = new Redis({
           host: connection.host,
           port: connection.port,
+          password: connection.password,
           lazyConnect: true,
           // A producer that cannot reach Redis must say so immediately: the claim is
           // already committed and the dispatcher hands it back with a retry time
@@ -88,6 +89,7 @@ import { OutboxDispatcherService } from './outbox-dispatcher.service';
         const client = new Redis({
           host: connection.host,
           port: connection.port,
+          password: connection.password,
           lazyConnect: true,
           maxRetriesPerRequest: null,
           connectTimeout: connection.timeoutMs,

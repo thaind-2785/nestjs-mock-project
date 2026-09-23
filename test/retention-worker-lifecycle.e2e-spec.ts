@@ -219,7 +219,7 @@ describe('P7-T04 retention scheduler as a process', () => {
     const worker = startWorker({
       OBJECT_STORAGE_ENDPOINT: await startUnresponsiveStorage(),
     });
-    await waitForLog(worker, 'retention_run_started', 60_000);
+    await waitForClaim('export-results');
 
     worker.kill('SIGTERM');
     const code = await waitForExit(worker, 120_000);
@@ -247,19 +247,7 @@ describe('P7-T04 retention scheduler as a process', () => {
     const killed = startWorker({
       OBJECT_STORAGE_ENDPOINT: await startUnresponsiveStorage(),
     });
-    // Waiting for this task's own claim rather than for the first `retention_run_started`
-    // line: the five tasks run serially, so the first line belongs to whichever runs
-    // first and the kill would land wherever it landed. The black-holed endpoint holds
-    // the process inside this batch until it is signalled.
-    await waitFor(
-      async () =>
-        (await readRuns()).some(
-          (row) =>
-            String(row.task_name) === 'export-results' &&
-            String(row.status) === 'CLAIMED',
-        ),
-      60_000,
-    );
+    await waitForClaim('export-results');
     killed.kill('SIGKILL');
     await waitForExit(killed, 60_000);
 
@@ -480,6 +468,28 @@ describe('P7-T04 retention scheduler as a process', () => {
 
   async function readRuns(): Promise<Array<Record<string, unknown>>> {
     return dataSource.query('SELECT * FROM scheduled_runs');
+  }
+
+  /**
+   * Waits until one named task holds its window, rather than until the first run starts.
+   *
+   * The five tasks run serially inside one cycle, so `retention_run_started` belongs to
+   * whichever runs first - and a signal sent on that line lands wherever it lands. Both
+   * signal tests need the process to be inside the *export* batch, held there by the
+   * black-holed storage endpoint; waiting on the first log line made that a race, and it
+   * is the race that failed in CI rather than on any machine it was written on.
+   */
+  async function waitForClaim(taskName: string): Promise<void> {
+    await waitFor(
+      async () =>
+        (await readRuns()).some(
+          (row) =>
+            String(row.task_name) === taskName &&
+            String(row.status) === 'CLAIMED',
+        ),
+      60_000,
+      async () => `claims: ${JSON.stringify(await readRuns())}`,
+    );
   }
 
   async function readRun(taskName: string): Promise<Record<string, unknown>> {

@@ -18,6 +18,26 @@ real customer data. Everything below assumes that.
 Done once, by hand. Steps 1-3 are the ones that most often go wrong, and step 2 is the
 one nobody expects.
 
+## 0. Get an Oracle Cloud account
+
+[cloud.oracle.com](https://cloud.oracle.com) → **Sign up for free**. Three things about
+this are worth knowing before starting, because two of them cannot be undone.
+
+**A credit card is required for identity verification.** About a dollar is held and
+released. Always Free is not a trial that starts charging: it stays free, and the account
+is not upgraded without an explicit decision.
+
+**The home region is chosen once and cannot be changed.** Always Free resources belong to
+it. The trade-off is capacity against latency: Singapore, Tokyo and Osaka are close to
+Vietnam and are also where everybody else is, so Ampere capacity is scarcest there. A
+quieter region is easier to get an ARM instance in and adds latency that a demonstration
+does not notice.
+
+**The first 30 days are a trial with credit attached.** When it ends the account becomes
+Always Free and anything built on an Always-Free-eligible shape keeps running. Ampere
+A1.Flex up to 4 OCPU and 24 GB is such a shape; a larger one created during the trial is
+not, and stops when the credit does.
+
 ## 1. Create the VM
 
 Oracle Cloud console → **Compute → Instances → Create instance**.

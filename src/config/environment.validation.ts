@@ -54,6 +54,7 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   REDIS_HOST: string;
   REDIS_PORT: number;
   REDIS_TIMEOUT_MS: number;
+  REDIS_PASSWORD?: string;
   RATE_LIMIT_REDIS_KEY_PREFIX: string;
   HOTEL_TIMEZONE: string;
   BOOKING_CREATE_RATE_LIMIT_MAX: number;
@@ -149,6 +150,11 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
   REDIS_HOST: Joi.string().hostname().default('127.0.0.1'),
   REDIS_PORT: Joi.number().integer().min(1).max(65_535).default(6379),
   REDIS_TIMEOUT_MS: Joi.number().integer().min(100).max(10_000).default(1_000),
+  // Optional, because the local Compose Redis has no password and seven phases of
+  // development never needed one. Every managed Redis requires authentication, and
+  // without this the client connects, is refused with NOAUTH, and surfaces as a
+  // ReplyError from deep inside BullMQ - a failure that looks like a queue bug.
+  REDIS_PASSWORD: Joi.string().allow('').optional(),
   // Required in production: two environments sharing one Redis instance would
   // otherwise both default to the same namespace and spend each other's budgets.
   RATE_LIMIT_REDIS_KEY_PREFIX: Joi.alternatives().conditional('NODE_ENV', {

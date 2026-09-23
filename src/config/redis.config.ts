@@ -16,6 +16,8 @@ export interface RedisConnectionConfiguration {
   host: string;
   port: number;
   timeoutMs: number;
+  /** Absent against an unauthenticated local server, required by every managed one. */
+  password?: string;
 }
 
 export function createRedisConnectionConfiguration(
@@ -25,5 +27,8 @@ export function createRedisConnectionConfiguration(
     host: environment.REDIS_HOST,
     port: environment.REDIS_PORT,
     timeoutMs: environment.REDIS_TIMEOUT_MS,
+    // An empty string is not a password, and passing one makes ioredis send AUTH with
+    // an empty argument, which a server without authentication refuses.
+    password: environment.REDIS_PASSWORD || undefined,
   };
 }

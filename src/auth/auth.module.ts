@@ -50,6 +50,7 @@ import { AUTH_REDIS_CLIENT, GOOGLE_OAUTH_CLIENT } from './auth.tokens';
         const client = new Redis({
           host: configuration.redisConnection.host,
           port: configuration.redisConnection.port,
+          password: configuration.redisConnection.password,
           lazyConnect: true,
           enableOfflineQueue: false,
           maxRetriesPerRequest: 0,

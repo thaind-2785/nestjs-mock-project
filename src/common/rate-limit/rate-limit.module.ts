@@ -22,6 +22,7 @@ import { RATE_LIMIT_REDIS_CLIENT } from './rate-limit.tokens';
         const client = new Redis({
           host: configuration.connection.host,
           port: configuration.connection.port,
+          password: configuration.connection.password,
           lazyConnect: true,
           enableOfflineQueue: false,
           maxRetriesPerRequest: 0,

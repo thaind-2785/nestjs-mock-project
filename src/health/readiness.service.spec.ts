@@ -12,7 +12,7 @@ import type {
 
 const configuration: ReadinessConfiguration = {
   timeoutMs: 25,
-  redis: { host: '127.0.0.1', port: 6379 },
+  redis: { host: '127.0.0.1', port: 6379, timeoutMs: 25 },
   rateLimitKeyPrefix: 'hotel:test-rate',
   storage: {
     endpoint: 'http://127.0.0.1:9000',

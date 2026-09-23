@@ -30,6 +30,7 @@ import { ReadinessService } from './readiness.service';
         const client = new Redis({
           host: configuration.redis.host,
           port: configuration.redis.port,
+          password: configuration.redis.password,
           lazyConnect: true,
           enableOfflineQueue: false,
           maxRetriesPerRequest: 0,

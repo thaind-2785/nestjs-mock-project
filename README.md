@@ -16,6 +16,11 @@ with a managed MySQL, Redis, Filebase object storage and Gmail delivery.
 
 - **Swagger**: <https://api-production-3c0a.up.railway.app/api/docs>
 - **Readiness**: <https://api-production-3c0a.up.railway.app/api/v1/health/ready>
+- **Which revision is serving**:
+  <https://api-production-3c0a.up.railway.app/api/v1/health/live> returns `revision`, the
+  commit its image was built from. The deploy requires that value to match the commit it is
+  shipping before it moves the worker — without it, a readiness check straight after a
+  deploy is answered by the container being replaced.
 - **[`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)** — every console the
   deployment spans, the demonstration order, what each failure symptom means, and the full
   setup sequence. A rendered copy of the console table exists as a convenience page

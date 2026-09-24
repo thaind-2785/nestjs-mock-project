@@ -25,19 +25,20 @@ is what makes a failed deploy safe to retry without thinking.
 The deployment spans six services, each with its own dashboard. This is the table to
 open before a demonstration, and the one to open when something is wrong.
 
-| To check                        | Where                                                                                                                                                                                    | What you are looking for                                                             |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| The API itself                  | [`/api/docs`](https://api-production-3c0a.up.railway.app/api/docs)                                                                                                                       | Swagger. Everything is demonstrated from here                                        |
-| Is it up                        | [`/api/v1/health/ready`](https://api-production-3c0a.up.railway.app/api/v1/health/ready)                                                                                                 | `{"status":"ok"}`. A `503` names the dependency in `details`                         |
-| Logs, restarts, variables       | [Railway project](https://railway.com/project/4f97eb5f-dd70-46d2-9ac0-06bdcf921cba)                                                                                                      | Service → Deployments → View logs. One JSON object per line                          |
-| Which image is deployed         | Railway → service → Settings → Source                                                                                                                                                    | A digest. The deploy refuses a tag, because the platform caches what one resolved to |
-| Was the image published         | [GitHub Packages](https://github.com/thaind-2785/nestjs-mock-project/pkgs/container/nestjs-mock-project)                                                                                 | A version tagged with the commit SHA, and `main`                                     |
-| Why a build failed              | [GitHub Actions](https://github.com/thaind-2785/nestjs-mock-project/actions)                                                                                                             | `Verify repository` then `Publish image`; the scan runs inside the second            |
-| Uploaded images and exports     | [Filebase console](https://console.filebase.com/)                                                                                                                                        | Bucket `hotel-media`. Room images and generated XLSX land here                       |
-| Mail that was actually sent     | [Gmail, Sent folder](https://mail.google.com/mail/u/0/#sent) of the sending account                                                                                                      | The rendered message. The outbox says it was accepted; this says it arrived          |
-| Login is refused                | [OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent)                                                                                                        | **Test users**. Anyone not listed cannot sign in while the app is in Testing         |
-| `redirect_uri_mismatch`         | [OAuth credentials](https://console.cloud.google.com/apis/credentials)                                                                                                                   | Authorized redirect URIs must match `GOOGLE_REDIRECT_URI` character for character    |
-| Mail fails with `invalid_grant` | [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com) enabled, then a new refresh token from [OAuth Playground](https://developers.google.com/oauthplayground) | The refresh token was revoked or the API was disabled                                |
+| To check                        | Where                                                                                                                                                                                    | What you are looking for                                                                    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| The API itself                  | [`/api/docs`](https://api-production-3c0a.up.railway.app/api/docs)                                                                                                                       | Swagger. Everything is demonstrated from here                                               |
+| Is it up                        | [`/api/v1/health/ready`](https://api-production-3c0a.up.railway.app/api/v1/health/ready)                                                                                                 | `{"status":"ok"}`. A `503` names the dependency in `details`                                |
+| Logs, restarts, variables       | [Railway project](https://railway.com/project/4f97eb5f-dd70-46d2-9ac0-06bdcf921cba)                                                                                                      | Service → Deployments → View logs. One JSON object per line                                 |
+| Which image is deployed         | Railway → service → Settings → Source                                                                                                                                                    | A digest. The deploy refuses a tag, because the platform caches what one resolved to        |
+| Which revision is serving       | [`/api/v1/health/live`](https://api-production-3c0a.up.railway.app/api/v1/health/live)                                                                                                   | `revision` — the commit the running build was made from, or `unknown` outside a built image |
+| Was the image published         | [GitHub Packages](https://github.com/thaind-2785/nestjs-mock-project/pkgs/container/nestjs-mock-project)                                                                                 | A version tagged with the commit SHA, and `main`                                            |
+| Why a build failed              | [GitHub Actions](https://github.com/thaind-2785/nestjs-mock-project/actions)                                                                                                             | `Verify repository` then `Publish image`; the scan runs inside the second                   |
+| Uploaded images and exports     | [Filebase console](https://console.filebase.com/)                                                                                                                                        | Bucket `hotel-media`. Room images and generated XLSX land here                              |
+| Mail that was actually sent     | [Gmail, Sent folder](https://mail.google.com/mail/u/0/#sent) of the sending account                                                                                                      | The rendered message. The outbox says it was accepted; this says it arrived                 |
+| Login is refused                | [OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent)                                                                                                        | **Test users**. Anyone not listed cannot sign in while the app is in Testing                |
+| `redirect_uri_mismatch`         | [OAuth credentials](https://console.cloud.google.com/apis/credentials)                                                                                                                   | Authorized redirect URIs must match `GOOGLE_REDIRECT_URI` character for character           |
+| Mail fails with `invalid_grant` | [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com) enabled, then a new refresh token from [OAuth Playground](https://developers.google.com/oauthplayground) | The refresh token was revoked or the API was disabled                                       |
 
 Two of these are the ones nobody thinks of first.
 
@@ -348,17 +349,35 @@ Merging to `main` publishes an image and the deploy workflow ships it.
 
 1. Asks the registry what digest it holds for this commit. A digest and never a tag:
    Railway caches what a floating tag resolved to for about an hour, so redeploying
-   `:main` after a publish re-runs the image it already had.
+   `:main` after a publish re-runs the image it already had. The deploy refuses an
+   `APP_IMAGE` that is not a digest.
 2. Points the **API** at that digest, with the migration as its pre-deploy command.
    Railway runs that command after the build and before the new deployment takes traffic;
    if it fails, the deployment does not proceed and the running revision keeps serving.
-3. Polls `/health/ready` until `200` or the budget expires. Readiness rather than
-   liveness, because a container that cannot reach its database is alive.
-4. Points the **worker** at the same digest, once the API has answered. The API moves
-   first and alone because it carries the migration — so a failed schema change never
-   leaves the two halves of one application on two revisions of it.
-5. On any failure: restores the previous digest on **both** services, redeploys them,
-   re-checks readiness, and exits non-zero.
+3. Asks three questions, in this order, and they are three different questions:
+
+   |     | Question                    | Answered by                                             |
+   | --- | --------------------------- | ------------------------------------------------------- |
+   | a   | Did the platform finish?    | `deployments(...)` reaching `SUCCESS`                   |
+   | b   | Is the new build serving?   | `/health/live` returning `revision` equal to the commit |
+   | c   | Do its dependencies answer? | `/health/ready` returning `200`                         |
+
+   Question **b** is the one that is easy to skip and the one that matters most. Railway
+   keeps the outgoing container serving until the incoming one is healthy, so readiness
+   answers `200` straight after a deploy — from the revision being replaced. A deploy that
+   asked only **c** passed before anything had happened, which is how a failed migration
+   looked exactly like a success. `REVIEW-045` found it; the first automated deploy had
+   already reported success without anyone being able to say what it shipped.
+
+4. Points the **worker** at the same digest, once the API is serving the new revision. The
+   API moves first and alone because it carries the migration — so a failed schema change
+   never leaves the two halves of one application on two revisions of it. The worker has
+   no HTTP surface, so its deployment is verified through the platform rather than by a
+   request.
+5. On any failure: restores the previous digest on the services it actually moved,
+   redeploys them, re-checks readiness, and exits non-zero. The `deploy_aborted` line
+   carries `rolledBack`, which is `false` when the restore could not be confirmed either —
+   the state that needs a person now.
 
 The decisions live in `scripts/railway-deploy.mjs`, which has unit tests against a fake
 platform. The workflow calls it and does nothing else — a deploy written in YAML can only
@@ -382,15 +401,17 @@ somebody off to check whether they copied the value correctly.
 Railway - the service - **Deployments** - the failed one - **View logs**. Both processes
 log JSON, one object per line; the first error after a restart is almost always the answer.
 
-| What you see                                | What it means                                                                                                                                                       |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Environment validation failed for: X, Y`   | Those variables are missing from that service                                                                                                                       |
-| `exec format error`                         | An image built for one architecture; the publish job builds both                                                                                                    |
-| Readiness `503`, `dependencies: ["mysql"]`  | Usually not the database. Raise `HEALTH_CHECK_TIMEOUT_MS` to 5000: the default bounds the first handshake at one second, which suits Compose and not a real network |
-| `MYSQL_HOST` still shows `${{MySQL...}}`    | The service is not named `MySQL`, so the reference cannot resolve                                                                                                   |
-| Uploads fail with `SignatureDoesNotMatch`   | The storage credentials or region are wrong. Filebase expects `us-east-1` and `https://s3.filebase.io`                                                              |
-| Mail fails with `invalid_grant`             | The Gmail refresh token was revoked; issue a new one                                                                                                                |
-| Never becomes ready, and no application log | The tag does not exist, or the package is still private                                                                                                             |
+| What you see                                         | What it means                                                                                                                                                                   |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Environment validation failed for: X, Y`            | Those variables are missing from that service                                                                                                                                   |
+| `exec format error`                                  | An image built for one architecture; the publish job builds both                                                                                                                |
+| Readiness `503`, `dependencies: ["mysql"]`           | Usually not the database. Raise `HEALTH_CHECK_TIMEOUT_MS` to 5000: the default bounds the first handshake at one second, which suits Compose and not a real network             |
+| Deploy fails: `the deployed revision never became …` | The new build is not serving. Usually the pre-deploy migration failed, which stops the deployment and leaves the old revision answering — read that deployment's log in Railway |
+| Deploy fails: `deployment FAILED for …`              | The platform rejected the deployment itself: a bad image reference, or a crash on start                                                                                         |
+| `MYSQL_HOST` still shows `${{MySQL...}}`             | The service is not named `MySQL`, so the reference cannot resolve                                                                                                               |
+| Uploads fail with `SignatureDoesNotMatch`            | The storage credentials or region are wrong. Filebase expects `us-east-1` and `https://s3.filebase.io`                                                                          |
+| Mail fails with `invalid_grant`                      | The Gmail refresh token was revoked; issue a new one                                                                                                                            |
+| Never becomes ready, and no application log          | The tag does not exist, or the package is still private                                                                                                                         |
 
 ## Rolling back by hand
 

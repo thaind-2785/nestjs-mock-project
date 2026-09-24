@@ -9,59 +9,90 @@ import {
 } from './railway-deploy.mjs';
 
 /**
- * The deploy decides things, and every decision it makes is one that cannot be observed
- * from a green build: which digest each service ends on, whether the worker moves at all,
- * what happens when readiness never answers. Merging to `main` is the only way to run it
- * for real, which is exactly why it is tested here instead.
+ * A platform that behaves the way the real one does, which the first version of this fake
+ * did not.
  *
- * The fake records every call rather than asserting inside it, so a test states the
- * sequence it expects rather than a count of things that happened.
+ * `REVIEW-045` found the gap: Railway keeps the outgoing revision serving until the
+ * incoming one is healthy, so readiness answers `200` immediately after a deploy - from
+ * the container being replaced. The old fake answered `200` too, and that was recorded as
+ * the pass case, so every test agreed with a deploy that had verified nothing.
+ *
+ * Here the liveness endpoint reports which revision is answering and only changes once the
+ * deployment reaches `SUCCESS`. A test that wants a failure makes the platform fail;
+ * nothing passes because a stale container was polite.
  */
-function railway({ readinessStatuses = [200], currentImages = {} } = {}) {
+const OLD = 'ghcr.io/owner/app@sha256:' + 'a'.repeat(64);
+const NEW = 'ghcr.io/owner/app@sha256:' + 'b'.repeat(64);
+const OLD_SHA = 'a'.repeat(40);
+const NEW_SHA = 'b'.repeat(40);
+
+function railway({
+  apiStatuses = ['SUCCESS'],
+  workerStatuses = ['SUCCESS'],
+  currentImages = {},
+  readinessStatuses = [200],
+  revisionFollowsDeployment = true,
+} = {}) {
   const calls = [];
   const images = {
-    'service-api': 'ghcr.io/owner/app@sha256:' + 'a'.repeat(64),
-    'service-worker': 'ghcr.io/owner/app@sha256:' + 'a'.repeat(64),
+    'service-api': OLD,
+    'service-worker': OLD,
     ...currentImages,
   };
-  const statuses = [...readinessStatuses];
+  const pending = {
+    'service-api': [...apiStatuses],
+    'service-worker': [...workerStatuses],
+  };
+  const deployedAt = {};
+  const readiness = [...readinessStatuses];
+  let liveRevision = OLD_SHA;
 
   const context = {
     token: 'token',
     environmentId: 'env-1',
+    projectId: 'project-1',
+    revision: NEW_SHA,
     services: { api: 'service-api', worker: 'service-worker' },
-    image: 'ghcr.io/owner/app@sha256:' + 'b'.repeat(64),
+    image: NEW,
     readinessUrl: 'https://example.test/api/v1/health/ready',
-    readinessBudgetMs: 50,
+    livenessUrl: 'https://example.test/api/v1/health/live',
+    readinessBudgetMs: 200,
+    deploymentBudgetMs: 200,
     pollIntervalMs: 1,
     now: (() => {
-      let t = 0;
+      let t = 1_000_000;
       return () => (t += 10);
     })(),
     sleep: async () => {},
     log: (record) => calls.push({ log: record.event }),
+
     async fetch(url, init) {
+      if (url === context.livenessUrl) {
+        calls.push({ liveness: liveRevision });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ status: 'ok', revision: liveRevision }),
+        };
+      }
       if (url === context.readinessUrl) {
-        const status = statuses.length > 1 ? statuses.shift() : statuses[0];
+        const status = readiness.length > 1 ? readiness.shift() : readiness[0];
         calls.push({ readiness: status });
         return { ok: true, status };
       }
 
       const body = JSON.parse(init.body);
       const variables = body.variables;
+      const reply = (data) => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data }),
+      });
 
       if (body.query.includes('serviceInstance(')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            data: {
-              serviceInstance: {
-                source: { image: images[variables.serviceId] },
-              },
-            },
-          }),
-        };
+        return reply({
+          serviceInstance: { source: { image: images[variables.serviceId] } },
+        });
       }
       if (body.query.includes('serviceInstanceUpdate')) {
         calls.push({
@@ -69,18 +100,249 @@ function railway({ readinessStatuses = [200], currentImages = {} } = {}) {
           image: variables.input.source.image,
           preDeploy: variables.input.preDeployCommand ?? null,
         });
-        return { ok: true, status: 200, json: async () => ({ data: {} }) };
+        images[variables.serviceId] = variables.input.source.image;
+        return reply({});
       }
       if (body.query.includes('serviceInstanceDeployV2')) {
         calls.push({ deploy: variables.serviceId });
-        return { ok: true, status: 200, json: async () => ({ data: {} }) };
+        deployedAt[variables.serviceId] = context.now();
+        return reply({});
       }
-      throw new Error('unexpected query');
+      if (body.query.includes('deployments(')) {
+        const serviceId = variables.input.serviceId;
+        const queue = pending[serviceId];
+        const status = queue.length > 1 ? queue.shift() : queue[0];
+        calls.push({ status: `${serviceId}:${status}` });
+
+        // The revision only changes when the platform says the deployment succeeded -
+        // which is the behaviour the old fake was missing.
+        if (
+          status === 'SUCCESS' &&
+          revisionFollowsDeployment &&
+          serviceId === 'service-api'
+        ) {
+          liveRevision =
+            images['service-api'] === NEW ? context.revision : OLD_SHA;
+        }
+        return reply({
+          deployments: {
+            edges: [
+              {
+                node: {
+                  id: `dep-${serviceId}`,
+                  status,
+                  createdAt: new Date(
+                    deployedAt[serviceId] ?? context.now(),
+                  ).toISOString(),
+                },
+              },
+            ],
+          },
+        });
+      }
+      throw new Error('unexpected query: ' + body.query.slice(0, 40));
     },
   };
 
   return { context, calls };
 }
+
+const writes = (calls) => calls.filter((c) => c.set || c.deploy);
+
+test('moves both services to the same digest, API first', async () => {
+  const { context, calls } = railway();
+
+  await deploy(context);
+
+  assert.deepEqual(writes(calls), [
+    { set: 'service-api', image: NEW, preDeploy: [migrationCommand] },
+    { deploy: 'service-api' },
+    { set: 'service-worker', image: NEW, preDeploy: null },
+    { deploy: 'service-worker' },
+  ]);
+});
+
+test('waits for the revision to change, not for any 200', async () => {
+  // The defect `REVIEW-045` found: the outgoing container answers readiness `200` while
+  // the new one is still starting, so a check that asks only "is something healthy" passes
+  // before anything has happened.
+  const { context, calls } = railway();
+
+  await deploy(context);
+
+  const seen = calls.filter((c) => c.liveness).map((c) => c.liveness);
+  assert.ok(seen.includes(NEW_SHA), 'the new revision must be observed');
+  assert.ok(
+    calls.findIndex((c) => c.liveness === NEW_SHA) <
+      calls.findIndex((c) => c.set === 'service-worker'),
+    'the worker must not move until the API is serving the new revision',
+  );
+});
+
+test('fails when the old revision keeps answering', async () => {
+  // A migration that fails stops the deployment and leaves the previous revision serving.
+  // Readiness still answers 200 - from the container that was never replaced.
+  const { context } = railway({ revisionFollowsDeployment: false });
+
+  await assert.rejects(
+    () => deploy(context),
+    /the deployed revision never became/,
+  );
+});
+
+test('fails when the platform reports the deployment failed', async () => {
+  const { context, calls } = railway({ apiStatuses: ['BUILDING', 'FAILED'] });
+
+  await assert.rejects(() => deploy(context), /deployment FAILED/);
+
+  // And the worker was never touched: a failed schema change must not leave the two halves
+  // of one application on two revisions.
+  assert.equal(calls.filter((c) => c.set === 'service-worker').length, 0);
+});
+
+test('waits through the platform states that are not terminal', async () => {
+  const { context, calls } = railway({
+    apiStatuses: ['QUEUED', 'BUILDING', 'DEPLOYING', 'SUCCESS'],
+  });
+
+  await deploy(context);
+
+  assert.deepEqual(
+    calls
+      .filter((c) => c.status?.startsWith('service-api'))
+      .map((c) => c.status),
+    [
+      'service-api:QUEUED',
+      'service-api:BUILDING',
+      'service-api:DEPLOYING',
+      'service-api:SUCCESS',
+    ],
+  );
+});
+
+test('verifies the worker deployment too, and rolls both back when it fails', async () => {
+  // The worker has no HTTP surface, so the platform's own view is the only thing that can
+  // say it started. Before `REVIEW-045` nothing checked it at all.
+  const { context, calls } = railway({ workerStatuses: ['CRASHED'] });
+
+  await assert.rejects(() => deploy(context), /deployment CRASHED/);
+
+  const restored = calls.filter((c) => c.set && c.image === OLD);
+  assert.deepEqual(
+    restored.map((c) => c.set).sort(),
+    ['service-api', 'service-worker'],
+    'both services go back, because both had been moved',
+  );
+});
+
+test('does not restart a service it never moved', async () => {
+  // A failure before the worker is touched must not redeploy a healthy worker, killing
+  // in-flight export and mail work for something it had no part in.
+  //
+  // The API's own deployments succeed here, so the rollback runs to completion rather
+  // than dying on the first service - which is what makes the worker's absence from it
+  // observable. An earlier version of this test failed the API's deployment instead, and
+  // the rollback never reached the worker for reasons unrelated to the rule.
+  const { context, calls } = railway({ revisionFollowsDeployment: false });
+
+  await assert.rejects(
+    () => deploy(context),
+    /the deployed revision never became/,
+  );
+
+  assert.deepEqual(
+    calls.filter((c) => c.set && c.image === OLD).map((c) => c.set),
+    ['service-api'],
+    'only the service that was moved is restored',
+  );
+});
+
+test('refuses a tag before anything is written', async () => {
+  const { context, calls } = railway();
+  context.image = 'ghcr.io/owner/app:main';
+
+  await assert.rejects(() => deploy(context), /must name a digest, not a tag/);
+
+  // The platform caches what a floating tag resolved to, so deploying one re-runs an
+  // hour-old image and reports success. Nothing was written, not even a read.
+  assert.equal(calls.filter((c) => c.set).length, 0);
+});
+
+test('refuses to run when a service has no image to go back to', async () => {
+  const { context, calls } = railway({
+    currentImages: { 'service-worker': null },
+  });
+
+  await assert.rejects(() => deploy(context), /deploy it by hand once/);
+
+  assert.equal(calls.filter((c) => c.set).length, 0);
+});
+
+test('reports rolledBack false when the rollback could not be confirmed', async () => {
+  // The field an operator or an alert keys on. Reporting `true` here would stand the alert
+  // down for the state where neither the deploy nor the restore worked.
+  // The worker recovers on the restore, so the rollback's own deployments succeed - and
+  // then readiness still refuses. That is the state worth distinguishing: things were put
+  // back and the result is still not serving.
+  const { context } = railway({
+    workerStatuses: ['CRASHED', 'SUCCESS'],
+    readinessStatuses: [503],
+  });
+
+  const error = await deploy(context).then(
+    () => null,
+    (caught) => caught,
+  );
+
+  assert.ok(error);
+  assert.equal(error.rolledBack, false);
+});
+
+test('reports rolledBack true when the previous revision is serving again', async () => {
+  const { context } = railway({ workerStatuses: ['CRASHED', 'SUCCESS'] });
+
+  const error = await deploy(context).then(
+    () => null,
+    (caught) => caught,
+  );
+
+  assert.equal(error.rolledBack, true);
+});
+
+test('aborts and rolls back when the platform answers 200 with an error body', async () => {
+  // Railway reports most real failures - unknown service id, insufficient scope, schema
+  // drift - as HTTP 200 with an `errors` array. That handler had no test at all, and
+  // deleting it left every case green.
+  const { context, calls } = railway();
+  const inner = context.fetch;
+  let deployCalls = 0;
+  context.fetch = async (url, init) => {
+    if (
+      init?.body?.includes('serviceInstanceDeployV2') &&
+      deployCalls++ === 0
+    ) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          errors: [{ message: 'Not Authorized', path: ['serviceInstance'] }],
+        }),
+      };
+    }
+    return inner(url, init);
+  };
+
+  const error = await deploy(context).then(
+    () => null,
+    (caught) => caught,
+  );
+
+  assert.match(error.message, /Not Authorized/);
+  // The message carries the platform's words and not the variables it was sent, which
+  // would echo the service identifiers back into the log.
+  assert.doesNotMatch(error.message, /service-api|project-1|env-1/);
+  assert.ok(calls.some((c) => c.set && c.image === OLD));
+});
 
 /** Records which auth header each attempt carried, and refuses all but one kind. */
 function tokenFake(accepts) {
@@ -95,108 +357,12 @@ function tokenFake(accepts) {
         ok: true,
         status: 200,
         json: async () => ({
-          data: { serviceInstance: { source: { image: 'img' } } },
+          data: { serviceInstance: { source: { image: OLD } } },
         }),
       };
     },
   };
 }
-
-const NEW = 'ghcr.io/owner/app@sha256:' + 'b'.repeat(64);
-const OLD = 'ghcr.io/owner/app@sha256:' + 'a'.repeat(64);
-
-test('moves both services to the same digest, API first', async () => {
-  const { context, calls } = railway();
-
-  await deploy(context);
-
-  const sequence = calls.filter((c) => c.set || c.deploy);
-  assert.deepEqual(sequence, [
-    { set: 'service-api', image: NEW, preDeploy: [migrationCommand] },
-    { deploy: 'service-api' },
-    { set: 'service-worker', image: NEW, preDeploy: null },
-    { deploy: 'service-worker' },
-  ]);
-
-  // The API carries the migration and the worker does not. Two pre-deploy commands would
-  // be two processes racing to apply the same schema change.
-  assert.equal(
-    sequence.filter((c) => c.preDeploy).length,
-    1,
-    'exactly one service runs the migration',
-  );
-});
-
-test('does not move the worker when the API never becomes ready', async () => {
-  const { context, calls } = railway({ readinessStatuses: [503] });
-
-  await assert.rejects(() => deploy(context), /readiness never returned 200/);
-
-  // The worker was never pointed at the new digest, so the two halves of one application
-  // did not end up on two revisions of it.
-  const workerSets = calls.filter(
-    (c) => c.set === 'service-worker' && c.image === NEW,
-  );
-  assert.equal(workerSets.length, 0);
-});
-
-test('restores the previous digest on both services when readiness fails', async () => {
-  const { context, calls } = railway({ readinessStatuses: [503] });
-
-  await assert.rejects(() => deploy(context));
-
-  const restored = calls.filter((c) => c.set && c.image === OLD);
-  assert.deepEqual(
-    restored.map((c) => c.set).sort(),
-    ['service-api', 'service-worker'],
-    'both services go back, not only the one that failed',
-  );
-
-  // And the rollback is re-asserted with its own deploy, not left as written config that
-  // nothing acts on: `serviceInstanceUpdate` writes, it does not deploy.
-  const deploysAfterRollback = calls
-    .slice(calls.findIndex((c) => c.set && c.image === OLD))
-    .filter((c) => c.deploy);
-  assert.equal(deploysAfterRollback.length, 2);
-});
-
-test('waits rather than failing on the first non-200', async () => {
-  // A deploy replaces containers asynchronously, so the requests immediately after it
-  // legitimately reach the old container, nothing, or a starting one. Treating the first
-  // 502 as a failure would roll back every successful deploy.
-  const { context, calls } = railway({ readinessStatuses: [502, 503, 200] });
-
-  await deploy(context);
-
-  assert.deepEqual(
-    calls.filter((c) => c.readiness).map((c) => c.readiness),
-    [502, 503, 200],
-  );
-});
-
-test('refuses to run when a service has no image to go back to', async () => {
-  const { context, calls } = railway({
-    currentImages: { 'service-worker': null },
-  });
-
-  await assert.rejects(() => deploy(context), /deploy it by hand once/);
-
-  // Nothing was written at all: finding this out before touching anything is the point.
-  assert.equal(calls.filter((c) => c.set).length, 0);
-});
-
-test('reports a failed rollback instead of reporting success', async () => {
-  const { context, calls } = railway({ readinessStatuses: [503] });
-
-  await assert.rejects(() => deploy(context), /readiness never returned 200/);
-
-  // The deploy failed and the rollback could not confirm readiness either. That state
-  // needs a person now, so it is said plainly rather than folded into the first failure.
-  assert.ok(
-    calls.some((c) => c.log === 'deploy_rollback_failed'),
-    'a rollback that cannot confirm readiness says so',
-  );
-});
 
 test('accepts a project token, which is the narrower of the two', async () => {
   const { headersSeen, fetch } = tokenFake('project');
@@ -204,8 +370,6 @@ test('accepts a project token, which is the narrower of the two', async () => {
 
   await readCurrentImage({ ...context, fetch }, 'service-api');
 
-  // Tried first, and no second attempt: a correctly scoped token is the one that works
-  // without the operator knowing Railway has two header conventions.
   assert.deepEqual(headersSeen, ['project']);
 });
 
@@ -224,8 +388,6 @@ test('says both were refused when neither works', async () => {
 
   await assert.rejects(
     () => readCurrentImage({ ...context, fetch }, 'service-api'),
-    // A bare 401 sends somebody to check the token's value. This sends them to check its
-    // kind, which is the thing that is actually wrong.
     /both a project and an account token/,
   );
 });

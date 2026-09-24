@@ -28,6 +28,29 @@
 
 const API = 'https://backboard.railway.com/graphql/v2';
 
+/**
+ * What an image reference must look like before anything is deployed.
+ *
+ * The module's first stated property was "the digest, never a tag", and until
+ * `REVIEW-045` nothing enforced it: `APP_IMAGE` was read straight from the environment,
+ * and the workflow policy validated the command that *resolves* a digest rather than the
+ * value handed to this script. One word in the export line would have deployed `:main`,
+ * which the platform serves from an hour-old cache - the failure ADR-0009 records as
+ * observed, dressed as a successful deploy.
+ */
+export const digestPattern = /@sha256:[0-9a-f]{64}$/;
+
+/**
+ * Terminal deployment states, and what each one means for a deploy that is waiting.
+ *
+ * Waiting on the deployment rather than on a URL is the correction `REVIEW-045` forced:
+ * Railway keeps the outgoing revision serving until the incoming one is healthy, so a
+ * readiness poll immediately after a deploy is answered `200` by the container being
+ * replaced. The gate passed before anything had happened.
+ */
+const DEPLOYMENT_SUCCEEDED = new Set(['SUCCESS']);
+const DEPLOYMENT_FAILED = new Set(['FAILED', 'CRASHED', 'REMOVED', 'SKIPPED']);
+
 /** What the API service runs between the build and taking traffic. */
 export const migrationCommand =
   'node node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js';
@@ -151,6 +174,100 @@ export async function startDeploy(context, serviceId) {
 }
 
 /**
+ * Waits for the deployment this run started to reach a terminal state.
+ *
+ * `serviceInstanceDeployV2` enqueues; it does not wait. Without this the script moved on
+ * while the platform was still pulling, which is how a failed migration - which stops the
+ * deployment and leaves the previous revision serving - looked exactly like a success.
+ *
+ * Newer than `startedAt`, so a previous deployment sitting at `SUCCESS` cannot be mistaken
+ * for this one. That mistake is the same shape as the bug being fixed: reading a state
+ * that was already true before the action was taken.
+ */
+export async function waitForDeployment(context, serviceId, startedAt) {
+  const deadline = context.now() + context.deploymentBudgetMs;
+  let lastSeen = 'no deployment';
+
+  while (context.now() < deadline) {
+    const data = await graphql(
+      context,
+      `
+        query ($input: DeploymentListInput!, $first: Int) {
+          deployments(input: $input, first: $first) {
+            edges {
+              node {
+                id
+                status
+                createdAt
+              }
+            }
+          }
+        }
+      `,
+      {
+        first: 5,
+        input: {
+          projectId: context.projectId,
+          serviceId,
+          environmentId: context.environmentId,
+        },
+      },
+    );
+
+    const nodes = (data?.deployments?.edges ?? []).map((edge) => edge.node);
+    const mine = nodes.find(
+      (node) => Date.parse(node.createdAt) >= startedAt - 1000,
+    );
+    if (mine) {
+      lastSeen = mine.status;
+      if (DEPLOYMENT_SUCCEEDED.has(mine.status)) return mine.id;
+      if (DEPLOYMENT_FAILED.has(mine.status)) {
+        throw new DeployError(`deployment ${mine.status} for ${serviceId}`);
+      }
+    }
+    await context.sleep(context.pollIntervalMs);
+  }
+  throw new DeployError(
+    `deployment did not finish for ${serviceId} (last: ${lastSeen})`,
+  );
+}
+
+/**
+ * Waits until the revision answering is the one being deployed.
+ *
+ * The second half of the same correction. A deployment reaching `SUCCESS` says the
+ * platform is satisfied; this says the public address is actually served by the new build.
+ * `/health/live` rather than `/health/ready`, because the question here is identity, not
+ * dependency health - readiness is asked next, and asking both at once would confuse "the
+ * old revision is still answering" with "the new one cannot reach its database".
+ */
+export async function waitForRevision(context, expected) {
+  const deadline = context.now() + context.readinessBudgetMs;
+  let lastSeen = 'no response';
+
+  while (context.now() < deadline) {
+    try {
+      const response = await context.fetch(context.livenessUrl, {
+        method: 'GET',
+      });
+      if (response.status === 200) {
+        const body = await response.json();
+        if (body?.revision === expected) return;
+        lastSeen = `revision ${body?.revision ?? 'absent'}`;
+      } else {
+        lastSeen = `HTTP ${response.status}`;
+      }
+    } catch (error) {
+      lastSeen = error instanceof Error ? error.name : 'request failed';
+    }
+    await context.sleep(context.pollIntervalMs);
+  }
+  throw new DeployError(
+    `the deployed revision never became ${expected} (last: ${lastSeen})`,
+  );
+}
+
+/**
  * Polls readiness until it answers `200`, or the budget runs out.
  *
  * `/health/ready` and not `/health/live`: liveness says the process exists, which a
@@ -185,6 +302,14 @@ export async function deploy(context) {
   const { api, worker } = context.services;
   const log = context.log ?? (() => {});
 
+  if (!digestPattern.test(context.image)) {
+    // Before anything is written. A tag deploys the platform's hour-old cache of whatever
+    // it last resolved, and reports success for it.
+    throw new DeployError(
+      `APP_IMAGE must name a digest, not a tag: ${context.image}`,
+    );
+  }
+
   // Read before writing, so the way back exists before the way forward is taken.
   const previous = {
     api: await readCurrentImage(context, api),
@@ -200,66 +325,103 @@ export async function deploy(context) {
     );
   }
 
+  // What has actually been written, so a rollback restores exactly that and nothing else.
+  // Restoring a service that was never moved would redeploy a healthy worker - killing
+  // in-flight export and mail work - for a failure it had no part in.
+  const moved = [];
+
   try {
     // The API first, because it carries the migration. If the schema change fails, the
     // pre-deploy command stops the deployment and the worker is never moved.
+    const apiStartedAt = context.now();
     await setImage(context, api, context.image, {
       preDeploy: migrationCommand,
     });
+    moved.push(api);
     await startDeploy(context, api);
     log({ event: 'deploy_started', service: 'api', image: context.image });
 
+    await waitForDeployment(context, api, apiStartedAt);
+    await waitForRevision(context, context.revision);
     await waitForReady(context, {
       budgetMs: context.readinessBudgetMs,
       intervalMs: context.pollIntervalMs,
     });
-    log({ event: 'deploy_ready', service: 'api' });
+    log({ event: 'deploy_ready', service: 'api', revision: context.revision });
 
+    const workerStartedAt = context.now();
     await setImage(context, worker, context.image);
+    moved.push(worker);
     await startDeploy(context, worker);
     log({ event: 'deploy_started', service: 'worker', image: context.image });
+
+    // The worker has no HTTP surface, so the platform's own view of the deployment is the
+    // only thing that can say it started. Without this the half of "both services or
+    // neither" that carries mail, export and retention was never checked at all.
+    await waitForDeployment(context, worker, workerStartedAt);
+    log({ event: 'deploy_ready', service: 'worker' });
   } catch (error) {
     log({
       event: 'deploy_failed',
       reason: error instanceof Error ? error.message : 'unknown',
     });
-    await rollback(context, previous, log);
+    const rolledBack = await rollback(context, previous, moved, log);
     throw new DeployError(
       error instanceof Error ? error.message : 'deploy failed',
-      { rolledBack: true },
+      { rolledBack },
     );
   }
 }
 
 /**
- * Puts both services back, and checks that the result answers.
+ * Restores what was written, and reports whether the result answers.
  *
- * The migration is deliberately not reverted. Migrations in this project are expand-only,
- * so the previous code runs against the migrated schema; reverting one automatically is
- * how a partial migration becomes data loss, and that is a decision for a person.
+ * The return value is the point. It used to be an unconditional `rolledBack: true` on the
+ * error, which meant the one machine-readable field an operator keys on said "restored"
+ * for the state where neither the deploy nor the restore had worked - and deleting the
+ * field left every test green, because nothing read it.
+ *
+ * The migration is deliberately not reverted. Migrations here are expand-only, so the
+ * previous code runs against the migrated schema; reverting one automatically is how a
+ * partial migration becomes data loss, and that is a decision for a person.
  */
-async function rollback(context, previous, log) {
+async function rollback(context, previous, moved, log) {
+  if (moved.length === 0) {
+    log({ event: 'deploy_rollback_unnecessary' });
+    return true;
+  }
+
   try {
-    await setImage(context, context.services.api, previous.api, {
-      preDeploy: migrationCommand,
-    });
-    await startDeploy(context, context.services.api);
-    await setImage(context, context.services.worker, previous.worker);
-    await startDeploy(context, context.services.worker);
-    log({ event: 'deploy_rolled_back', ...previous });
+    for (const serviceId of moved) {
+      const isApi = serviceId === context.services.api;
+      const image = isApi ? previous.api : previous.worker;
+      const startedAt = context.now();
+      await setImage(
+        context,
+        serviceId,
+        image,
+        isApi ? { preDeploy: migrationCommand } : {},
+      );
+      await startDeploy(context, serviceId);
+      await waitForDeployment(context, serviceId, startedAt);
+    }
+    log({ event: 'deploy_rolled_back', services: moved.length, ...previous });
 
     await waitForReady(context, {
       budgetMs: context.readinessBudgetMs,
       intervalMs: context.pollIntervalMs,
     });
     log({ event: 'deploy_rollback_ready' });
+    return true;
   } catch (error) {
-    // The deploy failed and so did the way back. Said plainly, because this is the state
-    // that needs a person now rather than at the next working hour.
+    // The deploy failed and so did the way back. Said plainly, and reported as `false`,
+    // because this is the state that needs a person now rather than at the next working
+    // hour - and because an alert keying on the flag would otherwise stand down.
     log({
       event: 'deploy_rollback_failed',
       reason: error instanceof Error ? error.message : 'unknown',
     });
+    return false;
   }
 }
 
@@ -277,15 +439,22 @@ export function contextFromEnvironment() {
     log: (record) => console.log(JSON.stringify(record)),
     token: requireEnv('RAILWAY_TOKEN'),
     environmentId: requireEnv('RAILWAY_ENVIRONMENT_ID'),
+    projectId: requireEnv('RAILWAY_PROJECT_ID'),
+    revision: requireEnv('GITHUB_SHA'),
     services: {
       api: requireEnv('RAILWAY_API_SERVICE_ID'),
       worker: requireEnv('RAILWAY_WORKER_SERVICE_ID'),
     },
     image: requireEnv('APP_IMAGE'),
     readinessUrl: `${requireEnv('PUBLIC_BASE_URL')}/api/v1/health/ready`,
+    livenessUrl: `${requireEnv('PUBLIC_BASE_URL')}/api/v1/health/live`,
     // Generous, and deliberately so: the platform builds nothing here but it does pull an
     // image, run the migration, start the process and wait for its own health check.
     readinessBudgetMs: 420_000,
+    // The platform's own work: pull the image, run the migration, start the process and
+    // satisfy its own health check. Generous, because exhausting it rolls back a deploy
+    // that may simply have been slow.
+    deploymentBudgetMs: 600_000,
     pollIntervalMs: 10_000,
   };
 }

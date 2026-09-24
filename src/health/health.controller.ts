@@ -12,6 +12,7 @@ import { ErrorResponseDto } from '../common/errors/error-response.dto';
 import { Public } from '../auth/decorators/public.decorator';
 import { CurrentRequestId } from '../common/http/request-id.decorator';
 import { ReadinessService } from './readiness.service';
+import { currentRevision } from './revision.constants';
 
 export class LivenessResponseDto {
   @ApiProperty({ example: 'ok' })
@@ -19,6 +20,10 @@ export class LivenessResponseDto {
 
   @ApiProperty({ format: 'uuid' })
   requestId!: string;
+
+  /** The commit this build was made from, or `unknown` outside a built image. */
+  @ApiProperty({ example: '9f1c2b7e4a8d5c3f0b6e2a1d7c4f8b3e5a9d0c2f' })
+  revision!: string;
 }
 
 export class ReadinessResponseDto extends LivenessResponseDto {}
@@ -41,7 +46,7 @@ export class HealthController {
   @ApiOperation({ summary: 'Check process liveness' })
   @ApiOkResponse({ type: LivenessResponseDto })
   getLiveness(@CurrentRequestId() requestId: string): LivenessResponseDto {
-    return { status: 'ok', requestId };
+    return { status: 'ok', requestId, revision: currentRevision() };
   }
 
   @Get('ready')
@@ -60,6 +65,6 @@ export class HealthController {
         { dependencies: unavailable },
       );
     }
-    return { status: 'ok', requestId };
+    return { status: 'ok', requestId, revision: currentRevision() };
   }
 }

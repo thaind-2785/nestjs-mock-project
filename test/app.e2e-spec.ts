@@ -106,6 +106,10 @@ describe('Application bootstrap (e2e)', () => {
     expect(response.body).toEqual({
       status: 'ok',
       requestId: response.headers['x-request-id'],
+      // Which build is answering. A deploy cannot otherwise tell the incoming revision
+      // from the outgoing one, which keeps serving - and answering `200` - until the new
+      // one is healthy. `REVIEW-045` found the deploy passing on that answer.
+      revision: 'unknown',
     });
   });
 
@@ -128,6 +132,7 @@ describe('Application bootstrap (e2e)', () => {
     expect(response.body).toEqual({
       status: 'ok',
       requestId: response.headers['x-request-id'],
+      revision: 'unknown',
     });
   });
 

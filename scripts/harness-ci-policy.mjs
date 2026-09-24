@@ -75,12 +75,25 @@ export function validateCiWorkflowEnvelope(workflow, config) {
   const concurrency = workflow?.concurrency;
   if (
     !hasExactKeys(concurrency, ['group', 'cancel-in-progress']) ||
-    concurrency?.group !== 'ci-${{ github.workflow }}-${{ github.ref }}' ||
-    concurrency?.['cancel-in-progress'] !== true
+    concurrency?.group !== 'ci-${{ github.workflow }}-${{ github.ref }}'
   ) {
     addError(
       `${rootPath}.concurrency`,
       'must match the reviewed concurrency contract exactly',
+    );
+  }
+  // The rule rather than the string: a run on `main` may not be cancelled, because the
+  // deploy's two `setImage` calls are not atomic and a kill between them leaves the API
+  // and the worker on different digests with no rollback and no failure event.
+  if (
+    concurrency?.['cancel-in-progress'] !== false &&
+    !String(concurrency?.['cancel-in-progress'] ?? '').includes(
+      "github.ref != 'refs/heads/main'",
+    )
+  ) {
+    addError(
+      `${rootPath}.concurrency.cancel-in-progress`,
+      'must not cancel a run on main',
     );
   }
 
@@ -187,6 +200,31 @@ function validateDeployJob(job, rootPath) {
     }
   }
 
+  // Every step is either the reviewed checkout, the digest lookup, or the module. The
+  // previous rule only forbade naming the platform's host, which left a step free to
+  // `curl` the token somewhere or run a migration from the runner - the one thing the
+  // module's own docstring says it exists to avoid.
+  for (const [index, step] of steps.entries()) {
+    const command = String(step?.run ?? '');
+    const uses = String(step?.uses ?? '');
+    const reviewed =
+      uses.startsWith('actions/checkout@') ||
+      command.includes('scripts/railway-deploy.mjs') ||
+      command.includes('docker-content-digest');
+    if (!reviewed) {
+      addError(
+        `${jobPath}.steps[${index}]`,
+        'is not a reviewed deploy step; the deploy runs through the tested module',
+      );
+    }
+    if (/migration:run|typeorm/.test(command)) {
+      addError(
+        `${jobPath}.steps[${index}]`,
+        'must not run migrations from the runner; that is the platform pre-deploy command',
+      );
+    }
+  }
+
   // Resolved from the registry rather than carried between jobs, and a digest either way:
   // a tag is a pointer, and the platform caches what a floating tag resolved to.
   const resolve = commands.find((c) => c.includes('docker-content-digest'));
@@ -199,6 +237,14 @@ function validateDeployJob(job, rootPath) {
     addError(
       `${jobPath}.steps`,
       'must resolve the digest for this commit, not for a moving tag',
+    );
+  } else if (!/APP_IMAGE=\$\{IMAGE\}@\$\{DIGEST\}/.test(resolve)) {
+    // The value handed to the script, not only the command that looked a digest up. One
+    // word here - `:main` instead of `@${DIGEST}` - deploys the platform's hour-old cache
+    // and reports success, and the policy used to validate only the lookup.
+    addError(
+      `${jobPath}.steps`,
+      'must export APP_IMAGE as the resolved digest',
     );
   }
 

@@ -372,6 +372,37 @@ test('rejects runtime drift from package engines and version file', () => {
   );
 });
 
+test('pins actions in every job, not only the gate', () => {
+  // `REVIEW-045`: the rule read as workflow-wide and was applied to `verify` alone,
+  // leaving the two jobs that hold credentials - `packages: write` and the platform token
+  // - free to name an unpinned action.
+  for (const jobId of ['publish', 'deploy']) {
+    const workflow = parse(
+      readFileSync(
+        resolve(
+          loaded.rootDirectory,
+          loaded.config.runtime_contract.ci_workflow,
+        ),
+        'utf8',
+      ),
+    );
+    workflow.jobs[jobId].steps.push({
+      name: 'Unpinned',
+      uses: 'attacker/action@main',
+    });
+
+    const errors = validateCiWorkflow(workflow, loaded.config);
+    assert.ok(
+      errors.some(
+        (error) =>
+          error.includes(`jobs.${jobId}`) &&
+          error.includes('40-character commit SHA'),
+      ),
+      `an unpinned action in ${jobId} must be refused`,
+    );
+  }
+});
+
 test('locks CI triggers, permissions, timeout, command, and action pins', () => {
   const workflowPath = resolve(
     loaded.rootDirectory,

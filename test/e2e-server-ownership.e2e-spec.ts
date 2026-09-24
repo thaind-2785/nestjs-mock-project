@@ -97,6 +97,7 @@ describe('E2E server ownership', () => {
       expect(response.body).toEqual({
         status: 'ok',
         requestId: expect.any(String) as string,
+        revision: expect.any(String) as string,
       });
     }
     expect(boundPort(app)).toBe(port);

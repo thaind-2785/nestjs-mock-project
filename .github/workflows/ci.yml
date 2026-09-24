@@ -8,9 +8,13 @@ on:
 permissions:
   contents: read
 
+# Cancelling a superseded run is right for a branch and wrong for `main`. A second merge
+# that cancels the first between the two `setImage` calls kills the job outside any catch:
+# no rollback, no failure event, and the API and worker left on different digests - the
+# split-revision state this pipeline exists to prevent.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   verify:
@@ -148,6 +152,7 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           RAILWAY_API_SERVICE_ID: ${{ secrets.RAILWAY_API_SERVICE_ID }}
           RAILWAY_WORKER_SERVICE_ID: ${{ secrets.RAILWAY_WORKER_SERVICE_ID }}
           PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}

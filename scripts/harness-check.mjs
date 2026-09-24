@@ -259,6 +259,22 @@ export function validateCiWorkflow(workflow, config) {
     }
   }
 
+  // Every job's steps, not only the gate's. The pinning rule reads as workflow-wide and
+  // was applied to `verify` alone - leaving `publish`, which holds `packages: write`, and
+  // `deploy`, which holds the platform token, free to name an unpinned action.
+  for (const [jobId, entry] of Object.entries(workflow?.jobs ?? {})) {
+    for (const [index, step] of (entry?.steps ?? []).entries()) {
+      const uses = step?.uses;
+      if (typeof uses !== 'string') continue;
+      if (!/@[0-9a-f]{40}(\s|$)/.test(uses)) {
+        addError(
+          `runtime_contract.ci_workflow.jobs.${jobId}.steps[${index}].uses`,
+          'must pin the action to a 40-character commit SHA',
+        );
+      }
+    }
+  }
+
   const steps = job?.steps ?? [];
   if (steps.length !== 5) {
     addError(

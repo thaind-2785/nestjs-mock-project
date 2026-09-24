@@ -388,7 +388,6 @@ permission_model:
       { effect: approval_required, scope: explicit_local_database }
     ci_read_only: { effect: allow, scope: repository_checks }
     call_real_providers: { effect: approval_required, scope: non_ci_only }
-    deploy_staging: { effect: approval_required, scope: configured_target }
     deploy_production:
       { effect: approval_required, scope: human_controlled_workflow }
     read_secrets: { effect: deny, scope: never_log_or_commit }
@@ -618,19 +617,12 @@ autonomy_levels:
           run_local_checks,
           edit_repository,
           mutate_local_runtime,
-          deploy_staging,
         ]
     - id: L4
       name: production_sensitive
       status: planned
       permissions:
-        [
-          read_repository,
-          run_local_checks,
-          edit_repository,
-          deploy_staging,
-          deploy_production,
-        ]
+        [read_repository, run_local_checks, edit_repository, deploy_production]
   default: L2
   rule: autonomy never overrides an action permission or explicit approval requirement
 

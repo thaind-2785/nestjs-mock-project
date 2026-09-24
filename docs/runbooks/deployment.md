@@ -13,7 +13,7 @@ no real customer data. Every choice below assumes that.
 | API, worker    | Railway, one service each | They are the same image with different commands                                      |
 | Redis          | Railway                   | Transport only; losing it loses no work, the outbox holds it                         |
 | MySQL 8        | Railway, managed          | Official MySQL 8.4; a redeploy of the application does not reach it                  |
-| Object storage | Cloudflare R2             | Room images and export files are the only things here the database cannot regenerate |
+| Object storage | Filebase                  | Room images and export files are the only things here the database cannot regenerate |
 | Mail           | Gmail over OAuth2         | What Phase 5 built; a refresh token, not a password                                  |
 | Domain + TLS   | Railway                   | Issued and renewed automatically; nothing to configure                               |
 
@@ -25,19 +25,19 @@ is what makes a failed deploy safe to retry without thinking.
 The deployment spans six services, each with its own dashboard. This is the table to
 open before a demonstration, and the one to open when something is wrong.
 
-| To check                        | Where                                                                                                                                                                                    | What you are looking for                                                          |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| The API itself                  | [`/api/docs`](https://api-production-3c0a.up.railway.app/api/docs)                                                                                                                       | Swagger. Everything is demonstrated from here                                     |
-| Is it up                        | [`/api/v1/health/ready`](https://api-production-3c0a.up.railway.app/api/v1/health/ready)                                                                                                 | `{"status":"ok"}`. A `503` names the dependency in `details`                      |
-| Logs, restarts, variables       | [Railway project](https://railway.com/project/4f97eb5f-dd70-46d2-9ac0-06bdcf921cba)                                                                                                      | Service → Deployments → View logs. One JSON object per line                       |
-| Which image is deployed         | Railway → service → Settings → Source                                                                                                                                                    | A digest, not a tag, once `P8-T05` lands                                          |
-| Was the image published         | [GitHub Packages](https://github.com/thaind-2785/nestjs-mock-project/pkgs/container/nestjs-mock-project)                                                                                 | A version tagged with the commit SHA, and `main`                                  |
-| Why a build failed              | [GitHub Actions](https://github.com/thaind-2785/nestjs-mock-project/actions)                                                                                                             | `Verify repository` then `Publish image`; the scan runs inside the second         |
-| Uploaded images and exports     | [Filebase console](https://console.filebase.com/)                                                                                                                                        | Bucket `hotel-media`. Room images and generated XLSX land here                    |
-| Mail that was actually sent     | [Gmail, Sent folder](https://mail.google.com/mail/u/0/#sent) of the sending account                                                                                                      | The rendered message. The outbox says it was accepted; this says it arrived       |
-| Login is refused                | [OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent)                                                                                                        | **Test users**. Anyone not listed cannot sign in while the app is in Testing      |
-| `redirect_uri_mismatch`         | [OAuth credentials](https://console.cloud.google.com/apis/credentials)                                                                                                                   | Authorized redirect URIs must match `GOOGLE_REDIRECT_URI` character for character |
-| Mail fails with `invalid_grant` | [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com) enabled, then a new refresh token from [OAuth Playground](https://developers.google.com/oauthplayground) | The refresh token was revoked or the API was disabled                             |
+| To check                        | Where                                                                                                                                                                                    | What you are looking for                                                             |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| The API itself                  | [`/api/docs`](https://api-production-3c0a.up.railway.app/api/docs)                                                                                                                       | Swagger. Everything is demonstrated from here                                        |
+| Is it up                        | [`/api/v1/health/ready`](https://api-production-3c0a.up.railway.app/api/v1/health/ready)                                                                                                 | `{"status":"ok"}`. A `503` names the dependency in `details`                         |
+| Logs, restarts, variables       | [Railway project](https://railway.com/project/4f97eb5f-dd70-46d2-9ac0-06bdcf921cba)                                                                                                      | Service → Deployments → View logs. One JSON object per line                          |
+| Which image is deployed         | Railway → service → Settings → Source                                                                                                                                                    | A digest. The deploy refuses a tag, because the platform caches what one resolved to |
+| Was the image published         | [GitHub Packages](https://github.com/thaind-2785/nestjs-mock-project/pkgs/container/nestjs-mock-project)                                                                                 | A version tagged with the commit SHA, and `main`                                     |
+| Why a build failed              | [GitHub Actions](https://github.com/thaind-2785/nestjs-mock-project/actions)                                                                                                             | `Verify repository` then `Publish image`; the scan runs inside the second            |
+| Uploaded images and exports     | [Filebase console](https://console.filebase.com/)                                                                                                                                        | Bucket `hotel-media`. Room images and generated XLSX land here                       |
+| Mail that was actually sent     | [Gmail, Sent folder](https://mail.google.com/mail/u/0/#sent) of the sending account                                                                                                      | The rendered message. The outbox says it was accepted; this says it arrived          |
+| Login is refused                | [OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent)                                                                                                        | **Test users**. Anyone not listed cannot sign in while the app is in Testing         |
+| `redirect_uri_mismatch`         | [OAuth credentials](https://console.cloud.google.com/apis/credentials)                                                                                                                   | Authorized redirect URIs must match `GOOGLE_REDIRECT_URI` character for character    |
+| Mail fails with `invalid_grant` | [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com) enabled, then a new refresh token from [OAuth Playground](https://developers.google.com/oauthplayground) | The refresh token was revoked or the API was disabled                                |
 
 Two of these are the ones nobody thinks of first.
 
@@ -117,19 +117,25 @@ variables in step 8 to literal values instead of references. Be aware that free 
 power down when idle and answer the first request about a minute later, which during a
 demonstration looks like a broken deployment.
 
-## 4. Object storage: Cloudflare R2
+## 4. Object storage: Filebase
 
-[dash.cloudflare.com](https://dash.cloudflare.com) - R2 - create a bucket, for example
-`hotel-media`. 10 GB is free and stays free; a payment method is required even so.
+[filebase.com](https://filebase.com) — not Firebase, which is a different product from a
+different company. Sign up; no card is required.
 
-Then **R2 - Manage API tokens - Create API token**, scoped to Object Read & Write for that
-bucket. Keep the Access Key ID and Secret Access Key; the secret is shown once.
+**Buckets - Create Bucket**, named `hotel-media`, storage type **S3 object storage**.
 
-Keep the **endpoint** from the bucket settings:
-`https://<account-id>.r2.cloudflarestorage.com`.
+Not IPFS, and the reason matters: this project serves room images and export results
+through presigned URLs with a short expiry, and retention deletes objects when their rows
+expire. On IPFS, content is public to anyone holding the CID and "deleting" is unpinning —
+the presigned-URL expiry becomes decorative, and the ledger records a deletion that did
+not happen.
 
-**Easy to miss:** R2's region is the literal string `auto`, not a region name. Anything
-else is accepted at startup and rejected at the first upload, as `SignatureDoesNotMatch`.
+Then **Access Keys**. The key opens every bucket on the account; which bucket is used is
+decided by `OBJECT_STORAGE_BUCKET` in step 8, so that name must match what you created
+here.
+
+Keep the access key and the secret. The endpoint and region are fixed for Filebase and are
+already written into step 8.
 
 ## 5. Mail: a Gmail sending token
 
@@ -217,12 +223,13 @@ AUTH_SUCCESS_REDIRECT_URI=/api/docs
 # openssl rand -hex 32
 JWT_ACCESS_SECRET=<generated>
 
-# Cloudflare R2. The region is the literal string auto.
-OBJECT_STORAGE_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
-OBJECT_STORAGE_ACCESS_KEY=<r2-access-key-id>
-OBJECT_STORAGE_SECRET_KEY=<r2-secret-access-key>
+# Filebase. The endpoint and region are fixed; only the two keys are yours, and the
+# bucket must match the name created in step 4.
+OBJECT_STORAGE_ENDPOINT=https://s3.filebase.io
+OBJECT_STORAGE_ACCESS_KEY=<filebase-access-key>
+OBJECT_STORAGE_SECRET_KEY=<filebase-secret-key>
 OBJECT_STORAGE_BUCKET=hotel-media
-OBJECT_STORAGE_REGION=auto
+OBJECT_STORAGE_REGION=us-east-1
 OBJECT_STORAGE_FORCE_PATH_STYLE=true
 
 # Gmail over OAuth2.
@@ -253,7 +260,18 @@ typo here.
 
 ## 9. Run the migration, once
 
-The schema does not exist yet. Railway's MySQL is reachable from outside only with public
+The schema does not exist yet. This is the only migration run by hand — every later one is
+the platform's pre-deploy step, driven by the deploy job.
+
+From a clone of this repository, first build, because the production entrypoints run
+compiled output and a fresh checkout has none:
+
+```bash
+npm ci
+npm run build
+```
+
+Railway's MySQL is reachable from outside only with public
 networking enabled: the MySQL service - Settings - Networking - **Public Network**. Take
 the public host and port from its Variables tab, then from your own machine:
 
@@ -285,6 +303,7 @@ credential out of reach of every other workflow.
 | Name                        | Where to find it                                                                                                                  |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `RAILWAY_TOKEN`             | Railway → Account Settings → Tokens. A **project token** is the narrowest scope that works; account and workspace tokens work too |
+| `RAILWAY_PROJECT_ID`        | The UUID after `/project/` in the same URL                                                                                        |
 | `RAILWAY_ENVIRONMENT_ID`    | The `environmentId` query parameter in the service URL below                                                                      |
 | `RAILWAY_API_SERVICE_ID`    | The UUID after `/service/` in the `api` service's URL                                                                             |
 | `RAILWAY_WORKER_SERVICE_ID` | The same, for `worker`                                                                                                            |
@@ -369,7 +388,7 @@ log JSON, one object per line; the first error after a restart is almost always 
 | `exec format error`                         | An image built for one architecture; the publish job builds both                                                                                                    |
 | Readiness `503`, `dependencies: ["mysql"]`  | Usually not the database. Raise `HEALTH_CHECK_TIMEOUT_MS` to 5000: the default bounds the first handshake at one second, which suits Compose and not a real network |
 | `MYSQL_HOST` still shows `${{MySQL...}}`    | The service is not named `MySQL`, so the reference cannot resolve                                                                                                   |
-| Uploads fail with `SignatureDoesNotMatch`   | `OBJECT_STORAGE_REGION` is not `auto`                                                                                                                               |
+| Uploads fail with `SignatureDoesNotMatch`   | The storage credentials or region are wrong. Filebase expects `us-east-1` and `https://s3.filebase.io`                                                              |
 | Mail fails with `invalid_grant`             | The Gmail refresh token was revoked; issue a new one                                                                                                                |
 | Never becomes ready, and no application log | The tag does not exist, or the package is still private                                                                                                             |
 
@@ -382,9 +401,20 @@ services, so the API and the worker stay on one revision.
 
 Only after a dry run has been read; [`retention.md`](retention.md) explains each reading.
 
+The command needs the production environment, which lives on Railway rather than in this
+repository. Run it from a machine with the same build and those values in the shell:
+
 ```bash
-npm run ops:retention:prod -- --dry-run
+npm ci && npm run build
+MYSQL_HOST=... MYSQL_PORT=... MYSQL_DATABASE=... MYSQL_USER=... MYSQL_PASSWORD=... \
+NODE_ENV=production PUBLIC_BASE_URL=https://<railway-subdomain> \
+  npm run ops:retention:prod -- --dry-run
 ```
+
+Reading them from a file would read the wrong ones: `loadRepositoryEnvironment` picks up
+`.env`, which is this repository's _local_ configuration, and the command would then report
+"real data" from a database on your laptop. Public networking on the MySQL service has to
+be on for the duration, as in step 9, and off again afterwards.
 
 Then set `RETENTION_ENABLED=true` on the **worker** service only, and redeploy it. The API
 runs no scheduler.

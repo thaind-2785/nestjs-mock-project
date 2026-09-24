@@ -1,6 +1,7 @@
 # SPEC-011: Delivery pipeline and public deployment
 
-- Status: Draft
+- Status: Implemented, 2026-09-24. Accepted by the owner across 2026-09-23 and
+  2026-09-24 as each decision was settled; see `ADR-0009`
 - Owner: Project owner
 - Last updated: 2026-09-23
 - Scope: Required technique
@@ -120,7 +121,7 @@ the project actually built, or it demonstrates nothing:
 - A booking created, approved and cancelled, with its history.
 - A room image uploaded to object storage and served back.
 - An export requested, generated in the Worker Thread, and downloaded.
-- An email produced by the outbox and visible in a mail viewer.
+- An email produced by the outbox and visible in the sending account's Sent folder.
 - Retention run by hand in `--dry-run`, read from the logs.
 
 Each of these needs a dependency to be present and reachable, which is what makes the
@@ -181,7 +182,7 @@ change the answers to those.
 | Compute        | Railway, one service per process            | Deploy fails readiness and rolls back                                 |
 | MySQL 8        | Railway managed service, official MySQL 8.4 | App fails readiness; deploy rolls back                                |
 | Redis          | Railway service                             | Mail/export queues stall; outbox retains the work, so nothing is lost |
-| Object storage | Cloudflare R2, S3-compatible                | Uploads and exports fail; rows are retained and stay due              |
+| Object storage | Filebase, S3-compatible                     | Uploads and exports fail; rows are retained and stay due              |
 | SMTP           | Gmail over OAuth2, as Phase 5 specified     | Outbox retries with backoff                                           |
 | DNS + TLS      | Railway's own subdomain and certificate     | Nothing to configure; Railway issues and renews it                    |
 
@@ -206,18 +207,20 @@ for learning, the audience is one reviewer, and OAuth2 refresh-token delivery is
 what Phase 5 built. The compensating measure is an account used for nothing else - the
 credential is a refresh token scoped to sending, not a password.
 
-**Cloudflare R2 rather than a container.** An object store that lives in the deployment is
-an object store a redeploy can lose, and room images and export results are the two things
-here that cannot be regenerated from the database.
+**A managed object store rather than a container.** An object store that lives in the
+deployment is an object store a redeploy can lose, and room images and export results are
+the two things here that cannot be regenerated from the database. Filebase was chosen over
+Cloudflare R2 because R2 requires a payment method even on its free tier and this account
+had none; the bucket is S3 object storage rather than IPFS, because presigned URLs with a
+short expiry and a retention task that deletes objects both assume content that is private
+and can actually be removed.
 
-**Mailpit rather than Gmail**, and the choice is deliberate. Phase 5 specified Gmail for a
-real deployment, and the adapter is unchanged and still selected by configuration. But a
-demonstration wants the _opposite_ of real delivery: nothing should reach a stranger's
-inbox because somebody typed an address into Swagger, no Google application password
-should sit on a host whose whole purpose is to be publicly reachable, and a reviewer needs
-to _see_ the rendered message rather than trust that it left. Mailpit gives all three, and
-its UI is published on its own path behind the same certificate. Switching to Gmail is a
-change of environment variables, not of code.
+**A superseded paragraph stood here.** It argued for Mailpit over Gmail, and for
+publishing its UI "behind the same certificate" — both from the single-host design this
+phase began with and abandoned. The owner chose real delivery on 2026-09-23 and the
+reasoning above replaced it. Recorded rather than deleted, because `REVIEW-045` found the
+document arguing both sides forty lines apart, and a reader deserves to know which way it
+went.
 
 The worker keeps hosting all three families (mail, export, retention). `RETENTION_ENABLED`
 starts **false** in production, exactly as its runbook requires, and is turned on by hand
@@ -248,7 +251,7 @@ after a dry run against real data.
 
 - Both processes already log JSON to stdout; the container runtime is the log sink, and
   `docker compose logs` is the documented way to read them.
-- The image records its commit SHA in a label and in `/health/live`'s response, so a
+- The image records its commit SHA in a label, and both health endpoints return it as `revision`, so a
   reachable deployment can be asked which revision it is.
 - A deployment runbook covers first-time host setup, an ordinary deploy, reading a failed
   deploy, manual rollback, and turning retention on.
@@ -265,8 +268,11 @@ after a dry run against real data.
 - [ ] Given the image, when it is started with no build toolchain present, then both
       `node dist/main` and `node dist/worker` start, and the process runs as a non-root
       user.
-- [ ] Given `compose.yaml`, when the whole stack is brought up locally, then API, worker
-      and every dependency start with healthchecks and `/health/ready` returns `200`.
+- [x] Given `compose.yaml`, when `docker compose --profile app up -d` is run, then every
+      dependency starts behind a healthcheck, both application services wait for them, and
+      `/health/ready` returns `200`. The application services declare no healthcheck of
+      their own: the API's is baked into the image, and the worker has no HTTP surface to
+      probe — a fabricated port would report health it never checked.
 - [ ] Given a deploy, when a migration fails, then the previously running containers are
       still serving and the job exits non-zero.
 - [ ] Given a deploy whose containers start but never become ready, when the readiness
@@ -279,7 +285,7 @@ after a dry run against real data.
 - [ ] Given `PUBLIC_BASE_URL` that is not an absolute `https` origin, when the
       application starts in production, then it refuses to start and names the variable.
 - [ ] Given Swagger on the deployed environment, when the Google login flow is completed
-      against the public redirect URI, then a session is issued and `/users/me` answers.
+      against the public redirect URI, then a session is issued and `/api/v1/me` answers.
 - [ ] Given Swagger on the deployed environment, when a booking is created, approved and
       cancelled, then its history reads back correctly.
 - [ ] Given Swagger on the deployed environment, when a room image is uploaded, then it
@@ -287,7 +293,7 @@ after a dry run against real data.
 - [ ] Given Swagger on the deployed environment, when an export is requested, then the
       worker generates it and the result downloads.
 - [ ] Given a booking notification, when the outbox is relayed, then the message is
-      visible in the deployed mail viewer.
+      visible in the sending account's Sent folder.
 - [ ] Given the deployed host, when `ops:retention -- --dry-run` is run, then it reports
       counts against real data and deletes nothing.
 

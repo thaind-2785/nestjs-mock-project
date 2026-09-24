@@ -55,10 +55,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      # The deployment host is an Oracle Ampere VM, which is arm64; this runner is amd64.
-      # Without emulation the published image runs everywhere except the one machine it
-      # was built for, and says so only as `exec format error`, at `compose up`, after
-      # everything else in the deploy has already succeeded.
+      # Both architectures, and the reason changed with the platform. The original one was
+      # an arm64 host that no longer exists; what keeps arm64 now is that an Apple-silicon
+      # developer pulls this image to reproduce a deployed failure, and an amd64-only
+      # image fails there with `exec format error` - a message about the machine rather
+      # than about the bug being chased.
       - name: Enable cross-architecture builds
         run: |
           docker run --privileged --rm \

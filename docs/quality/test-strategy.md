@@ -50,6 +50,9 @@
 
 ## Required local gate
 
+The gate also runs `delivery_test`: the image and deploy contracts, which no other
+layer covers because neither can be exercised by running the application.
+
 `npm run verify` performs Harness validation, Harness regression tests, the Harness
 behavioral evaluation, the implementation-declaration convention regression, the
 Compose contract and configuration checks, a non-mutating format check, lint, a

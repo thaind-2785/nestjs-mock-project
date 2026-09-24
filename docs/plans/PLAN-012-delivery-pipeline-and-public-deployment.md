@@ -1,7 +1,11 @@
 # PLAN-012: Delivery pipeline and public deployment
 
 - Spec: [`SPEC-011`](../specs/SPEC-011-delivery-pipeline-and-public-deployment.md)
-- Status: Complete — all six slices delivered; the phase closes with `REVIEW-045`
+- Status: Implemented; the phase closes once the deploy has run. `REVIEW-045` blocked at
+  `7cfaf21` with two Blockers and eight High findings; thirty of thirty-two are fixed and
+  two are accepted with reasons in that report. What remains is evidence rather than work:
+  nine acceptance criteria need the deploy job to have executed, which merging this branch
+  is what causes
 - Owner: Project owner
 - Reviewer (must be independent): an agent or person that authored none of Phase 8.
   Phase 7 closed with `REVIEW-044`, an independent exit read that found two shipped
@@ -36,14 +40,14 @@ is required by `endpoint-catalog.md`.
 
 ## Vertical slices
 
-| Slice    | Observable outcome                                                                    | Files/modules                                               | Migration                    | Tests                                                                            | Status |
-| -------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------- | ------ |
-| `P8-T01` | One image runs either process, as a non-root user, with no toolchain or `.env` inside | `Dockerfile`, `.dockerignore`                               | None                         | Image contract tests; smoke-run both entrypoints                                 | Done   |
-| `P8-T02` | The whole stack runs from compose with healthchecks; `/health/ready` is `200`         | `compose.yaml`, `scripts/compose-*.mjs`                     | None                         | Compose contract tests; readiness integration                                    | Done   |
-| `P8-T03` | Swagger renders against a configured public origin instead of the request host        | `src/config/*`, `src/common/openapi/swagger.ts`             | None                         | Unit (base URL validation, server URL derivation); integration (document served) | Done   |
-| `P8-T04` | Merging to `main` publishes a scanned, SHA-tagged image; the gate is required         | `.github/workflows/ci.yml`, `.github/workflows/release.yml` | None                         | Workflow contract tests                                                          | Done   |
-| `P8-T05` | That exact image serves the public internet; a failed deploy rolls back               | `ci.yml`, `scripts/railway-deploy.mjs`, runbook             | Railway's pre-deploy command | Contract tests; the deploy itself as recorded evidence                           | Done   |
-| `P8-T06` | The project is closed: docs, ADR, manifest, roadmap all agree                         | `docs/`, `.harness/manifest.yaml`, `README.md`              | None                         | `harness:check`; full gate                                                       | Done   |
+| Slice    | Observable outcome                                                                    | Files/modules                                   | Migration                    | Tests                                                                            | Status |
+| -------- | ------------------------------------------------------------------------------------- | ----------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------- | ------ |
+| `P8-T01` | One image runs either process, as a non-root user, with no toolchain or `.env` inside | `Dockerfile`, `.dockerignore`                   | None                         | Image contract tests; smoke-run both entrypoints                                 | Done   |
+| `P8-T02` | The whole stack runs from compose with healthchecks; `/health/ready` is `200`         | `compose.yaml`, `scripts/compose-*.mjs`         | None                         | Compose contract tests; readiness integration                                    | Done   |
+| `P8-T03` | Swagger renders against a configured public origin instead of the request host        | `src/config/*`, `src/common/openapi/swagger.ts` | None                         | Unit (base URL validation, server URL derivation); integration (document served) | Done   |
+| `P8-T04` | Merging to `main` publishes a scanned, SHA-tagged image; the gate is required         | `.github/workflows/ci.yml`                      | None                         | Workflow contract tests                                                          | Done   |
+| `P8-T05` | That exact image serves the public internet; a failed deploy rolls back               | `ci.yml`, `scripts/railway-deploy.mjs`, runbook | Railway's pre-deploy command | Contract tests; the deploy itself as recorded evidence                           | Done   |
+| `P8-T06` | The project is closed: docs, ADR, manifest, roadmap all agree                         | `docs/`, `.harness/manifest.yaml`, `README.md`  | None                         | `harness:check`; full gate                                                       | Done   |
 
 ### Why this order
 
@@ -135,10 +139,9 @@ this is the slice to reopen.
 nothing but a name change if the gate is already right, so this slice is mostly
 `release.yml`:
 
-- Triggers on push to `main`, `needs` nothing but runs after the gate via
-  `workflow_run`, or — simpler and preferred — the publish job lives in `ci.yml` with
-  `needs: verify` and `if: github.ref == 'refs/heads/main'`. One workflow, one dependency
-  edge, nothing to keep in step.
+- The publish job lives in `ci.yml` with `needs: verify` and
+  `if: github.ref == 'refs/heads/main'`. One workflow, one dependency edge, nothing to keep
+  in step — and `ADR-0009` later made that a rule rather than a preference.
 - `docker/build-push-action` with GHCR, tags `ghcr.io/<owner>/<repo>:<sha>` and
   `:main`. Never only `latest`.
 - Trivy scan of the built image; fails on fixable `HIGH`/`CRITICAL`.
@@ -176,7 +179,7 @@ revisions of an application that shares a database - the exact failure a single 
 chosen to make impossible.
 
 **Platform preparation** is one documented manual pass in `docs/runbooks/deployment.md`:
-the Railway project and its services, the image made public, Aiven MySQL, Cloudflare R2,
+the Railway project and its services, the image made public, Railway MySQL, Filebase,
 the Gmail refresh token, the environment on both services, the first migration, and the
 three GitHub secrets.
 
@@ -196,6 +199,23 @@ readiness fails and recording that the previous one came back.
 - `docs/delivery/roadmap.md`: row 8 **Delivered**; row 9 recorded as deliberately not
   taken, with the owner's decision and date.
 - `docs/api/endpoint-catalog.md`: `CI-01`, `CI-02`, `CD-01`, `OPS-01` marked delivered.
+
+## Evidence pending the first deploy
+
+Nine acceptance criteria in `SPEC-011` — AC6 to AC8 and AC10 to AC15 — require the
+deployment to have run, and the deploy job has never executed: it is conditioned on `main`,
+and this branch is not merged. `REVIEW-045` recorded them as claimed without proof and the
+author accepted that rather than arguing it.
+
+Recorded here after the first run, and not before:
+
+- the job's log and the digest it resolved
+- `curl` against `/api/v1/health/ready` and `/api/docs-json` over HTTPS
+- the seven demonstration steps in the runbook, walked once through Swagger
+- a deliberate failed deploy, to observe the rollback restoring the previous digest
+
+Until that section is filled, "Phase 8 delivered" describes a pipeline that is written and
+tested, not one that has shipped anything.
 
 ## Verification commands
 
@@ -262,7 +282,7 @@ _Recorded as slices land. `ADR-0009` holds the durable ones._
   path was proven, because deleting them earlier would have removed the way back before
   there was a way forward.
 - 2026-09-23 — MinIO and Mailpit dropped from the deployed environment in favour of
-  Cloudflare R2 and Gmail. Both were inherited from the single-host design, where a
+  Filebase and Gmail. Both were inherited from the single-host design, where a
   container is free and a managed service is another account; on Railway a container is
   billed and holds state a redeploy can lose. The owner also asked for the production path
   rather than the local stand-ins, and `MAIL_PROVIDER` and `OBJECT_STORAGE_ENDPOINT` were

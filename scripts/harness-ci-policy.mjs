@@ -324,9 +324,9 @@ function validatePublishJob(job, rootPath) {
     addError(`${jobPath}.steps`, 'must push the image');
   }
 
-  // The host is arm64 and this runner is amd64. An image built for one architecture runs
-  // everywhere except the machine it is for, and announces that as `exec format error` at
-  // `compose up` - after the migration has already run.
+  // Both architectures. The platform runs amd64; arm64 is kept for the developer who
+  // pulls this image on Apple silicon to reproduce a deployed failure, and would otherwise
+  // meet `exec format error` - a message about their machine rather than about the bug.
   if (pushIndex !== -1) {
     const platforms = String(steps[pushIndex].run);
     if (

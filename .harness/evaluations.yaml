@@ -114,7 +114,10 @@ fixtures:
     tool_id: typeorm_migrations
     expected: { availability: active, reason_code: active_tool }
 
-  - id: deployment_platform_available
+  # Asserts the permission rather than the status. A fixture naming `status: active` only
+  # re-reads the manifest it was written from - the shape this project's own error log
+  # warns about - whereas this fails if the deploy permission is ever widened or moved.
+  - id: deployment_platform_permission
     type: capability_status
     tool_id: railway
     expected: { availability: active, reason_code: active_tool }

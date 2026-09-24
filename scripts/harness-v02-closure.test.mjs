@@ -194,9 +194,9 @@ test('publishes for the architecture the host actually runs', () => {
     String(step.run ?? '').includes('--push'),
   );
 
-  // The failure this prevents is the latest one possible: an amd64-only image passes the
-  // gate, passes the scan, publishes, pulls onto the arm64 host and dies at `compose up`
-  // with `exec format error` - after the migration has already run.
+  // Kept after the arm64 host went away: an amd64-only image is pulled by a developer on
+  // Apple silicon and dies with `exec format error`, which reads as a broken image rather
+  // than as a missing platform.
   push.run = push.run.replace('linux/amd64,linux/arm64', 'linux/amd64');
 
   assert.ok(

@@ -26,6 +26,8 @@
  * every deploy.
  */
 
+import { readFileSync } from 'node:fs';
+
 const API = 'https://backboard.railway.com/graphql/v2';
 
 /**
@@ -51,9 +53,28 @@ export const digestPattern = /@sha256:[0-9a-f]{64}$/;
 const DEPLOYMENT_SUCCEEDED = new Set(['SUCCESS']);
 const DEPLOYMENT_FAILED = new Set(['FAILED', 'CRASHED', 'REMOVED', 'SKIPPED']);
 
-/** What the API service runs between the build and taking traffic. */
-export const migrationCommand =
-  'node node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js';
+/**
+ * What the API service runs between the build and taking traffic.
+ *
+ * Read from `package.json` rather than copied. The two were byte-identical and nothing
+ * compared them, so changing the data source's path in the script would have left the
+ * deploy pointing at a file that no longer exists - with every test green, because the
+ * contract test checks the *script* while the deploy ran an unchecked literal.
+ */
+function readMigrationCommand() {
+  const packageJson = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  );
+  const command = packageJson.scripts?.['migration:run:prod'];
+  if (!command || /migration:revert/.test(command)) {
+    throw new DeployError(
+      'package.json must define migration:run:prod, and it must not revert',
+    );
+  }
+  return command;
+}
+
+export const migrationCommand = readMigrationCommand();
 
 export class DeployError extends Error {
   constructor(message, { rolledBack = false } = {}) {
@@ -79,25 +100,40 @@ const AUTH_HEADERS = [
 ];
 
 async function graphql(context, query, variables) {
+  // Remembered after the first success. Probing both headers on every call made a deploy
+  // twelve HTTP requests where six were guaranteed `401`s, and a fallback asserted once
+  // is a fallback asserted at its declaration.
+  const order =
+    context.authHeader === undefined
+      ? (AUTH_HEADERS.keys().toArray?.() ?? [...AUTH_HEADERS.keys()])
+      : [context.authHeader];
+
   let response;
-  for (const [index, header] of AUTH_HEADERS.entries()) {
+  let index;
+  for (index of order) {
     response = await context.fetch(API, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        ...header(context.token),
+        ...AUTH_HEADERS[index](context.token),
       },
       body: JSON.stringify({ query, variables }),
     });
-    const rejected = response.status === 401 || response.status === 403;
-    if (!rejected || index === AUTH_HEADERS.length - 1) break;
+    // Only `401`. A `403` means the token was understood and the call was not permitted -
+    // a wrong service or environment id, or a scope that does not cover this project -
+    // and retrying it under the other header sends the operator to the token table for a
+    // problem that is not the token's kind.
+    if (response.status !== 401 || index === order[order.length - 1]) break;
   }
+  if (response.ok) context.authHeader = index;
 
   if (!response.ok) {
     throw new DeployError(
-      response.status === 401 || response.status === 403
+      response.status === 401
         ? 'Railway rejected the token as both a project and an account token'
-        : `Railway API returned ${response.status}`,
+        : response.status === 403
+          ? 'Railway refused the call; check the service and environment ids, and the token scope'
+          : `Railway API returned ${response.status}`,
     );
   }
   const body = await response.json();

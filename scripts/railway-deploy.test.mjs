@@ -1,6 +1,7 @@
 process.env.RAILWAY_DEPLOY_IMPORT_ONLY = '1';
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   deploy,
@@ -380,6 +381,47 @@ test('falls back to an account token rather than reporting a bare 401', async ()
   await readCurrentImage({ ...context, fetch }, 'service-api');
 
   assert.deepEqual(headersSeen, ['project', 'account']);
+});
+
+test('remembers the header that worked instead of re-probing', async () => {
+  // Probing both on every call made one deploy twelve requests, six guaranteed `401`s -
+  // and asserted the fallback once, at its declaration, rather than across the deploy.
+  const { headersSeen, fetch } = tokenFake('account');
+  const { context } = railway();
+  const shared = { ...context, fetch };
+
+  await readCurrentImage(shared, 'service-api');
+  await readCurrentImage(shared, 'service-worker');
+
+  assert.deepEqual(headersSeen, ['project', 'account', 'account']);
+});
+
+test('reports a 403 as a scope problem, not a token-kind problem', async () => {
+  // A wrong service or environment id is understood and refused. Retrying it under the
+  // other header sends the operator to the token table for something the token is not.
+  const { context } = railway();
+  let attempts = 0;
+  context.fetch = async () => {
+    attempts += 1;
+    return { ok: false, status: 403 };
+  };
+
+  await assert.rejects(
+    () => readCurrentImage(context, 'service-api'),
+    /check the service and environment ids/,
+  );
+  assert.equal(attempts, 1, 'a 403 is not retried under the other header');
+});
+
+test('takes the migration command from package.json rather than a copy', async () => {
+  // The two used to be byte-identical strings that nothing compared, so changing the data
+  // source's path in one left the deploy pointing at a file that no longer exists.
+  const packageJson = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  );
+
+  assert.equal(migrationCommand, packageJson.scripts['migration:run:prod']);
+  assert.doesNotMatch(migrationCommand, /migration:revert/);
 });
 
 test('says both were refused when neither works', async () => {

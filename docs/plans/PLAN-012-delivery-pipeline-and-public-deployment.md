@@ -1,7 +1,7 @@
 # PLAN-012: Delivery pipeline and public deployment
 
 - Spec: [`SPEC-011`](../specs/SPEC-011-delivery-pipeline-and-public-deployment.md)
-- Status: In progress — `P8-T01` to `P8-T04` complete and in review; `P8-T05` blocked on the platform being prepared
+- Status: Complete — all six slices delivered; the phase closes with `REVIEW-045`
 - Owner: Project owner
 - Reviewer (must be independent): an agent or person that authored none of Phase 8.
   Phase 7 closed with `REVIEW-044`, an independent exit read that found two shipped
@@ -36,14 +36,14 @@ is required by `endpoint-catalog.md`.
 
 ## Vertical slices
 
-| Slice    | Observable outcome                                                                    | Files/modules                                                      | Migration                    | Tests                                                                            | Status  |
-| -------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------- | -------------------------------------------------------------------------------- | ------- |
-| `P8-T01` | One image runs either process, as a non-root user, with no toolchain or `.env` inside | `Dockerfile`, `.dockerignore`                                      | None                         | Image contract tests; smoke-run both entrypoints                                 | Done    |
-| `P8-T02` | The whole stack runs from compose with healthchecks; `/health/ready` is `200`         | `compose.yaml`, `compose.production.yaml`, `scripts/compose-*.mjs` | None                         | Compose contract tests; readiness integration                                    | Done    |
-| `P8-T03` | Swagger renders against a configured public origin instead of the request host        | `src/config/*`, `src/common/openapi/swagger.ts`                    | None                         | Unit (base URL validation, server URL derivation); integration (document served) | Done    |
-| `P8-T04` | Merging to `main` publishes a scanned, SHA-tagged image; the gate is required         | `.github/workflows/ci.yml`, `.github/workflows/release.yml`        | None                         | Workflow contract tests                                                          | Done    |
-| `P8-T05` | That exact image serves the public internet; a failed deploy rolls back               | `ci.yml`, `scripts/railway-deploy.mjs`, runbook                    | Railway's pre-deploy command | Contract tests; the deploy itself as recorded evidence                           | Done    |
-| `P8-T06` | The project is closed: docs, ADR, manifest, roadmap all agree                         | `docs/`, `.harness/manifest.yaml`, `README.md`                     | None                         | `harness:check`; full gate                                                       | Pending |
+| Slice    | Observable outcome                                                                    | Files/modules                                               | Migration                    | Tests                                                                            | Status |
+| -------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------- | ------ |
+| `P8-T01` | One image runs either process, as a non-root user, with no toolchain or `.env` inside | `Dockerfile`, `.dockerignore`                               | None                         | Image contract tests; smoke-run both entrypoints                                 | Done   |
+| `P8-T02` | The whole stack runs from compose with healthchecks; `/health/ready` is `200`         | `compose.yaml`, `scripts/compose-*.mjs`                     | None                         | Compose contract tests; readiness integration                                    | Done   |
+| `P8-T03` | Swagger renders against a configured public origin instead of the request host        | `src/config/*`, `src/common/openapi/swagger.ts`             | None                         | Unit (base URL validation, server URL derivation); integration (document served) | Done   |
+| `P8-T04` | Merging to `main` publishes a scanned, SHA-tagged image; the gate is required         | `.github/workflows/ci.yml`, `.github/workflows/release.yml` | None                         | Workflow contract tests                                                          | Done   |
+| `P8-T05` | That exact image serves the public internet; a failed deploy rolls back               | `ci.yml`, `scripts/railway-deploy.mjs`, runbook             | Railway's pre-deploy command | Contract tests; the deploy itself as recorded evidence                           | Done   |
+| `P8-T06` | The project is closed: docs, ADR, manifest, roadmap all agree                         | `docs/`, `.harness/manifest.yaml`, `README.md`              | None                         | `harness:check`; full gate                                                       | Done   |
 
 ### Why this order
 
@@ -93,9 +93,10 @@ with a healthcheck: the API's is `/health/live`; the worker has no HTTP surface,
 healthcheck is the process being alive, and that limitation is stated rather than faked
 with a fabricated port.
 
-A separate `compose.production.yaml` describes what runs on the host: the same two
-services **from the published image by digest**, plus Redis, MinIO and the reverse proxy,
-and **no MySQL** — production MySQL is managed and outside the file that redeploys.
+A separate `compose.production.yaml` described what runs on a single host: the same two
+services from the published image by digest, plus Redis, MinIO and a reverse proxy, and no
+MySQL. It was written for the Oracle VM this phase began with, and `P8-T06` removed it
+once the platform turned out to supply all of that itself.
 
 `depends_on: condition: service_healthy` everywhere, so `compose up` either produces a
 working stack or fails.
@@ -256,9 +257,10 @@ _Recorded as slices land. `ADR-0009` holds the durable ones._
   Railway, after Oracle refused the owner's account repeatedly. Nothing in `P8-T01`
   through `P8-T04` changed: the image, the gate and the publish are the same, which is the
   argument for an artifact in a registry being the unit of deployment.
-  `compose.production.yaml` and the `Caddyfile` describe a single-host deployment nothing
-  now runs; they are kept as the documented fallback for when the trial credit ends, and
-  are removed in `P8-T06` if that is not wanted.
+  `compose.production.yaml` and the `Caddyfile` described a single-host deployment nothing
+  ran; `P8-T06` removed them with their eight contract tests. They were kept until the new
+  path was proven, because deleting them earlier would have removed the way back before
+  there was a way forward.
 - 2026-09-23 — MinIO and Mailpit dropped from the deployed environment in favour of
   Cloudflare R2 and Gmail. Both were inherited from the single-host design, where a
   container is free and a managed service is another account; on Railway a container is

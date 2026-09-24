@@ -11,7 +11,10 @@ const suite = loadEvaluationSuite(
 
 test('passes the repository behavioral Harness fixtures', () => {
   const results = runEvaluationSuite(loaded.config, suite);
-  assert.equal(results.length, 10);
+  // The count is a tripwire: a fixture deleted to make a suite pass is a fixture nobody
+  // notices leaving. Two joined in `P8-T06` for the capabilities the deployment made
+  // real.
+  assert.equal(results.length, 12);
   assert.deepEqual(
     results.filter((result) => !result.passed),
     [],

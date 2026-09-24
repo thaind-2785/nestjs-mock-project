@@ -399,6 +399,6 @@ until the project itself is deleted.
 To stretch it: move the database out, as step 3 describes, or stop the services between
 demonstrations.
 
-`compose.production.yaml` and `Caddyfile` in this repository describe the same system on a
-single Linux host with Docker. That is the fallback if this environment needs to outlive
-the credit.
+A single-host Compose description of the same system existed until `P8-T06` and was
+removed there: nothing ran it, and an unexercised file is one that rots quietly. It is in
+history at the commit that removed it, should a self-hosted path ever be wanted.

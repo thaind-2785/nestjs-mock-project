@@ -304,7 +304,7 @@ after a dry run against real data.
   because the workflows are already covered that way (`reviewed CI envelope rejects
 job-level environment injection`). New cases: the deploy job cannot run before the gate;
   the image tag is never only `latest`; no secret is passed as a build argument; the
-  compose production file pins every image by digest.
+  deploy resolves a digest for the commit rather than a moving tag.
 - **Proven by running it, not by a test:** the deploy itself. The evidence is the job log,
   the recorded digest and a `curl` against the public URL, recorded in the plan.
 

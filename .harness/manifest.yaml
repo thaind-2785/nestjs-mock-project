@@ -340,9 +340,24 @@ tool_registry:
     implementation_ref: compose.yaml
   - id: typeorm_migrations
     kind: database_schema
-    status: planned
+    status: active
     permissions: [mutate_local_data]
     timeout_seconds: 300
+    implementation_ref: src/database/data-source.ts
+  # The published artifact. Named as a tool because the deploy reaches for it the way it
+  # reaches for npm or git: it resolves a digest there and the platform pulls from it.
+  - id: container_registry
+    kind: artifact_registry
+    status: active
+    permissions: [read_repository]
+    timeout_seconds: 600
+    implementation_ref: Dockerfile
+  - id: railway
+    kind: deployment_platform
+    status: active
+    permissions: [deploy_production]
+    timeout_seconds: 1200
+    implementation_ref: scripts/railway-deploy.mjs
   - id: github_actions
     kind: ci
     status: active
@@ -571,7 +586,7 @@ pr_lifecycle:
     status: external_not_verified
     required_check: Verify repository
     setup_reference: docs/harness/architecture.md#github-merge-protection
-  deployment: planned_phase_8
+  deployment: on_merge_to_main
 
 autonomy_levels:
   levels:
@@ -655,5 +670,11 @@ runtime_contract:
       }
     compose:
       { status: active, dependencies: [node, npm, git_read, docker_compose] }
-    staging: { status: planned, phase: 8 }
-    production: { status: planned, phase: 8 }
+    # `staging` is removed rather than deferred. ADR-0009 records why: an environment
+    # byte-identical to production, on the same platform, deployed by the same job,
+    # proves nothing production does not and is a second thing to keep in step.
+    production:
+      {
+        status: active,
+        dependencies: [github_actions, container_registry, railway],
+      }

@@ -4,18 +4,18 @@ Each phase exits only when its acceptance criteria, tests, docs, and independent
 review findings are complete. Avoid one large “copy tutorial” commit; port and prove
 one platform capability at a time.
 
-| Phase | Vertical slice          | Exit gate                                                                                                                          |
-| ----- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| 0     | Harness and baseline    | Current docs agreed; `npm run verify` green; repo initialized in Git                                                               |
-| 1     | Platform foundation     | Config validation, MySQL migrations, i18n, Swagger, logs/request IDs, health endpoints; Compose dependencies healthy               |
-| 2     | Auth and RBAC           | Google JIT login issues rotating app sessions; inactive users denied; auth unit/integration/E2E pass                               |
-| 3     | Room catalog            | Admin CRUD/windows, typed attachments, public search and cloud adapter; window/query/upload tests pass                             |
-| 4     | Booking core            | Request/history/cancel/admin approve/reject; price snapshot and concurrent approval E2E proven                                     |
-| 5     | Reliable notifications  | Transactional outbox, BullMQ worker, Gmail adapter, Mailpit local flow, retry/idempotency tests                                    |
-| 6     | Worker Thread export    | **Delivered.** Async room export, outbox-driven queue, XLSX Worker Thread, private result with expiry, crash/concurrency tests     |
-| 7     | Cron and operations     | **Delivered.** Interval-driven daily cleanup, ledger-as-election run record, operator CLI and backlog readings; no month-end email |
-| 8     | CI/CD                   | PR gate, immutable image, migration/deploy job, health smoke test and documented rollback drill                                    |
-| 9     | Optional product slices | Profile update, reviews, payment, statistics—each independently specified and reviewed                                             |
+| Phase | Vertical slice          | Exit gate                                                                                                                                                        |
+| ----- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | Harness and baseline    | Current docs agreed; `npm run verify` green; repo initialized in Git                                                                                             |
+| 1     | Platform foundation     | Config validation, MySQL migrations, i18n, Swagger, logs/request IDs, health endpoints; Compose dependencies healthy                                             |
+| 2     | Auth and RBAC           | Google JIT login issues rotating app sessions; inactive users denied; auth unit/integration/E2E pass                                                             |
+| 3     | Room catalog            | Admin CRUD/windows, typed attachments, public search and cloud adapter; window/query/upload tests pass                                                           |
+| 4     | Booking core            | Request/history/cancel/admin approve/reject; price snapshot and concurrent approval E2E proven                                                                   |
+| 5     | Reliable notifications  | Transactional outbox, BullMQ worker, Gmail adapter, Mailpit local flow, retry/idempotency tests                                                                  |
+| 6     | Worker Thread export    | **Delivered.** Async room export, outbox-driven queue, XLSX Worker Thread, private result with expiry, crash/concurrency tests                                   |
+| 7     | Cron and operations     | **Delivered.** Interval-driven daily cleanup, ledger-as-election run record, operator CLI and backlog readings; no month-end email                               |
+| 8     | CI/CD                   | **Delivered.** Required PR gate, multi-architecture image scanned before publish, deploy on merge with migration before traffic and rollback on failed readiness |
+| 9     | Optional product slices | **Not taken.** The owner closed the project at Phase 8 on 2026-09-23; room export was the one selected optional and shipped in Phase 6                           |
 
 ## First implementation plan
 

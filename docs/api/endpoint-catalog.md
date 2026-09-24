@@ -96,20 +96,20 @@ date values.
 
 ## Non-HTTP triggers
 
-| ID      | Trigger                                         | Handler / result                                                                   | Scope              | Technique                  |
-| ------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------ | -------------------------- |
-| EVT-01  | `booking.confirmed` outbox event                | Queue Gmail confirmation email; record delivery                                    | Required           | Mail + queue/outbox        |
-| EVT-02  | `booking.rejected` outbox event                 | Queue rejection email including reason                                             | Required           | Mail + queue/outbox        |
-| EVT-03  | `booking.changed` from `ADMIN-BOOK-05`          | Email owner before/after details; deduplicate by outbox event                      | Required           | Mail + domain event        |
-| EVT-04  | `booking.cancelled_by_admin` from ADMIN-BOOK-06 | Email owner the cancellation reason                                                | Required support   | Mail + domain event        |
-| JOB-01  | `room-export.requested` BullMQ job              | Query snapshot, run XLSX generation in Worker Thread, upload output                | Selected           | Worker Thread + cloud file |
-| CRON-01 | Daily at configured hotel timezone              | Purge expired sessions/exports and reconcile orphan attachments in bounded batches | Required technique | Cron + distributed lock    |
-| CRON-02 | Last calendar day, configured local time        | Generate prior/current agreed period revenue and email admins once                 | Optional           | Cron + mail + run ledger   |
-| CRON-03 | Daily after hotel checkout time                 | Transition eligible `CONFIRMED` stays to `COMPLETED` in bounded batches            | Optional support   | Cron + state machine       |
-| CI-01   | Pull request open/update                        | Install locked deps, lint/check format, unit + integration tests, build            | Required technique | CI                         |
-| CI-02   | Push/merge to `main`                            | Full tests, build/tag/scan container, publish immutable image                      | Required technique | CI                         |
-| CD-01   | Published image for `main`                      | Run migration job, deploy API + worker, readiness/smoke check, rollback on failure | Required technique | CD                         |
-| OPS-01  | Docker Compose up                               | Start API, worker, MySQL, Redis, MinIO, Mailpit with healthchecks                  | Required technique | Docker Compose             |
+| ID      | Trigger                                         | Handler / result                                                                   | Scope              | Technique                      |
+| ------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------ | ------------------------------ |
+| EVT-01  | `booking.confirmed` outbox event                | Queue Gmail confirmation email; record delivery                                    | Required           | Mail + queue/outbox            |
+| EVT-02  | `booking.rejected` outbox event                 | Queue rejection email including reason                                             | Required           | Mail + queue/outbox            |
+| EVT-03  | `booking.changed` from `ADMIN-BOOK-05`          | Email owner before/after details; deduplicate by outbox event                      | Required           | Mail + domain event            |
+| EVT-04  | `booking.cancelled_by_admin` from ADMIN-BOOK-06 | Email owner the cancellation reason                                                | Required support   | Mail + domain event            |
+| JOB-01  | `room-export.requested` BullMQ job              | Query snapshot, run XLSX generation in Worker Thread, upload output                | Selected           | Worker Thread + cloud file     |
+| CRON-01 | Daily at configured hotel timezone              | Purge expired sessions/exports and reconcile orphan attachments in bounded batches | Required technique | Cron + distributed lock        |
+| CRON-02 | Last calendar day, configured local time        | Generate prior/current agreed period revenue and email admins once                 | Optional           | Cron + mail + run ledger       |
+| CRON-03 | Daily after hotel checkout time                 | Transition eligible `CONFIRMED` stays to `COMPLETED` in bounded batches            | Optional support   | Cron + state machine           |
+| CI-01   | Pull request open/update                        | Install locked deps, lint/check format, unit + integration tests, build            | Required technique | CI — **Delivered**             |
+| CI-02   | Push/merge to `main`                            | Full tests, build/tag/scan container, publish immutable image                      | Required technique | CI — **Delivered**             |
+| CD-01   | Published image for `main`                      | Run migration job, deploy API + worker, readiness/smoke check, rollback on failure | Required technique | CD — **Delivered**             |
+| OPS-01  | Docker Compose up                               | Start API, worker, MySQL, Redis, MinIO, Mailpit with healthchecks                  | Required technique | Docker Compose — **Delivered** |
 
 ## Response and authorization notes
 

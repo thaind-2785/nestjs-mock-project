@@ -151,11 +151,14 @@ step says why the bucket must be S3 object storage and not IPFS.
 
 ### Accepted, with reasons
 
-- **`R45-08`** — nine acceptance criteria are claimed without evidence. Accepted because
-  the evidence does not exist yet: they require the deployment to have run, and the deploy
-  job has never executed. The criteria stay marked, `PLAN-012` carries an explicit
-  "evidence pending first deploy" note, and this is the item that closes the project rather
-  than one that blocks the merge that creates it.
+- **`R45-08`** — nine acceptance criteria claimed without evidence. Six of them now have
+  it: the first observed deploy ran on 2026-09-24 at `7d40edf`, and `PLAN-012` carries the
+  log, the digests, the revision the public address reports, and the TLS and OpenAPI
+  checks. The six demonstration flows were walked through Swagger by the owner the same
+  day. The ninth — a live rollback drill — is accepted as a residual risk: the owner chose
+  not to fail a live deployment on purpose, the path has fifteen unit cases and seven
+  mutations against a fake that models how the platform actually behaves, and the manual
+  recovery is a minute in the Railway dashboard.
 - **`R45-09`** — closed on 2026-09-24 rather than accepted. The owner enabled branch
   protection; `gh api` now returns `Verify repository` as the required context with
   `strict` set. `ADR-0009` records the verification and the manifest reads `verified`. What

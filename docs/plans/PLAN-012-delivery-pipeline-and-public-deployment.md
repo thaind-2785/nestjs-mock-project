@@ -1,11 +1,13 @@
 # PLAN-012: Delivery pipeline and public deployment
 
 - Spec: [`SPEC-011`](../specs/SPEC-011-delivery-pipeline-and-public-deployment.md)
-- Status: Implemented; the phase closes once the deploy has run. `REVIEW-045` blocked at
-  `7cfaf21` with two Blockers and eight High findings; thirty of thirty-two are fixed and
-  two are accepted with reasons in that report. What remains is evidence rather than work:
-  nine acceptance criteria need the deploy job to have executed, which merging this branch
-  is what causes
+- Status: Implemented and deployed. The first observed deploy ran on 2026-09-24 at
+  `7d40edf`; eight of the nine acceptance criteria that needed it now have evidence, and
+  the ninth — a live rollback drill — is an accepted residual risk rather than a criterion
+  marked done. `REVIEW-045` blocked at `7cfaf21` with two Blockers
+  and eight High findings; thirty-one of thirty-two are closed, and the one accepted is the
+  rollback drill, which is a deliberate production failure and therefore the owner's
+  decision
 - Owner: Project owner
 - Reviewer (must be independent): an agent or person that authored none of Phase 8.
   Phase 7 closed with `REVIEW-044`, an independent exit read that found two shipped
@@ -200,22 +202,93 @@ readiness fails and recording that the previous one came back.
   taken, with the owner's decision and date.
 - `docs/api/endpoint-catalog.md`: `CI-01`, `CI-02`, `CD-01`, `OPS-01` marked delivered.
 
-## Evidence pending the first deploy
+## Evidence from the first observed deploy
 
-Nine acceptance criteria in `SPEC-011` — AC6 to AC8 and AC10 to AC15 — require the
-deployment to have run, and the deploy job has never executed: it is conditioned on `main`,
-and this branch is not merged. `REVIEW-045` recorded them as claimed without proof and the
-author accepted that rather than arguing it.
+Merge `7d40edf` to `main`, 2026-09-24. The first deploy whose success anybody could check —
+the one before it reported success while nothing could say what it had shipped, which is
+what `REVIEW-045` found.
 
-Recorded here after the first run, and not before:
+### The deploy itself
 
-- the job's log and the digest it resolved
-- `curl` against `/api/v1/health/ready` and `/api/docs-json` over HTTPS
-- the seven demonstration steps in the runbook, walked once through Swagger
-- a deliberate failed deploy, to observe the rollback restoring the previous digest
+```
+{"event":"deploy_previous_resolved","api":"…@sha256:1dfe40a9…","worker":"…@sha256:1dfe40a9…"}
+{"event":"deploy_started","service":"api","image":"…@sha256:835b26c7…"}
+{"event":"deploy_ready","service":"api","revision":"7d40edf3064e3d63f1db51a7924cb719029b1473"}
+{"event":"deploy_started","service":"worker","image":"…@sha256:835b26c7…"}
+{"event":"deploy_ready","service":"worker"}
+{"event":"deploy_completed"}
+```
 
-Until that section is filled, "Phase 8 delivered" describes a pipeline that is written and
-tested, not one that has shipped anything.
+Thirty-three seconds, and four things are legible in those six lines that were not legible
+before:
+
+- **The way back existed before the way forward.** `deploy_previous_resolved` is the first
+  line, and it carries a digest for each service.
+- **Both services moved to one digest**, `835b26c7…`, and neither to a tag.
+- **`deploy_ready` for the API carries a revision**, and it equals the commit being
+  deployed. This is the line `REVIEW-045` was about: previously the deploy reported ready
+  because _something_ answered `200`, and the something was the container being replaced.
+- **The worker moved after the API was serving**, not alongside it.
+
+### What the public address answers
+
+```
+$ curl -s https://api-production-3c0a.up.railway.app/api/v1/health/live
+{"status":"ok","requestId":"fe1a4658-…","revision":"7d40edf3064e3d63f1db51a7924cb719029b1473"}
+
+$ curl -o /dev/null -w '%{http_code} tls=%{ssl_verify_result}' .../api/v1/health/ready
+200 tls=0
+
+$ curl -s .../api/docs-json | …
+servers: ['https://api-production-3c0a.up.railway.app']
+paths: 34
+```
+
+`AC8` is met: readiness answers `200` over HTTPS from outside the platform with a valid
+certificate. `AC9` is met: the document advertises the public origin rather than the host
+header that reached the container, across all 34 documented endpoints.
+
+### The gate
+
+`gh api .../branches/main/protection` returns `Verify repository` as the required context
+with `strict` set; force pushes and deletions refused. `AC1` is met, and the manifest reads
+`verified` rather than `external_not_verified`.
+
+### The demonstration flows
+
+Walked through Swagger on the deployed environment by the owner on 2026-09-24, in the order
+`docs/runbooks/deployment.md` lists: Google sign-in and `/me`, a room type and room, an
+image upload, a booking created and approved with its history read back, an export
+requested and downloaded, the mail in the sending account's Sent folder, and retention in
+`--dry-run`. `AC10` through `AC15` are met.
+
+The evidence here is one person's walk-through rather than a recording, which is what these
+criteria were always going to be: they exercise Google's consent screen, a browser cookie
+and a file download, none of which a test in this repository can stand in for.
+
+### `AC7` — rollback, accepted without a live drill
+
+The rollback path has never run against the real platform, and will not before this phase
+closes. The owner decided on 2026-09-24 not to fail a live deployment on purpose.
+
+What exists instead: fifteen unit cases against a fake that models the platform's actual
+behaviour — the outgoing revision keeps answering `200` until the incoming one is healthy —
+and seven mutations, each turning at least one of them red. Removing the rollback call,
+restoring services that were never moved, or reporting `rolledBack: true` when the restore
+could not be confirmed are all caught.
+
+What that does not cover is the platform answering differently from how its documentation
+says it will, which is the only thing a live drill would add. The risk is bounded: a failed
+rollback cannot make things worse than the failed deploy that triggered it, the log says
+`deploy_rollback_failed` and the job reports `rolledBack: false`, and the manual path —
+Railway → Deployments → Redeploy on both services — is in the runbook and takes under a
+minute.
+
+Recorded as an accepted residual risk with the owner as its owner, rather than as a
+criterion quietly marked done.
+
+Eight of the nine criteria `REVIEW-045` recorded as claimed without evidence now have it.
+The ninth is accepted above.
 
 ## Verification commands
 

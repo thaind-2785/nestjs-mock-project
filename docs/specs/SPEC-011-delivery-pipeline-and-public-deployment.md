@@ -258,14 +258,14 @@ after a dry run against real data.
 
 ## Acceptance criteria
 
-- [ ] Given a pull request, when the gate runs, then lint, format, whole-project
+- [x] Given a pull request, when the gate runs, then lint, format, whole-project
       typecheck, unit, integration, e2e, harness checks and build all pass, and the check
       is required before merge.
-- [ ] Given a merge to `main`, when the pipeline runs, then an image tagged with the
+- [x] Given a merge to `main`, when the pipeline runs, then an image tagged with the
       commit SHA is published to GHCR and is runnable as either process.
-- [ ] Given the published image, when it is scanned, then a fixable `CRITICAL`/`HIGH`
+- [x] Given the published image, when it is scanned, then a fixable `CRITICAL`/`HIGH`
       vulnerability fails the job.
-- [ ] Given the image, when it is started with no build toolchain present, then both
+- [x] Given the image, when it is started with no build toolchain present, then both
       `node dist/main` and `node dist/worker` start, and the process runs as a non-root
       user.
 - [x] Given `compose.yaml`, when `docker compose --profile app up -d` is run, then every
@@ -273,29 +273,36 @@ after a dry run against real data.
       `/health/ready` returns `200`. The application services declare no healthcheck of
       their own: the API's is baked into the image, and the worker has no HTTP surface to
       probe — a fabricated port would report health it never checked.
-- [ ] Given a deploy, when a migration fails, then the previously running containers are
+- [x] Given a deploy, when a migration fails, then the previously running containers are
       still serving and the job exits non-zero.
-- [ ] Given a deploy whose containers start but never become ready, when the readiness
+- [x] Given a deploy whose containers start but never become ready, when the readiness
       budget expires, then the previous digest is restored, readiness is re-verified, and
       the job exits non-zero.
-- [ ] Given a successful deploy, when `/health/ready` is called over HTTPS from outside
+- [x] Given a successful deploy, when `/health/ready` is called over HTTPS from outside
       the host, then it returns `200` with a valid certificate.
-- [ ] Given the deployed environment, when `/api/docs` is opened, then Swagger renders
+- [x] Given the deployed environment, when `/api/docs` is opened, then Swagger renders
       with `PUBLIC_BASE_URL` as its server and `/api/docs-json` returns the document.
-- [ ] Given `PUBLIC_BASE_URL` that is not an absolute `https` origin, when the
+- [x] Given `PUBLIC_BASE_URL` that is not an absolute `https` origin, when the
       application starts in production, then it refuses to start and names the variable.
-- [ ] Given Swagger on the deployed environment, when the Google login flow is completed
+- [x] Given Swagger on the deployed environment, when the Google login flow is completed
       against the public redirect URI, then a session is issued and `/api/v1/me` answers.
-- [ ] Given Swagger on the deployed environment, when a booking is created, approved and
+- [x] Given Swagger on the deployed environment, when a booking is created, approved and
       cancelled, then its history reads back correctly.
-- [ ] Given Swagger on the deployed environment, when a room image is uploaded, then it
+- [x] Given Swagger on the deployed environment, when a room image is uploaded, then it
       is stored in object storage and served back.
-- [ ] Given Swagger on the deployed environment, when an export is requested, then the
+- [x] Given Swagger on the deployed environment, when an export is requested, then the
       worker generates it and the result downloads.
-- [ ] Given a booking notification, when the outbox is relayed, then the message is
+- [x] Given a booking notification, when the outbox is relayed, then the message is
       visible in the sending account's Sent folder.
-- [ ] Given the deployed host, when `ops:retention -- --dry-run` is run, then it reports
+- [x] Given the deployed host, when `ops:retention -- --dry-run` is run, then it reports
       counts against real data and deletes nothing.
+
+Every criterion above is met. One is met by argument rather than by observation and says
+so: the rollback path was never exercised against the real platform, because proving it
+means failing a live deployment on purpose and the owner declined. `PLAN-012` records that
+as an accepted residual risk with what stands in for the drill — fifteen unit cases against
+a fake that models the platform's actual behaviour, seven mutations, and a manual recovery
+that takes a minute.
 
 ## Test strategy
 

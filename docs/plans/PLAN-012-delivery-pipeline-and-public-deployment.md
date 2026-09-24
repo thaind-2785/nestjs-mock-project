@@ -2,8 +2,9 @@
 
 - Spec: [`SPEC-011`](../specs/SPEC-011-delivery-pipeline-and-public-deployment.md)
 - Status: Implemented and deployed. The first observed deploy ran on 2026-09-24 at
-  `7d40edf`; six of the nine acceptance criteria that needed it now have evidence, and the
-  three that remain are listed in the evidence section rather than marked done. `REVIEW-045` blocked at `7cfaf21` with two Blockers
+  `7d40edf`; eight of the nine acceptance criteria that needed it now have evidence, and
+  the ninth — a live rollback drill — is an accepted residual risk rather than a criterion
+  marked done. `REVIEW-045` blocked at `7cfaf21` with two Blockers
   and eight High findings; thirty-one of thirty-two are closed, and the one accepted is the
   rollback drill, which is a deliberate production failure and therefore the owner's
   decision
@@ -253,19 +254,41 @@ header that reached the container, across all 34 documented endpoints.
 with `strict` set; force pushes and deletions refused. `AC1` is met, and the manifest reads
 `verified` rather than `external_not_verified`.
 
-### Still unproven, and named rather than implied
+### The demonstration flows
 
-- **`AC7` — rollback.** The code path has fifteen unit cases and seven mutations against a
-  fake platform, and has never run against the real one. Proving it means deploying a
-  revision that cannot become ready on purpose — a deliberate failure on a live
-  environment, which is the owner's call rather than an author's.
-- **`AC10`-`AC15` — the six demonstration flows.** Google sign-in, a booking journey, an
-  image upload, an export, mail in the Sent folder, and a retention dry run. Each needs a
-  person signed in through Swagger; `docs/runbooks/deployment.md` lists them in the order
-  that exercises something new at each step.
+Walked through Swagger on the deployed environment by the owner on 2026-09-24, in the order
+`docs/runbooks/deployment.md` lists: Google sign-in and `/me`, a room type and room, an
+image upload, a booking created and approved with its history read back, an export
+requested and downloaded, the mail in the sending account's Sent folder, and retention in
+`--dry-run`. `AC10` through `AC15` are met.
 
-Six of the nine criteria `REVIEW-045` recorded as claimed without evidence now have it.
-Three remain, and they remain listed here rather than quietly marked done.
+The evidence here is one person's walk-through rather than a recording, which is what these
+criteria were always going to be: they exercise Google's consent screen, a browser cookie
+and a file download, none of which a test in this repository can stand in for.
+
+### `AC7` — rollback, accepted without a live drill
+
+The rollback path has never run against the real platform, and will not before this phase
+closes. The owner decided on 2026-09-24 not to fail a live deployment on purpose.
+
+What exists instead: fifteen unit cases against a fake that models the platform's actual
+behaviour — the outgoing revision keeps answering `200` until the incoming one is healthy —
+and seven mutations, each turning at least one of them red. Removing the rollback call,
+restoring services that were never moved, or reporting `rolledBack: true` when the restore
+could not be confirmed are all caught.
+
+What that does not cover is the platform answering differently from how its documentation
+says it will, which is the only thing a live drill would add. The risk is bounded: a failed
+rollback cannot make things worse than the failed deploy that triggered it, the log says
+`deploy_rollback_failed` and the job reports `rolledBack: false`, and the manual path —
+Railway → Deployments → Redeploy on both services — is in the runbook and takes under a
+minute.
+
+Recorded as an accepted residual risk with the owner as its owner, rather than as a
+criterion quietly marked done.
+
+Eight of the nine criteria `REVIEW-045` recorded as claimed without evidence now have it.
+The ninth is accepted above.
 
 ## Verification commands
 

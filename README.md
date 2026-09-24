@@ -23,9 +23,24 @@ with a managed MySQL, Redis, Filebase object storage and Gmail delivery.
   deploy is answered by the container being replaced.
 - **[`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)** — every console the
   deployment spans, the demonstration order, what each failure symptom means, and the full
-  setup sequence. A rendered copy of the console table exists as a convenience page
-  elsewhere; this file is the one with authority, because it is the one that ships with the
+  setup sequence. The companion pages below render parts of it for reading away from a
+  terminal; this file is the one with authority, because it is the one that ships with the
   code it describes.
+
+### Companion pages
+
+Both are private artifacts: the link opens only for whoever it has been shared with, and
+neither carries authority over the files in this repository.
+
+- **[Deployment console](https://claude.ai/artifact/EXbJqLj2thsvbM6zYU8a33)** — the console
+  table, the demonstration order, and the failure symptoms from the deployment runbook,
+  in Vietnamese.
+- **[Design rationale](https://claude.ai/artifact/X4ExbWsHGJVRTLuwcWwWsJ)** — fourteen
+  questions a technical reviewer tends to ask about this system, answered in prose rather
+  than as a tour of the code: why the worker is a separate process, what Redis is
+  responsible for, the mail and export flows end to end, why a rollback restores an image
+  digest and what the alternatives cost, and what the design deliberately leaves undone.
+  In Vietnamese.
 
 Sign in from a browser rather than from Swagger: `/api/v1/auth/google` answers with a
 redirect, and Swagger renders the response instead of following it. Google sign-in is

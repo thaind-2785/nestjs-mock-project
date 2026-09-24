@@ -84,10 +84,10 @@ export function validateCiWorkflowEnvelope(workflow, config) {
     );
   }
 
-  if (!hasExactKeys(workflow?.jobs, ['verify', 'publish'])) {
+  if (!hasExactKeys(workflow?.jobs, ['verify', 'publish', 'deploy'])) {
     addError(
       `${rootPath}.jobs`,
-      'must contain exactly the verify and publish jobs',
+      'must contain exactly the verify, publish and deploy jobs',
     );
   }
 
@@ -109,6 +109,98 @@ export function validateCiWorkflowEnvelope(workflow, config) {
   }
 
   errors.push(...validatePublishJob(workflow?.jobs?.publish, rootPath));
+  errors.push(...validateDeployJob(workflow?.jobs?.deploy, rootPath));
+
+  return errors;
+}
+
+/**
+ * The deploying job, which is the only one in this repository that can change what the
+ * public is served.
+ *
+ * Its rules are about *where the decisions live* rather than about what they are. The
+ * deploy itself - which digest, whether to roll back, when to give up - is in
+ * `scripts/railway-deploy.mjs`, where it has unit tests. What this checks is that the
+ * workflow keeps handing the work to that file instead of growing its own copy in YAML,
+ * which nothing would test and nobody would review.
+ */
+function validateDeployJob(job, rootPath) {
+  const errors = [];
+  const addError = (path, message) => errors.push(`${path}: ${message}`);
+  const jobPath = `${rootPath}.jobs.deploy`;
+
+  if (
+    !hasExactKeys(job, [
+      'name',
+      'needs',
+      'if',
+      'runs-on',
+      'timeout-minutes',
+      'environment',
+      'steps',
+    ])
+  ) {
+    addError(
+      jobPath,
+      'must contain exactly the reviewed job keys; env/defaults/container/services are forbidden',
+    );
+    return errors;
+  }
+
+  // Nothing is deployed that was not published, and nothing is deployed from a branch.
+  if (job['needs'] !== 'publish') {
+    addError(`${jobPath}.needs`, 'must depend on the publish job');
+  }
+  if (job['if'] !== "github.ref == 'refs/heads/main'") {
+    addError(`${jobPath}.if`, 'must run only for main');
+  }
+  if (job['runs-on'] !== 'ubuntu-latest') {
+    addError(`${jobPath}.runs-on`, 'must equal ubuntu-latest');
+  }
+
+  // A named environment, so the platform credentials are scoped to this job rather than
+  // readable by every workflow in the repository.
+  if (job.environment !== 'production') {
+    addError(`${jobPath}.environment`, 'must name the production environment');
+  }
+
+  const steps = Array.isArray(job.steps) ? job.steps : [];
+  const commands = steps.map((step) => String(step?.run ?? ''));
+
+  // The decisions stay in the tested module. A workflow that starts calling the platform
+  // API directly is a workflow that has grown an untested deploy.
+  if (!commands.some((c) => c.includes('scripts/railway-deploy.mjs'))) {
+    addError(
+      `${jobPath}.steps`,
+      'must deploy through scripts/railway-deploy.mjs',
+    );
+  }
+  for (const [index, command] of commands.entries()) {
+    if (
+      command.includes('backboard.railway.com') &&
+      !command.includes('railway-deploy.mjs')
+    ) {
+      addError(
+        `${jobPath}.steps[${index}]`,
+        'must not call the platform API from the workflow; that logic belongs in the tested module',
+      );
+    }
+  }
+
+  // Resolved from the registry rather than carried between jobs, and a digest either way:
+  // a tag is a pointer, and the platform caches what a floating tag resolved to.
+  const resolve = commands.find((c) => c.includes('docker-content-digest'));
+  if (!resolve) {
+    addError(
+      `${jobPath}.steps`,
+      'must resolve the published digest from the registry',
+    );
+  } else if (!resolve.includes('${GITHUB_SHA}')) {
+    addError(
+      `${jobPath}.steps`,
+      'must resolve the digest for this commit, not for a moving tag',
+    );
+  }
 
   return errors;
 }

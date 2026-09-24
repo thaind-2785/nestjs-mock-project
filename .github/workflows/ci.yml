@@ -120,3 +120,35 @@ jobs:
             echo "APP_IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}@${DIGEST}"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
+
+  deploy:
+    name: Deploy
+    needs: publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # The digest, resolved again here rather than passed between jobs. A job output can
+      # be a tag by accident; this asks the registry what `<sha>` actually points at, and
+      # a tag cannot survive that.
+      - name: Resolve the published digest
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          TOKEN="$(curl -fsS "https://ghcr.io/token?scope=repository:${GITHUB_REPOSITORY,,}:pull&service=ghcr.io" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).token))')"
+          DIGEST="$(curl -fsSI -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.oci.image.index.v1+json" "https://ghcr.io/v2/${GITHUB_REPOSITORY,,}/manifests/${GITHUB_SHA}" | tr -d '\r' | awk -F': ' '/^docker-content-digest/ {print $2}')"
+          test -n "${DIGEST}"
+          echo "APP_IMAGE=${IMAGE}@${DIGEST}" >> "${GITHUB_ENV}"
+
+      - name: Point both services at it, and roll back if it cannot answer
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+          RAILWAY_API_SERVICE_ID: ${{ secrets.RAILWAY_API_SERVICE_ID }}
+          RAILWAY_WORKER_SERVICE_ID: ${{ secrets.RAILWAY_WORKER_SERVICE_ID }}
+          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
+        run: node scripts/railway-deploy.mjs

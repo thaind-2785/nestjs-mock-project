@@ -206,6 +206,78 @@ test('publishes for the architecture the host actually runs', () => {
   );
 });
 
+test('the deploy waits for a publish, and only on main', () => {
+  for (const [mutate, expected] of [
+    [(w) => delete w.jobs.deploy.needs, 'reviewed job keys'],
+    [
+      (w) => {
+        w.jobs.deploy.needs = 'verify';
+      },
+      'must depend on the publish job',
+    ],
+    [
+      (w) => {
+        w.jobs.deploy.if = "github.event_name == 'push'";
+      },
+      'must run only for main',
+    ],
+    [
+      (w) => {
+        w.jobs.deploy.environment = 'staging';
+      },
+      'must name the production environment',
+    ],
+  ]) {
+    const workflow = loadWorkflow();
+    mutate(workflow);
+    assert.ok(
+      validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
+        error.includes(expected),
+      ),
+      `expected an error containing ${expected}`,
+    );
+  }
+});
+
+test('the deploy keeps its decisions in the module that has tests', () => {
+  // The rule is about where the logic lives rather than what it does. A workflow step
+  // that calls the platform API directly is a deploy nothing tests and nobody reviews -
+  // and it would look entirely reasonable in a diff.
+  const inlined = loadWorkflow();
+  inlined.jobs.deploy.steps = [
+    { name: 'Checkout', uses: 'actions/checkout@abc' },
+    {
+      name: 'Deploy',
+      run: 'curl -X POST https://backboard.railway.com/graphql/v2 -d @mutation.json',
+    },
+  ];
+  const errors = validateCiWorkflowEnvelope(inlined, loaded.config);
+  assert.ok(
+    errors.some((e) => e.includes('scripts/railway-deploy.mjs')),
+    'a deploy that bypasses the module is refused',
+  );
+  assert.ok(
+    errors.some((e) => e.includes('that logic belongs in the tested module')),
+    'and the workflow is told why',
+  );
+});
+
+test('the deploy resolves a digest for this commit, not a tag', () => {
+  const tagged = loadWorkflow();
+  const resolve = tagged.jobs.deploy.steps.find((step) =>
+    String(step.run ?? '').includes('docker-content-digest'),
+  );
+  // Deploying `:main` is how a platform that caches a floating tag's digest re-runs the
+  // image it already had - which is the failure this whole slice exists to avoid.
+  resolve.run = resolve.run.replaceAll('${GITHUB_SHA}', 'main');
+
+  assert.ok(
+    validateCiWorkflowEnvelope(tagged, loaded.config).some((error) =>
+      error.includes('not for a moving tag'),
+    ),
+  );
+});
+
 test('reviewed CI envelope rejects job execution-surface expansion', () => {
   for (const mutate of [
     (workflow) => {

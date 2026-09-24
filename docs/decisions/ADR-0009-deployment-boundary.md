@@ -151,12 +151,17 @@ broken deployment.
 Merging to `main` deploys. Nothing is published or deployed from a branch: both jobs are
 conditioned on the ref.
 
-The gate is **not** enforced as a required check at the time of writing — `REVIEW-045`
-checked and GitHub answers `404 Branch not protected`. The workflow runs on every pull
-request and the manifest records `merge_enforcement.status: external_not_verified`, which
-was accurate while this paragraph, in an earlier draft, was not. Enabling it is one
-command, in `docs/runbooks/deployment.md`; until somebody runs it, a red gate can be merged
-past.
+The gate is enforced as a required check, verified on 2026-09-24:
+`gh api .../branches/main/protection` returns `Verify repository` as the required context,
+with `strict` set — so a branch must also be current with `main` before it merges. Force
+pushes and deletions are refused.
+
+An earlier draft of this paragraph asserted that before it was true, while the manifest
+recorded `external_not_verified` and was right. `REVIEW-045` caught the disagreement by
+running the query rather than reading either claim, which is the only way a statement about
+somebody else's system can be checked. `enforce_admins` stays off: the owner is the only
+maintainer, and locking them out of their own repository during an incident buys nothing
+here.
 
 Adding an environment variable means adding it on both Railway services; the application
 refuses to start and names what it wants, which is the fastest way to find out.

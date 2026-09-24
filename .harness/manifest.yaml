@@ -582,7 +582,7 @@ pr_lifecycle:
   merge_blockers:
     [failed_required_evaluation, unresolved_blocker, unresolved_high]
   merge_enforcement:
-    status: external_not_verified
+    status: verified
     required_check: Verify repository
     setup_reference: docs/harness/architecture.md#github-merge-protection
   deployment: on_merge_to_main

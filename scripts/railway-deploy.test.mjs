@@ -2,7 +2,11 @@ process.env.RAILWAY_DEPLOY_IMPORT_ONLY = '1';
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deploy, migrationCommand } from './railway-deploy.mjs';
+import {
+  deploy,
+  migrationCommand,
+  readCurrentImage,
+} from './railway-deploy.mjs';
 
 /**
  * The deploy decides things, and every decision it makes is one that cannot be observed
@@ -76,6 +80,26 @@ function railway({ readinessStatuses = [200], currentImages = {} } = {}) {
   };
 
   return { context, calls };
+}
+
+/** Records which auth header each attempt carried, and refuses all but one kind. */
+function tokenFake(accepts) {
+  const headersSeen = [];
+  return {
+    headersSeen,
+    async fetch(url, init) {
+      const kind = init.headers['project-access-token'] ? 'project' : 'account';
+      headersSeen.push(kind);
+      if (kind !== accepts) return { ok: false, status: 401 };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: { serviceInstance: { source: { image: 'img' } } },
+        }),
+      };
+    },
+  };
 }
 
 const NEW = 'ghcr.io/owner/app@sha256:' + 'b'.repeat(64);
@@ -171,5 +195,37 @@ test('reports a failed rollback instead of reporting success', async () => {
   assert.ok(
     calls.some((c) => c.log === 'deploy_rollback_failed'),
     'a rollback that cannot confirm readiness says so',
+  );
+});
+
+test('accepts a project token, which is the narrower of the two', async () => {
+  const { headersSeen, fetch } = tokenFake('project');
+  const { context } = railway();
+
+  await readCurrentImage({ ...context, fetch }, 'service-api');
+
+  // Tried first, and no second attempt: a correctly scoped token is the one that works
+  // without the operator knowing Railway has two header conventions.
+  assert.deepEqual(headersSeen, ['project']);
+});
+
+test('falls back to an account token rather than reporting a bare 401', async () => {
+  const { headersSeen, fetch } = tokenFake('account');
+  const { context } = railway();
+
+  await readCurrentImage({ ...context, fetch }, 'service-api');
+
+  assert.deepEqual(headersSeen, ['project', 'account']);
+});
+
+test('says both were refused when neither works', async () => {
+  const { fetch } = tokenFake('neither');
+  const { context } = railway();
+
+  await assert.rejects(
+    () => readCurrentImage({ ...context, fetch }, 'service-api'),
+    // A bare 401 sends somebody to check the token's value. This sends them to check its
+    // kind, which is the thing that is actually wrong.
+    /both a project and an account token/,
   );
 });

@@ -40,18 +40,42 @@ export class DeployError extends Error {
   }
 }
 
+/**
+ * The two ways Railway accepts a token, tried in order of least privilege.
+ *
+ * A project token is scoped to one environment in one project and authenticates with its
+ * own header; an account or workspace token covers everything and uses `Authorization`.
+ * Sending the wrong one gets a bare `401` that says nothing about which kind was expected,
+ * so this tries the narrow one first and falls back once rather than making the operator
+ * know the difference - and the fallback order means a correctly scoped token is the one
+ * that works without configuration.
+ */
+const AUTH_HEADERS = [
+  (token) => ({ 'project-access-token': token }),
+  (token) => ({ authorization: `Bearer ${token}` }),
+];
+
 async function graphql(context, query, variables) {
-  const response = await context.fetch(API, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${context.token}`,
-    },
-    body: JSON.stringify({ query, variables }),
-  });
+  let response;
+  for (const [index, header] of AUTH_HEADERS.entries()) {
+    response = await context.fetch(API, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...header(context.token),
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+    const rejected = response.status === 401 || response.status === 403;
+    if (!rejected || index === AUTH_HEADERS.length - 1) break;
+  }
 
   if (!response.ok) {
-    throw new DeployError(`Railway API returned ${response.status}`);
+    throw new DeployError(
+      response.status === 401 || response.status === 403
+        ? 'Railway rejected the token as both a project and an account token'
+        : `Railway API returned ${response.status}`,
+    );
   }
   const body = await response.json();
   if (body.errors?.length) {

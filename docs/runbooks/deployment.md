@@ -272,17 +272,23 @@ read.
 Railway - Account Settings - **Tokens** - create one. Then on GitHub, **Settings - Secrets
 and variables - Actions**:
 
+Both identifiers are in one place — open the `api` service and read the address bar:
+
+```
+railway.com/project/<projectId>/service/<serviceId>?environmentId=<environmentId>
+```
+
 These go under **Settings → Environments → production → Secrets**, not the repository's
 general secrets: the deploy job names that environment, which is what keeps the platform
 credential out of reach of every other workflow.
 
-| Name                        | Where to find it                                                       |
-| --------------------------- | ---------------------------------------------------------------------- |
-| `RAILWAY_TOKEN`             | Railway → Account Settings → Tokens                                    |
-| `RAILWAY_ENVIRONMENT_ID`    | The `environment` UUID in any service's log line, or the dashboard URL |
-| `RAILWAY_API_SERVICE_ID`    | The `api` service's UUID, from its dashboard URL                       |
-| `RAILWAY_WORKER_SERVICE_ID` | The same, for `worker`                                                 |
-| `PUBLIC_BASE_URL`           | `https://<railway-subdomain>` — the deploy polls readiness on it       |
+| Name                        | Where to find it                                                                                                                  |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `RAILWAY_TOKEN`             | Railway → Account Settings → Tokens. A **project token** is the narrowest scope that works; account and workspace tokens work too |
+| `RAILWAY_ENVIRONMENT_ID`    | The `environmentId` query parameter in the service URL below                                                                      |
+| `RAILWAY_API_SERVICE_ID`    | The UUID after `/service/` in the `api` service's URL                                                                             |
+| `RAILWAY_WORKER_SERVICE_ID` | The same, for `worker`                                                                                                            |
+| `PUBLIC_BASE_URL`           | `https://<railway-subdomain>` — the deploy polls readiness on it                                                                  |
 
 GitHub never holds the application's own environment. It holds the key to the door and
 nothing behind it.
@@ -343,6 +349,14 @@ bug.
 The migration is never reverted automatically. They are expand-only by project rule, so
 rolling the _code_ back over a migrated database is safe; rolling a migration back is how
 a partial migration becomes data loss, and that is a decision for a person.
+
+### If the deploy says the token was refused
+
+Railway accepts two kinds of token through two different headers: a project token through
+`Project-Access-Token`, an account or workspace token through `Authorization`. The deploy
+tries the narrow one first and falls back, so either works. A token that neither header
+accepts produces one message saying exactly that — rather than a bare `401`, which sends
+somebody off to check whether they copied the value correctly.
 
 ## Reading a failed deploy
 

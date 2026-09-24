@@ -1,11 +1,13 @@
 # Hotel Management System API
 
 NestJS backend course project for hotel room discovery, Google-only authentication,
-booking requests, administration, cloud files, email, Worker Threads, cron, and
-CI/CD. The API currently provides the platform foundation plus Phase 2 Google-only
-authentication and RBAC: Google JIT users, rotating application sessions, JWT
-guards, `/me`, audited user activation/deactivation, and first-admin bootstrap.
-Local MySQL/Redis/MinIO/Mailpit dependencies remain managed through Compose.
+booking requests, administration, cloud files, email, Worker Threads, scheduled retention
+and CI/CD. All eight phases are delivered: Google JIT identity with rotating sessions,
+room catalog with typed attachments, booking lifecycle with price snapshots and concurrent
+approval, a transactional outbox relaying mail through BullMQ, asynchronous XLSX export in
+a Worker Thread, daily retention under a ledger that elects one runner, and a pipeline that
+publishes one scanned image and deploys it. Local MySQL, Redis, MinIO and Mailpit are
+managed through Compose; the deployed environment uses managed equivalents.
 
 ## The deployed environment
 
@@ -14,11 +16,16 @@ with a managed MySQL, Redis, Filebase object storage and Gmail delivery.
 
 - **Swagger**: <https://api-production-3c0a.up.railway.app/api/docs>
 - **Readiness**: <https://api-production-3c0a.up.railway.app/api/v1/health/ready>
-- **[Deployment console](https://claude.ai/artifact/EXbJqLj2thsvbM6zYU8a33)** — every
-  dashboard the deployment spans, the demonstration order, and what each failure symptom
-  means. Open this one before a demonstration.
-- **[`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)** — the full sequence:
-  creating the services, the environment, the first migration, and the everyday deploy.
+- **Which revision is serving**:
+  <https://api-production-3c0a.up.railway.app/api/v1/health/live> returns `revision`, the
+  commit its image was built from. The deploy requires that value to match the commit it is
+  shipping before it moves the worker — without it, a readiness check straight after a
+  deploy is answered by the container being replaced.
+- **[`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)** — every console the
+  deployment spans, the demonstration order, what each failure symptom means, and the full
+  setup sequence. A rendered copy of the console table exists as a convenience page
+  elsewhere; this file is the one with authority, because it is the one that ships with the
+  code it describes.
 
 Sign in from a browser rather than from Swagger: `/api/v1/auth/google` answers with a
 redirect, and Swagger renders the response instead of following it. Google sign-in is

@@ -98,10 +98,29 @@ fixtures:
       decision: reject
       reason_code: tool_permission_mismatch
 
-  - id: planned_migration_unavailable
+  # A capability that is genuinely planned, rather than one that happens to be today.
+  # This fixture named `typeorm_migrations` until `P8-T06`, so the day migrations became
+  # active it started failing for having been delivered - the third time in this phase a
+  # check asserted a rule by borrowing whatever currently had that status.
+  - id: planned_capability_unavailable
+    type: capability_status
+    tool_id: custom_mcp
+    expected: { availability: unavailable, reason_code: planned_tool }
+
+  # Active since Phase 1 in practice and since `P8-T06` in the registry: the schema is
+  # applied locally, in CI, and on the deployed environment as the API's pre-deploy step.
+  - id: migrations_available
     type: capability_status
     tool_id: typeorm_migrations
-    expected: { availability: unavailable, reason_code: planned_tool }
+    expected: { availability: active, reason_code: active_tool }
+
+  # Asserts the permission rather than the status. A fixture naming `status: active` only
+  # re-reads the manifest it was written from - the shape this project's own error log
+  # warns about - whereas this fails if the deploy permission is ever widened or moved.
+  - id: deployment_platform_permission
+    type: capability_status
+    tool_id: railway
+    expected: { availability: active, reason_code: active_tool }
 
   - id: deployment_provider_not_registered
     type: capability_status

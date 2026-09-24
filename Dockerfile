@@ -11,12 +11,15 @@
 # The command is therefore not baked in. The image defaults to the API and every other
 # entrypoint overrides it:
 #
-#   docker run <image>                                  # the API
-#   docker run <image> node dist/worker                 # mail, export, retention
-#   docker run <image> npm run migration:run:prod       # one-shot, before a deploy
-#   docker run <image> npm run ops:retention:prod -- --dry-run
+#   docker run <image>                                    # the API
+#   docker run <image> node dist/worker                   # mail, export, retention
+#   docker run <image> node node_modules/typeorm/cli.js \
+#     migration:run -d dist/database/data-source.js       # the platform's pre-deploy step
+#   docker run <image> node dist/cli/retention.js --dry-run
 #
-# `compose.production.yaml` is where those overrides are declared for real.
+# `node` in every one of them: the runtime stage deletes npm, so an `npm run` entrypoint
+# would start and immediately fail. `compose.yaml` declares the first two for local work,
+# and the deploy sets the third as the API service's pre-deploy command.
 #
 # The image carries no configuration. Every value the application needs arrives at run
 # time, from the environment the container is started with - which is why the same image

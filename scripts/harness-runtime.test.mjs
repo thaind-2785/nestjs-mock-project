@@ -133,12 +133,20 @@ test('rejects planned tools and environments before spawn', () => {
     'planned_tool',
   );
 
+  // Built by marking an environment planned rather than by naming one that happens to be
+  // planned today. The earlier version used `staging`, so removing that environment in
+  // `P8-T06` turned this assertion into a test of a name instead of a test of the rule.
+  const plannedEnvironment = structuredClone(loaded.config);
+  plannedEnvironment.runtime_contract.environments.compose = {
+    status: 'planned',
+    phase: 99,
+  };
   expectPolicyError(
     () =>
       resolveCommand({
-        config: loaded.config,
-        commandRef: 'build',
-        environmentId: 'staging',
+        config: plannedEnvironment,
+        commandRef: 'compose_config',
+        environmentId: 'compose',
       }),
     'planned_environment',
   );

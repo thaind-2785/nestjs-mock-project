@@ -37,21 +37,21 @@ flowchart TB
 
 ## Component map
 
-| Component                 | Source of truth             | Operational mechanism                                        |
-| ------------------------- | --------------------------- | ------------------------------------------------------------ |
-| 1. Entry commands         | `.harness/manifest.yaml`    | reviewed argv catalog and reference-only executor            |
-| 2. Workflow/state machine | manifest + `AGENTS.md`      | status in feature plans and review gates                     |
-| 3. Context strategy       | manifest `context_strategy` | deterministic task-class routes and bounded fallback         |
-| 4. Tool registry          | manifest                    | active/planned tools with permissions, evidence, and timeout |
-| 5. Permission model       | manifest + runtime module   | fail-closed pre-spawn decisions                              |
-| 6. Hook lifecycle         | manifest                    | local handoff gate and GitHub Actions PR hook                |
-| 7. Skill boundaries       | manifest + `.agents/skills` | one routing skill; specialization only after repetition      |
-| 8. Memory model           | manifest + `docs/`          | specs, plans, ADRs, reviews, sanitized error lessons         |
-| 9. Observability          | manifest + runtime module   | allowlisted JSON-lines decision/execution events             |
-| 10. Evaluation strategy   | manifest + fixture suite    | offline behavioral fixtures and mutation tests               |
-| 11. PR lifecycle          | manifest + `.github`        | locked install, verify, independent review, findings closure |
-| 12. Autonomy levels       | manifest                    | L0–L4 profiles constrained by action permissions             |
-| 13. Runtime contract      | manifest + `.nvmrc`         | Node/npm/lockfile/env boundary; deploy remains planned       |
+| Component                 | Source of truth             | Operational mechanism                                             |
+| ------------------------- | --------------------------- | ----------------------------------------------------------------- |
+| 1. Entry commands         | `.harness/manifest.yaml`    | reviewed argv catalog and reference-only executor                 |
+| 2. Workflow/state machine | manifest + `AGENTS.md`      | status in feature plans and review gates                          |
+| 3. Context strategy       | manifest `context_strategy` | deterministic task-class routes and bounded fallback              |
+| 4. Tool registry          | manifest                    | active/planned tools with permissions, evidence, and timeout      |
+| 5. Permission model       | manifest + runtime module   | fail-closed pre-spawn decisions                                   |
+| 6. Hook lifecycle         | manifest                    | local handoff gate and GitHub Actions PR hook                     |
+| 7. Skill boundaries       | manifest + `.agents/skills` | one routing skill; specialization only after repetition           |
+| 8. Memory model           | manifest + `docs/`          | specs, plans, ADRs, reviews, sanitized error lessons              |
+| 9. Observability          | manifest + runtime module   | allowlisted JSON-lines decision/execution events                  |
+| 10. Evaluation strategy   | manifest + fixture suite    | offline behavioral fixtures and mutation tests                    |
+| 11. PR lifecycle          | manifest + `.github`        | locked install, verify, independent review, findings closure      |
+| 12. Autonomy levels       | manifest                    | L0–L4 profiles constrained by action permissions                  |
+| 13. Runtime contract      | manifest + `.nvmrc`         | Node/npm/lockfile/env boundary; `production` active since Phase 8 |
 
 ## Entry commands
 
@@ -112,9 +112,11 @@ health, restarts Redis, and verifies a uniquely named persistence probe without
 deleting volumes or stopping the stack.
 
 Immutable pulls of the four digest-pinned dependency images are part of this local
-boundary. Application-image build/publish, registry mutation, API/worker containers,
-staging/production deployment, and TypeORM migration execution remain outside it and
-retain planned status.
+boundary. Phase 8 brought image build and publication, the container registry, TypeORM migration
+execution and production deployment inside the harness; all four are `active` in the
+manifest and each has an `implementation_ref`. A `staging` environment was removed rather
+than delivered — `ADR-0009` records why. What remains outside the harness is Docker image
+_execution_ on a developer machine and any MCP capability, both still `planned`
 
 `bootstrap` has an additional `committed_dependency_graph` precondition. Before
 `npm ci`, a fixed read-only Git probe requires both `package.json` and

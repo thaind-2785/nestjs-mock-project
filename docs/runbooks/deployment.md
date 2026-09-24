@@ -272,11 +272,23 @@ read.
 Railway - Account Settings - **Tokens** - create one. Then on GitHub, **Settings - Secrets
 and variables - Actions**:
 
-| Name                        | Value                                         |
-| --------------------------- | --------------------------------------------- |
-| `RAILWAY_TOKEN`             | the token                                     |
-| `RAILWAY_API_SERVICE_ID`    | from the `api` service's URL in the dashboard |
-| `RAILWAY_WORKER_SERVICE_ID` | the same, for `worker`                        |
+Both identifiers are in one place — open the `api` service and read the address bar:
+
+```
+railway.com/project/<projectId>/service/<serviceId>?environmentId=<environmentId>
+```
+
+These go under **Settings → Environments → production → Secrets**, not the repository's
+general secrets: the deploy job names that environment, which is what keeps the platform
+credential out of reach of every other workflow.
+
+| Name                        | Where to find it                                                                                                                  |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `RAILWAY_TOKEN`             | Railway → Account Settings → Tokens. A **project token** is the narrowest scope that works; account and workspace tokens work too |
+| `RAILWAY_ENVIRONMENT_ID`    | The `environmentId` query parameter in the service URL below                                                                      |
+| `RAILWAY_API_SERVICE_ID`    | The UUID after `/service/` in the `api` service's URL                                                                             |
+| `RAILWAY_WORKER_SERVICE_ID` | The same, for `worker`                                                                                                            |
+| `PUBLIC_BASE_URL`           | `https://<railway-subdomain>` — the deploy polls readiness on it                                                                  |
 
 GitHub never holds the application's own environment. It holds the key to the door and
 nothing behind it.
@@ -315,17 +327,36 @@ Merging to `main` publishes an image and the deploy workflow ships it.
 
 ## What it does, in order
 
-1. Resolves the digest published for this commit.
-2. Runs the migration against the production database **before** anything is replaced. A
-   failure here leaves the running revision serving and the job exits non-zero.
-3. Points both Railway services at the new digest and waits for them to redeploy.
-4. Polls `/health/ready` until it answers `200` or the budget expires.
-5. On failure, restores the previously recorded digest, re-checks readiness, and exits
-   non-zero.
+1. Asks the registry what digest it holds for this commit. A digest and never a tag:
+   Railway caches what a floating tag resolved to for about an hour, so redeploying
+   `:main` after a publish re-runs the image it already had.
+2. Points the **API** at that digest, with the migration as its pre-deploy command.
+   Railway runs that command after the build and before the new deployment takes traffic;
+   if it fails, the deployment does not proceed and the running revision keeps serving.
+3. Polls `/health/ready` until `200` or the budget expires. Readiness rather than
+   liveness, because a container that cannot reach its database is alive.
+4. Points the **worker** at the same digest, once the API has answered. The API moves
+   first and alone because it carries the migration — so a failed schema change never
+   leaves the two halves of one application on two revisions of it.
+5. On any failure: restores the previous digest on **both** services, redeploys them,
+   re-checks readiness, and exits non-zero.
 
-Migrations are never reverted automatically. They are expand-only by project rule, so
+The decisions live in `scripts/railway-deploy.mjs`, which has unit tests against a fake
+platform. The workflow calls it and does nothing else — a deploy written in YAML can only
+be exercised by merging to `main`, which is the one place nobody wants to find a rollback
+bug.
+
+The migration is never reverted automatically. They are expand-only by project rule, so
 rolling the _code_ back over a migrated database is safe; rolling a migration back is how
 a partial migration becomes data loss, and that is a decision for a person.
+
+### If the deploy says the token was refused
+
+Railway accepts two kinds of token through two different headers: a project token through
+`Project-Access-Token`, an account or workspace token through `Authorization`. The deploy
+tries the narrow one first and falls back, so either works. A token that neither header
+accepts produces one message saying exactly that — rather than a bare `401`, which sends
+somebody off to check whether they copied the value correctly.
 
 ## Reading a failed deploy
 

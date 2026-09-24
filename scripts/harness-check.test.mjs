@@ -404,7 +404,9 @@ test('locks CI triggers, permissions, timeout, command, and action pins', () => 
   );
   assert.ok(
     errors.some((error) =>
-      error.includes('must contain only the reviewed verify and publish jobs'),
+      error.includes(
+        'must contain only the reviewed verify, publish and deploy jobs',
+      ),
     ),
   );
   assert.ok(

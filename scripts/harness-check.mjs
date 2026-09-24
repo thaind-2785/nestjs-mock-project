@@ -210,13 +210,14 @@ export function validateCiWorkflow(workflow, config) {
   // are checked here and in harness-ci-policy.mjs; what each one may contain is stated
   // there, and the pair is fixed here so a third job cannot appear unreviewed.
   if (
-    jobIds.length !== 2 ||
+    jobIds.length !== 3 ||
     jobIds[0] !== 'verify' ||
-    jobIds[1] !== 'publish'
+    jobIds[1] !== 'publish' ||
+    jobIds[2] !== 'deploy'
   ) {
     addError(
       'runtime_contract.ci_workflow.jobs',
-      'must contain only the reviewed verify and publish jobs, in that order',
+      'must contain only the reviewed verify, publish and deploy jobs, in that order',
     );
   }
   // The gate reads; it never needs a write. The publish job is the exception and declares
@@ -244,16 +245,18 @@ export function validateCiWorkflow(workflow, config) {
     );
   }
 
-  const publishJob = workflow?.jobs?.publish;
-  if (
-    !Number.isInteger(publishJob?.['timeout-minutes']) ||
-    publishJob['timeout-minutes'] < 1 ||
-    publishJob['timeout-minutes'] > maxTimeoutMinutes
-  ) {
-    addError(
-      'runtime_contract.ci_workflow.jobs.publish.timeout-minutes',
-      `must be positive and no greater than ${maxTimeoutMinutes}`,
-    );
+  for (const jobId of ['publish', 'deploy']) {
+    const bounded = workflow?.jobs?.[jobId];
+    if (
+      !Number.isInteger(bounded?.['timeout-minutes']) ||
+      bounded['timeout-minutes'] < 1 ||
+      bounded['timeout-minutes'] > maxTimeoutMinutes
+    ) {
+      addError(
+        `runtime_contract.ci_workflow.jobs.${jobId}.timeout-minutes`,
+        `must be positive and no greater than ${maxTimeoutMinutes}`,
+      );
+    }
   }
 
   const steps = job?.steps ?? [];

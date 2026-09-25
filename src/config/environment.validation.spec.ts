@@ -131,6 +131,22 @@ describe('validateEnvironment', () => {
     expect(environment.HEALTH_CHECK_TIMEOUT_MS).toBe(1500);
   });
 
+  it.each(['GMAIL_SMTP', 'GMAIL_API'])(
+    'lets production send through %s',
+    (provider) => {
+      expect(
+        validateEnvironment({
+          NODE_ENV: 'production',
+          MYSQL_PASSWORD: 'production-password',
+          OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
+          OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
+          ...productionRequiredEnvironment,
+          MAIL_PROVIDER: provider,
+        }).MAIL_PROVIDER,
+      ).toBe(provider);
+    },
+  );
+
   it('disables Swagger by default in production', () => {
     const environment = validateEnvironment({
       NODE_ENV: 'production',

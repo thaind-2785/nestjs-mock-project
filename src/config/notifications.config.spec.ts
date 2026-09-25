@@ -1,6 +1,8 @@
 import {
   createNotificationsConfiguration,
   describeNotificationsConfiguration,
+  gmailApiHost,
+  gmailApiPort,
   gmailSmtpHost,
   gmailSmtpPort,
   notificationQueueName,
@@ -61,6 +63,45 @@ describe('createNotificationsConfiguration', () => {
       clientSecret: 'client-secret-value',
       refreshToken: 'refresh-token-value',
     });
+  });
+
+  it('fixes the Gmail API endpoint and reuses the same credentials', () => {
+    const configuration = createNotificationsConfiguration(
+      validateEnvironment({ ...gmailEnvironment, MAIL_PROVIDER: 'GMAIL_API' }),
+    );
+
+    expect(configuration.transport).toEqual({
+      provider: 'GMAIL_API',
+      host: gmailApiHost,
+      port: gmailApiPort,
+      secure: true,
+      user: 'mailer@hotel.example',
+      clientId: 'client-id-value',
+      clientSecret: 'client-secret-value',
+      refreshToken: 'refresh-token-value',
+    });
+    expect(describeNotificationsConfiguration(configuration)).toMatchObject({
+      provider: 'GMAIL_API',
+      host: 'gmail.googleapis.com',
+      port: 443,
+      authenticated: true,
+    });
+  });
+
+  it('refuses an SMTP endpoint override and missing credentials in Gmail API mode', () => {
+    expect(() =>
+      validateEnvironment({
+        ...gmailEnvironment,
+        MAIL_PROVIDER: 'GMAIL_API',
+        MAIL_SMTP_HOST: 'attacker.test',
+      }),
+    ).toThrow(/MAIL_SMTP_HOST/);
+    expect(() =>
+      validateEnvironment({
+        MAIL_PROVIDER: 'GMAIL_API',
+        MAIL_GMAIL_USER: 'a@b.test',
+      }),
+    ).toThrow(/MAIL_GMAIL_REFRESH_TOKEN/);
   });
 
   it('rejects a Mailpit endpoint override while Gmail credentials are configured', () => {

@@ -1,6 +1,7 @@
 # ADR-0006: Outbox-driven mail delivery through a replaceable SMTP port
 
-- Status: Accepted
+- Status: Accepted; transport amended by `ADR-0010` (Gmail over HTTPS where SMTP is
+  blocked)
 - Date: 2026-09-14
 - Authority: Owner decision of 2026-09-14 recorded in `SPEC-007`; Phase 5 slice
   `P5-T01`.

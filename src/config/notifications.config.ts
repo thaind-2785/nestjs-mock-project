@@ -18,6 +18,16 @@ import {
 export const gmailSmtpHost = 'smtp.gmail.com';
 export const gmailSmtpPort = 465;
 
+/**
+ * The HTTPS equivalents, fixed for the same reason. Some hosts block outbound SMTP
+ * outright, and a connection that is never answered looks like a slow provider rather
+ * than a refused one; port 443 is the one every host leaves open.
+ */
+export const gmailApiHost = 'gmail.googleapis.com';
+export const gmailApiPort = 443;
+export const gmailApiSendUrl = `https://${gmailApiHost}/gmail/v1/users/me/messages/send`;
+export const googleOAuthTokenUrl = 'https://oauth2.googleapis.com/token';
+
 /** One queue per delivery channel; the configured prefix namespaces the deployment. */
 export const notificationQueueName = 'email-delivery';
 
@@ -28,19 +38,31 @@ export interface MailpitTransportConfiguration {
   secure: false;
 }
 
-export interface GmailTransportConfiguration {
-  provider: 'GMAIL_SMTP';
-  host: typeof gmailSmtpHost;
-  port: typeof gmailSmtpPort;
-  secure: true;
+export interface GmailCredentials {
   user: string;
   clientId: string;
   clientSecret: string;
   refreshToken: string;
 }
 
+export interface GmailTransportConfiguration extends GmailCredentials {
+  provider: 'GMAIL_SMTP';
+  host: typeof gmailSmtpHost;
+  port: typeof gmailSmtpPort;
+  secure: true;
+}
+
+export interface GmailApiTransportConfiguration extends GmailCredentials {
+  provider: 'GMAIL_API';
+  host: typeof gmailApiHost;
+  port: typeof gmailApiPort;
+  secure: true;
+}
+
 export type MailTransportConfiguration =
-  MailpitTransportConfiguration | GmailTransportConfiguration;
+  | MailpitTransportConfiguration
+  | GmailTransportConfiguration
+  | GmailApiTransportConfiguration;
 
 export interface MailSenderConfiguration {
   name: string;
@@ -153,7 +175,7 @@ export function describeNotificationsConfiguration(
     host: transport.host,
     port: transport.port,
     secure: transport.secure,
-    authenticated: transport.provider === 'GMAIL_SMTP',
+    authenticated: transport.provider !== 'MAILPIT',
     senderDomain: senderDomainOf(configuration.sender.address),
     defaultLocale: configuration.defaultLocale,
     sendTimeoutMs: configuration.sendTimeoutMs,
@@ -180,19 +202,16 @@ function createMailTransportConfiguration(
       host: gmailSmtpHost,
       port: gmailSmtpPort,
       secure: true,
-      user: requireConfigured(environment.MAIL_GMAIL_USER, 'MAIL_GMAIL_USER'),
-      clientId: requireConfigured(
-        environment.MAIL_GMAIL_CLIENT_ID,
-        'MAIL_GMAIL_CLIENT_ID',
-      ),
-      clientSecret: requireConfigured(
-        environment.MAIL_GMAIL_CLIENT_SECRET,
-        'MAIL_GMAIL_CLIENT_SECRET',
-      ),
-      refreshToken: requireConfigured(
-        environment.MAIL_GMAIL_REFRESH_TOKEN,
-        'MAIL_GMAIL_REFRESH_TOKEN',
-      ),
+      ...gmailCredentials(environment),
+    };
+  }
+  if (environment.MAIL_PROVIDER === 'GMAIL_API') {
+    return {
+      provider: 'GMAIL_API',
+      host: gmailApiHost,
+      port: gmailApiPort,
+      secure: true,
+      ...gmailCredentials(environment),
     };
   }
   return {
@@ -200,6 +219,24 @@ function createMailTransportConfiguration(
     host: requireConfigured(environment.MAIL_SMTP_HOST, 'MAIL_SMTP_HOST'),
     port: requireConfigured(environment.MAIL_SMTP_PORT, 'MAIL_SMTP_PORT'),
     secure: false,
+  };
+}
+
+function gmailCredentials(environment: EnvironmentVariables): GmailCredentials {
+  return {
+    user: requireConfigured(environment.MAIL_GMAIL_USER, 'MAIL_GMAIL_USER'),
+    clientId: requireConfigured(
+      environment.MAIL_GMAIL_CLIENT_ID,
+      'MAIL_GMAIL_CLIENT_ID',
+    ),
+    clientSecret: requireConfigured(
+      environment.MAIL_GMAIL_CLIENT_SECRET,
+      'MAIL_GMAIL_CLIENT_SECRET',
+    ),
+    refreshToken: requireConfigured(
+      environment.MAIL_GMAIL_REFRESH_TOKEN,
+      'MAIL_GMAIL_REFRESH_TOKEN',
+    ),
   };
 }
 

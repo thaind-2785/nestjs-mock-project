@@ -18,7 +18,12 @@ export class CreateRoomTypeDto {
   @MaxLength(100)
   name!: string;
 
-  @ApiPropertyOptional({ maxLength: 2_000, nullable: true })
+  @ApiPropertyOptional({
+    type: String,
+    example: 'Sea-view room with a king bed and a balcony',
+    maxLength: 2_000,
+    nullable: true,
+  })
   @Transform(trim)
   @IsOptional()
   @IsString()
@@ -36,7 +41,12 @@ export class UpdateRoomTypeDto {
   @MaxLength(100)
   name?: string;
 
-  @ApiPropertyOptional({ maxLength: 2_000, nullable: true })
+  @ApiPropertyOptional({
+    type: String,
+    example: 'Sea-view room with a king bed and a balcony',
+    maxLength: 2_000,
+    nullable: true,
+  })
   @Transform(trim)
   @IsOptional()
   @IsString()

@@ -40,7 +40,12 @@ export class CreateRoomDto {
   @Max(20)
   bedCount!: number;
 
-  @ApiPropertyOptional({ maxLength: 50, nullable: true, example: 'CITY' })
+  @ApiPropertyOptional({
+    type: String,
+    maxLength: 50,
+    nullable: true,
+    example: 'CITY',
+  })
   @Transform(trimAndUppercase)
   @IsOptional()
   @IsString()
@@ -102,7 +107,12 @@ export class UpdateRoomDto {
   @Max(20)
   bedCount?: number;
 
-  @ApiPropertyOptional({ maxLength: 50, nullable: true, example: 'CITY' })
+  @ApiPropertyOptional({
+    type: String,
+    maxLength: 50,
+    nullable: true,
+    example: 'CITY',
+  })
   @Transform(trimAndUppercase)
   @IsOptional()
   @IsString()

@@ -23,7 +23,7 @@ class UserBookingHistoryResponseDto {
   @ApiPropertyOptional({ type: BookingHistoryActorResponseDto })
   actor?: BookingHistoryActorResponseDto;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({ type: String, nullable: true, example: null })
   reason!: string | null;
 
   @ApiProperty({ format: 'date-time' })

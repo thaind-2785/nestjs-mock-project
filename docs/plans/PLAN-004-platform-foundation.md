@@ -178,6 +178,9 @@ diagnostic tail.
   `sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e`,
   and `axllent/mailpit:v1.31.0` at
   `sha256:c96991d9bef73594c246d89ca81411d4e916f03e76a7d2d72fa2ab5dd3c9ce24`.
+  On 2026-09-25 the MinIO pin moved to `ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z`
+  at `sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9`, because
+  upstream withdrew its public images; see `docs/logs/error-log.md`.
 - Every published port binds to `127.0.0.1`; every service has an explicit healthcheck,
   `unless-stopped` restart policy, and named persistent volume. Compose consumes only
   safe development examples or ignored `.env` overrides.

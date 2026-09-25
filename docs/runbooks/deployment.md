@@ -14,7 +14,7 @@ no real customer data. Every choice below assumes that.
 | Redis          | Railway                   | Transport only; losing it loses no work, the outbox holds it                         |
 | MySQL 8        | Railway, managed          | Official MySQL 8.4; a redeploy of the application does not reach it                  |
 | Object storage | Filebase                  | Room images and export files are the only things here the database cannot regenerate |
-| Mail           | Gmail over OAuth2         | What Phase 5 built; a refresh token, not a password                                  |
+| Mail           | Gmail API over OAuth2     | Same account and token as Phase 5's SMTP path; HTTPS because Railway blocks SMTP     |
 | Domain + TLS   | Railway                   | Issued and renewed automatically; nothing to configure                               |
 
 Railway holds two processes and a queue. Everything that keeps state is outside it, which
@@ -233,8 +233,9 @@ OBJECT_STORAGE_BUCKET=hotel-media
 OBJECT_STORAGE_REGION=us-east-1
 OBJECT_STORAGE_FORCE_PATH_STYLE=true
 
-# Gmail over OAuth2.
-MAIL_PROVIDER=GMAIL_SMTP
+# Gmail over OAuth2, through the HTTPS API: Railway drops outbound SMTP, so
+# GMAIL_SMTP times out on every attempt there (ADR-0010).
+MAIL_PROVIDER=GMAIL_API
 MAIL_FROM_ADDRESS=<sending-account>@gmail.com
 MAIL_GMAIL_USER=<sending-account>@gmail.com
 MAIL_GMAIL_CLIENT_ID=<client-id>

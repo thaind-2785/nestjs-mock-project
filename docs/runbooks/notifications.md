@@ -25,16 +25,16 @@ All values are validated at worker startup by `validateEnvironment`; a worker wi
 invalid combination refuses to start rather than running degraded. Names and bounds
 live in [`.env.example`](../../.env.example). The ones an operator changes:
 
-| Variable                                    | Meaning                                              |
-| ------------------------------------------- | ---------------------------------------------------- |
-| `MAIL_PROVIDER`                             | `MAILPIT` locally, `GMAIL_SMTP` in a real deployment |
-| `MAIL_SEND_TIMEOUT_MS`                      | Bound on one provider call                           |
-| `NOTIFICATION_CLAIM_LEASE_MS`               | How long a claim survives a dead worker              |
-| `NOTIFICATION_MAX_ATTEMPTS`                 | Delivery budget before an event becomes `FAILED`     |
-| `NOTIFICATION_BACKOFF_INITIAL_MS`/`_MAX_MS` | Retry spacing                                        |
-| `NOTIFICATION_WORKER_CONCURRENCY`           | Parallel sends per worker process                    |
-| `NOTIFICATION_SHUTDOWN_DRAIN_MS`            | Bound on a graceful drain                            |
-| `NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS`   | How often the backlog alerting line is emitted       |
+| Variable                                    | Meaning                                                 |
+| ------------------------------------------- | ------------------------------------------------------- |
+| `MAIL_PROVIDER`                             | `MAILPIT` locally; `GMAIL_SMTP` or `GMAIL_API` deployed |
+| `MAIL_SEND_TIMEOUT_MS`                      | Bound on one provider call                              |
+| `NOTIFICATION_CLAIM_LEASE_MS`               | How long a claim survives a dead worker                 |
+| `NOTIFICATION_MAX_ATTEMPTS`                 | Delivery budget before an event becomes `FAILED`        |
+| `NOTIFICATION_BACKOFF_INITIAL_MS`/`_MAX_MS` | Retry spacing                                           |
+| `NOTIFICATION_WORKER_CONCURRENCY`           | Parallel sends per worker process                       |
+| `NOTIFICATION_SHUTDOWN_DRAIN_MS`            | Bound on a graceful drain                               |
+| `NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS`   | How often the backlog alerting line is emitted          |
 
 Three bounds are enforced across variables and will fail startup by name:
 
@@ -266,14 +266,19 @@ What this means in practice:
 
 ## Gmail symptoms
 
-In `GMAIL_SMTP` mode the transport is fixed in code; only credentials are configured.
+In both Gmail modes the endpoint is fixed in code; only credentials are configured.
+`GMAIL_API` sends the same message over HTTPS for hosts that block SMTP (`ADR-0010`).
 
-| Symptom                                                  | Cause and action                                                                                            |
-| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Worker refuses to start naming a `MAIL_GMAIL_*` variable | Missing OAuth2 configuration. The log names the variable, never its value                                   |
-| Deliveries retry with an auth classification             | Refresh token revoked or expired; re-issue it and restart the worker                                        |
-| Deliveries retry with a rate classification              | Gmail's per-account send limit. Lower `NOTIFICATION_WORKER_CONCURRENCY`; the backoff already spaces retries |
-| Sends time out near `MAIL_SEND_TIMEOUT_MS`               | Provider slowness. Confirm the lease still exceeds the timeout plus margin before raising it                |
+| Symptom                                                                          | Cause and action                                                                                                                              |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker refuses to start naming a `MAIL_GMAIL_*` variable                         | Missing OAuth2 configuration. The log names the variable, never its value                                                                     |
+| Deliveries fail permanently with an auth classification                          | Either mode: refresh token revoked or expired (`invalid_grant`), or a wrong client pair. Re-issue the token, restart the worker, then redrive |
+| Deliveries retry with an auth classification                                     | `GMAIL_SMTP`: Gmail's login throttle. `GMAIL_API`: an access token refused mid-life; the next attempt refreshes it. Act only if it persists   |
+| Deliveries retry with a rate classification                                      | Gmail's per-account send limit. Lower `NOTIFICATION_WORKER_CONCURRENCY`; the backoff already spaces retries                                   |
+| Sends time out near `MAIL_SEND_TIMEOUT_MS`                                       | Provider slowness. Confirm the lease still exceeds the timeout plus margin before raising it                                                  |
+| Every `GMAIL_SMTP` send times out and none ever succeeded                        | The host drops outbound SMTP. Set `MAIL_PROVIDER=GMAIL_API` on both services and redeploy                                                     |
+| `GMAIL_API` fails permanently with an auth classification and the token is fresh | Gmail API disabled on the Google Cloud project, or the refresh token lacks a send scope                                                       |
+| `GMAIL_API` fails with a rejected classification                                 | Gmail refused the sender or the message, including the account's daily send quota (`dailyLimitExceeded`). Redrive after the quota resets      |
 
 Mail is VND-only by owner decision: a room priced in a currency with decimals fails its
 notification permanently rather than mailing a wrong amount.

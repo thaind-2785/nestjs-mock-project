@@ -98,6 +98,11 @@ export class SmtpEmailSender implements EmailSender, OnApplicationShutdown {
       greetingTimeout: sendTimeoutMs,
       socketTimeout: sendTimeoutMs,
     };
+    if (transport.provider === 'GMAIL_API') {
+      throw new Error(
+        'SmtpEmailSender cannot send through MAIL_PROVIDER=GMAIL_API.',
+      );
+    }
     if (transport.provider === 'GMAIL_SMTP') {
       return {
         ...bounds,

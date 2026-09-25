@@ -5,7 +5,9 @@ export const nodeEnvironments = ['development', 'test', 'production'] as const;
 
 export type NodeEnvironment = (typeof nodeEnvironments)[number];
 
-export const mailProviders = ['MAILPIT', 'GMAIL_SMTP'] as const;
+export const mailProviders = ['MAILPIT', 'GMAIL_SMTP', 'GMAIL_API'] as const;
+/** Providers that authenticate as a Gmail account and need its OAuth2 credentials. */
+export const gmailMailProviders = ['GMAIL_SMTP', 'GMAIL_API'] as const;
 
 export type MailProvider = (typeof mailProviders)[number];
 
@@ -346,10 +348,13 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .default('hotel:auth'),
   // Mailpit accepts and discards every message it is given. Selecting it in
   // production would swallow booking mail silently instead of failing, so the
-  // deployed environment can only select the real transport.
+  // deployed environment can only select a real transport. GMAIL_API exists for
+  // hosts that block outbound SMTP; it is the same account over HTTPS.
   MAIL_PROVIDER: Joi.alternatives().conditional('NODE_ENV', {
     is: 'production',
-    then: Joi.string().valid('GMAIL_SMTP').default('GMAIL_SMTP'),
+    then: Joi.string()
+      .valid(...gmailMailProviders)
+      .default('GMAIL_SMTP'),
     otherwise: Joi.string()
       .valid(...mailProviders)
       .default('MAILPIT'),
@@ -396,25 +401,32 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .email({ tlds: { allow: false } })
     .max(254)
     .when('MAIL_PROVIDER', {
-      is: 'GMAIL_SMTP',
+      is: Joi.valid(...gmailMailProviders),
       then: Joi.required(),
       otherwise: Joi.optional(),
     }),
-  MAIL_GMAIL_CLIENT_ID: Joi.string().trim().min(3).when('MAIL_PROVIDER', {
-    is: 'GMAIL_SMTP',
-    then: Joi.required(),
-    otherwise: Joi.optional(),
-  }),
-  MAIL_GMAIL_CLIENT_SECRET: Joi.string().min(8).when('MAIL_PROVIDER', {
-    is: 'GMAIL_SMTP',
-    then: Joi.required(),
-    otherwise: Joi.optional(),
-  }),
-  MAIL_GMAIL_REFRESH_TOKEN: Joi.string().min(8).when('MAIL_PROVIDER', {
-    is: 'GMAIL_SMTP',
-    then: Joi.required(),
-    otherwise: Joi.optional(),
-  }),
+  MAIL_GMAIL_CLIENT_ID: Joi.string()
+    .trim()
+    .min(3)
+    .when('MAIL_PROVIDER', {
+      is: Joi.valid(...gmailMailProviders),
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
+  MAIL_GMAIL_CLIENT_SECRET: Joi.string()
+    .min(8)
+    .when('MAIL_PROVIDER', {
+      is: Joi.valid(...gmailMailProviders),
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
+  MAIL_GMAIL_REFRESH_TOKEN: Joi.string()
+    .min(8)
+    .when('MAIL_PROVIDER', {
+      is: Joi.valid(...gmailMailProviders),
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
   // Required in production for the same reason as the limiter namespace: two
   // deployments sharing one Redis instance must not consume each other's jobs.
   NOTIFICATION_QUEUE_PREFIX: Joi.alternatives().conditional('NODE_ENV', {

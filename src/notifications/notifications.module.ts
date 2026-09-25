@@ -14,6 +14,7 @@ import { EmailTemplateService } from './email-template.service';
 import { DeliveryResultRepository } from './delivery-result.repository';
 import { DeliveryWorkerService } from './delivery-worker.service';
 import { EMAIL_SENDER } from './email-sender';
+import { createEmailSender } from './email-sender.factory';
 import {
   NOTIFICATION_QUEUE,
   NOTIFICATION_QUEUE_CLIENT,
@@ -22,7 +23,6 @@ import {
 import { NotificationBacklogRepository } from './notification-backlog.repository';
 import { NotificationBacklogService } from './notification-backlog.service';
 import { SendAttemptRepository } from './send-attempt.repository';
-import { SmtpEmailSender } from './smtp-email-sender';
 import { OutboxClaimRepository } from '../common/outbox/outbox-claim.repository';
 import { OutboxDispatcherService } from './outbox-dispatcher.service';
 
@@ -54,7 +54,11 @@ import { OutboxDispatcherService } from './outbox-dispatcher.service';
     NotificationBacklogRepository,
     NotificationBacklogService,
     SendAttemptRepository,
-    { provide: EMAIL_SENDER, useClass: SmtpEmailSender },
+    {
+      provide: EMAIL_SENDER,
+      inject: [notificationsConfig.KEY],
+      useFactory: createEmailSender,
+    },
     {
       provide: NOTIFICATION_QUEUE_CLIENT,
       inject: [notificationsConfig.KEY],

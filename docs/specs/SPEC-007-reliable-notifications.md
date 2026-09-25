@@ -2,7 +2,7 @@
 
 - Status: Accepted (Phase 5 delivered)
 - Owner: Project owner
-- Last updated: 2026-09-16
+- Last updated: 2026-09-25
 - Scope: Required
 - Related endpoints / ADRs: `EVT-01` through `EVT-04`, `SPEC-006`,
   `ADR-0002`; the Phase 5 delivery decision is recorded in `ADR-0006`
@@ -49,7 +49,7 @@ Out of scope:
   bounce/complaint webhooks, read tracking, or inbox-delivery guarantees.
 - User-selectable locale or notification preferences. The deployment selects one
   default locale until a profile-preference slice is accepted.
-- Gmail API delivery, service-account/domain-wide delegation, password/app-password
+- Service-account/domain-wide delegation, password/app-password
   SMTP authentication, or storing OAuth credentials in MySQL.
 - Notification administration HTTP endpoints or a browser-based dead-letter UI.
 - Phase 6 export jobs, Phase 7 scheduled cleanup/run ledgers, and Phase 8 deployment
@@ -220,6 +220,11 @@ Mail configuration is discriminated and fail-fast:
 - Deployed `GMAIL_SMTP`: fixed `smtp.gmail.com` endpoint with implicit TLS on port
   465, OAuth2 user/client ID/client secret/refresh token, and a sender address equal
   to the authenticated Gmail account or one of its authorized aliases.
+- Deployed `GMAIL_API` (added 2026-09-25, `ADR-0010`): the same account and OAuth2
+  credentials sent through the Gmail API `users.messages.send` over HTTPS on port 443,
+  for hosts that block outbound SMTP. Token and send URLs are code constants, the SMTP
+  host/port overrides are refused, and one `MAIL_SEND_TIMEOUT_MS` bound covers the
+  token refresh plus the send. Production accepts either Gmail mode.
 
 OAuth client secret and refresh token are environment secrets. They are never
 committed, stored in application tables, included in queue data, returned from an

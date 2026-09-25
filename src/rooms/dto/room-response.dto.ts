@@ -9,7 +9,7 @@ export class RoomTypeResponseDto {
   @ApiProperty({ example: 'Deluxe' })
   name!: string;
 
-  @ApiPropertyOptional({ nullable: true })
+  @ApiPropertyOptional({ type: String, nullable: true })
   description!: string | null;
 
   @ApiProperty({ format: 'date-time' })
@@ -49,7 +49,7 @@ export class AdminRoomResponseDto {
   @ApiProperty({ minimum: 1, maximum: 20 })
   bedCount!: number;
 
-  @ApiPropertyOptional({ nullable: true, example: 'CITY' })
+  @ApiPropertyOptional({ type: String, nullable: true, example: 'CITY' })
   viewCode!: string | null;
 
   @ApiProperty({ maximum: Number.MAX_SAFE_INTEGER, example: 1500000 })

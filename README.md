@@ -74,8 +74,8 @@ npm run start:worker
 
 `SIGTERM` drains it and logs whether the drain completed. The worker claims booking
 notification events from the outbox, relays them through BullMQ, and delivers each one
-through SMTP - Mailpit locally, Gmail when deployed. The API never does either: it only
-commits the intent.
+through SMTP - Mailpit locally, the Mailtrap sandbox for QA, Gmail when deployed. The
+API never does either: it only commits the intent.
 
 The same process also hosts scheduled retention, which deletes what earlier phases left
 behind - expired sessions and idempotency keys, storage cleanup tasks, processed

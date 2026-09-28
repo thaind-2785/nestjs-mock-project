@@ -8,8 +8,9 @@ import type { PreparedEmailMessage } from './email-template.types';
 /**
  * The SMTP adapter, and the only file that knows a mail provider exists.
  *
- * Both modes speak the same protocol, so the local path exercises the same adapter
- * the deployment uses rather than a stub that happens to agree with it. The envelope
+ * Mailpit, the Mailtrap sandbox, and Gmail SMTP speak the same protocol, so the local
+ * and QA paths exercise the same adapter the deployment can use rather than a stub
+ * that happens to agree with it. The envelope
  * is built only from the prepared message: the outbox payload cannot add a recipient,
  * override a header, or choose a sender.
  */
@@ -98,33 +99,52 @@ export class SmtpEmailSender implements EmailSender, OnApplicationShutdown {
       greetingTimeout: sendTimeoutMs,
       socketTimeout: sendTimeoutMs,
     };
-    if (transport.provider === 'GMAIL_API') {
-      throw new Error(
-        'SmtpEmailSender cannot send through MAIL_PROVIDER=GMAIL_API.',
-      );
+    // Exhaustive by type: a new provider must choose its options here, rather than
+    // fall through to Mailpit's plaintext, unauthenticated ones against a real host.
+    switch (transport.provider) {
+      case 'GMAIL_API':
+        throw new Error(
+          'SmtpEmailSender cannot send through MAIL_PROVIDER=GMAIL_API.',
+        );
+      case 'GMAIL_SMTP':
+        return {
+          ...bounds,
+          host: transport.host,
+          port: transport.port,
+          secure: transport.secure,
+          auth: {
+            type: 'OAuth2' as const,
+            user: transport.user,
+            clientId: transport.clientId,
+            clientSecret: transport.clientSecret,
+            refreshToken: transport.refreshToken,
+          },
+        };
+      case 'MAILTRAP_SANDBOX':
+        return {
+          ...bounds,
+          host: transport.host,
+          port: transport.port,
+          secure: transport.secure,
+          // Fail the attempt rather than send the inbox password before STARTTLS.
+          requireTLS: transport.requireTls,
+          auth: { user: transport.user, pass: transport.password },
+        };
+      case 'MAILPIT':
+        return {
+          ...bounds,
+          host: transport.host,
+          port: transport.port,
+          secure: transport.secure,
+          // Mailpit speaks plaintext SMTP and offers no credentials to present.
+          ignoreTLS: true,
+        };
+      default: {
+        const unsupported: never = transport;
+        throw new Error(
+          `SmtpEmailSender has no transport for ${String(unsupported)}.`,
+        );
+      }
     }
-    if (transport.provider === 'GMAIL_SMTP') {
-      return {
-        ...bounds,
-        host: transport.host,
-        port: transport.port,
-        secure: transport.secure,
-        auth: {
-          type: 'OAuth2' as const,
-          user: transport.user,
-          clientId: transport.clientId,
-          clientSecret: transport.clientSecret,
-          refreshToken: transport.refreshToken,
-        },
-      };
-    }
-    return {
-      ...bounds,
-      host: transport.host,
-      port: transport.port,
-      secure: transport.secure,
-      // Mailpit speaks plaintext SMTP and offers no credentials to present.
-      ignoreTLS: true,
-    };
   }
 }

@@ -78,6 +78,26 @@ describe('SmtpEmailSender', () => {
     });
   });
 
+  it('builds the Mailtrap sandbox transport with credentials and mandatory STARTTLS', async () => {
+    await senderFor({
+      MAIL_PROVIDER: 'MAILTRAP_SANDBOX',
+      MAIL_MAILTRAP_USER: 'sandbox-user',
+      MAIL_MAILTRAP_PASSWORD: 'sandbox-password',
+      MAIL_SEND_TIMEOUT_MS: '12000',
+    }).send(message);
+
+    expect(mockTransportOptions.at(-1)).toEqual({
+      host: 'sandbox.smtp.mailtrap.io',
+      port: 2525,
+      secure: false,
+      requireTLS: true,
+      auth: { user: 'sandbox-user', pass: 'sandbox-password' },
+      connectionTimeout: 12_000,
+      greetingTimeout: 12_000,
+      socketTimeout: 12_000,
+    });
+  });
+
   it('bounds one send even when every phase answers in time', async () => {
     jest.useFakeTimers();
     mockSendMail.mockImplementation(() => new Promise(() => undefined));

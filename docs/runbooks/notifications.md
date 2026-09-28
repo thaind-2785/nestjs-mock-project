@@ -25,16 +25,16 @@ All values are validated at worker startup by `validateEnvironment`; a worker wi
 invalid combination refuses to start rather than running degraded. Names and bounds
 live in [`.env.example`](../../.env.example). The ones an operator changes:
 
-| Variable                                    | Meaning                                                 |
-| ------------------------------------------- | ------------------------------------------------------- |
-| `MAIL_PROVIDER`                             | `MAILPIT` locally; `GMAIL_SMTP` or `GMAIL_API` deployed |
-| `MAIL_SEND_TIMEOUT_MS`                      | Bound on one provider call                              |
-| `NOTIFICATION_CLAIM_LEASE_MS`               | How long a claim survives a dead worker                 |
-| `NOTIFICATION_MAX_ATTEMPTS`                 | Delivery budget before an event becomes `FAILED`        |
-| `NOTIFICATION_BACKOFF_INITIAL_MS`/`_MAX_MS` | Retry spacing                                           |
-| `NOTIFICATION_WORKER_CONCURRENCY`           | Parallel sends per worker process                       |
-| `NOTIFICATION_SHUTDOWN_DRAIN_MS`            | Bound on a graceful drain                               |
-| `NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS`   | How often the backlog alerting line is emitted          |
+| Variable                                    | Meaning                                                                            |
+| ------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `MAIL_PROVIDER`                             | `MAILPIT` locally; `MAILTRAP_SANDBOX` for QA; `GMAIL_SMTP` or `GMAIL_API` deployed |
+| `MAIL_SEND_TIMEOUT_MS`                      | Bound on one provider call                                                         |
+| `NOTIFICATION_CLAIM_LEASE_MS`               | How long a claim survives a dead worker                                            |
+| `NOTIFICATION_MAX_ATTEMPTS`                 | Delivery budget before an event becomes `FAILED`                                   |
+| `NOTIFICATION_BACKOFF_INITIAL_MS`/`_MAX_MS` | Retry spacing                                                                      |
+| `NOTIFICATION_WORKER_CONCURRENCY`           | Parallel sends per worker process                                                  |
+| `NOTIFICATION_SHUTDOWN_DRAIN_MS`            | Bound on a graceful drain                                                          |
+| `NOTIFICATION_BACKLOG_SAMPLE_INTERVAL_MS`   | How often the backlog alerting line is emitted                                     |
 
 Three bounds are enforced across variables and will fail startup by name:
 
@@ -73,6 +73,41 @@ Mailpit at <http://localhost:8025> to read the message.
 To prove durability rather than just delivery: stop Redis, approve another booking,
 and confirm the API still succeeds and the row stays `PENDING` in `outbox_events`.
 Start Redis again and the worker drains it.
+
+## QA mail in the Mailtrap sandbox
+
+`MAILTRAP_SANDBOX` sends real booking mail to a shared, hosted Mailtrap inbox and
+delivers nothing to the guest (`ADR-0011`). QA can therefore test with any account and
+read every message the system sent: HTML and text parts, headers, and Mailtrap's spam
+and HTML-compatibility reports. It is refused under `NODE_ENV=production`.
+
+1. In Mailtrap, open **Email Testing -> Inboxes**, choose or create the team's QA inbox,
+   and copy the SMTP **Username** and **Password** from its **Integration** tab.
+2. In `.env` (never committed), comment out `MAIL_SMTP_HOST` and `MAIL_SMTP_PORT`,
+   because this mode refuses them, and set:
+
+   ```bash
+   MAIL_PROVIDER=MAILTRAP_SANDBOX
+   MAIL_MAILTRAP_USER=<inbox username>
+   MAIL_MAILTRAP_PASSWORD=<inbox password>
+   NOTIFICATION_WORKER_CONCURRENCY=1   # fewer bursts against the plan's per-second limit
+   ```
+
+3. Start the dependencies, the API and the worker from the terminal as in the section
+   above. Compose's `app` profile cannot run this mode: it injects `MAIL_SMTP_HOST` and
+   `MAIL_SMTP_PORT`, so both containers refuse to start naming them. The worker's
+   startup summary shows `provider: "MAILTRAP_SANDBOX"`,
+   `host: "sandbox.smtp.mailtrap.io"` and `authenticated: true`.
+4. Approve, reject, or cancel a booking, and open the inbox in Mailtrap. The
+   `X-Notification-Id` header matches `outbox_events.id`.
+
+| Symptom                                                                             | Cause and action                                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker refuses to start naming `MAIL_SMTP_HOST`/`PORT`                              | They are still set in `.env`. Comment them out                                                                                                                                                                                                                                  |
+| Worker refuses to start naming `MAIL_MAILTRAP_*`                                    | A credential is missing or too short. The log names the variable, never its value                                                                                                                                                                                               |
+| Deliveries fail permanently with an auth classification                             | Wrong inbox credentials, or the inbox was deleted. Copy them again, restart the worker, then redrive                                                                                                                                                                            |
+| Deliveries fail permanently as `MAIL_RECIPIENT_INVALID` or `MAIL_PROVIDER_REJECTED` | Mailtrap's plan limit (per second or per month). It answers the throttle with a `5xx`, often at `MAIL FROM`, which the classifier reads as a recipient failure; in a capture-only inbox no recipient is really invalid. Redrive after a pause, or once the monthly quota resets |
+| Every send times out                                                                | The network blocks port 2525 outbound. Try another network; Mailtrap's HTTPS API is the recorded follow-up in `ADR-0011`                                                                                                                                                        |
 
 ## Structured events
 

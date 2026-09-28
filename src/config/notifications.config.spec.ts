@@ -5,6 +5,8 @@ import {
   gmailApiPort,
   gmailSmtpHost,
   gmailSmtpPort,
+  mailtrapSandboxSmtpHost,
+  mailtrapSandboxSmtpPort,
   notificationQueueName,
 } from './notifications.config';
 import { validateEnvironment } from './environment.validation';
@@ -16,6 +18,12 @@ const gmailEnvironment = {
   MAIL_GMAIL_CLIENT_ID: 'client-id-value',
   MAIL_GMAIL_CLIENT_SECRET: 'client-secret-value',
   MAIL_GMAIL_REFRESH_TOKEN: 'refresh-token-value',
+};
+
+const mailtrapEnvironment = {
+  MAIL_PROVIDER: 'MAILTRAP_SANDBOX',
+  MAIL_MAILTRAP_USER: 'sandbox-user-value',
+  MAIL_MAILTRAP_PASSWORD: 'sandbox-password-value',
 };
 
 describe('createNotificationsConfiguration', () => {
@@ -135,6 +143,52 @@ describe('createNotificationsConfiguration', () => {
     ).toThrow(/MAIL_PROVIDER/);
   });
 
+  it('fixes the Mailtrap sandbox endpoint and requires STARTTLS', () => {
+    const configuration = createNotificationsConfiguration(
+      validateEnvironment(mailtrapEnvironment),
+    );
+
+    expect(configuration.transport).toEqual({
+      provider: 'MAILTRAP_SANDBOX',
+      host: mailtrapSandboxSmtpHost,
+      port: mailtrapSandboxSmtpPort,
+      secure: false,
+      requireTls: true,
+      user: 'sandbox-user-value',
+      password: 'sandbox-password-value',
+    });
+  });
+
+  it('refuses an endpoint override in Mailtrap sandbox mode', () => {
+    expect(() =>
+      validateEnvironment({
+        ...mailtrapEnvironment,
+        MAIL_SMTP_HOST: 'attacker.test',
+      }),
+    ).toThrow(/MAIL_SMTP_HOST/);
+    expect(() =>
+      validateEnvironment({ ...mailtrapEnvironment, MAIL_SMTP_PORT: '1025' }),
+    ).toThrow(/MAIL_SMTP_PORT/);
+  });
+
+  it('names every missing Mailtrap credential without echoing a value', () => {
+    const attempt = () =>
+      validateEnvironment({
+        MAIL_PROVIDER: 'MAILTRAP_SANDBOX',
+        MAIL_MAILTRAP_PASSWORD: 'short',
+      });
+
+    expect(attempt).toThrow(/MAIL_MAILTRAP_USER/);
+    expect(attempt).toThrow(/MAIL_MAILTRAP_PASSWORD/);
+    expect(attempt).not.toThrow(/short/);
+  });
+
+  it('refuses the capturing QA sandbox in production', () => {
+    expect(() =>
+      validateEnvironment({ NODE_ENV: 'production', ...mailtrapEnvironment }),
+    ).toThrow(/MAIL_PROVIDER/);
+  });
+
   it('refuses a sender name that could inject a second header', () => {
     expect(() =>
       validateEnvironment({
@@ -234,5 +288,24 @@ describe('describeNotificationsConfiguration', () => {
     ]) {
       expect(serialized).not.toContain(secret);
     }
+  });
+
+  it('summarizes the Mailtrap sandbox without exposing its credentials', () => {
+    const summary = describeNotificationsConfiguration(
+      createNotificationsConfiguration(
+        validateEnvironment(mailtrapEnvironment),
+      ),
+    );
+
+    expect(summary).toMatchObject({
+      provider: 'MAILTRAP_SANDBOX',
+      host: mailtrapSandboxSmtpHost,
+      port: mailtrapSandboxSmtpPort,
+      secure: false,
+      authenticated: true,
+    });
+    const serialized = JSON.stringify(summary);
+    expect(serialized).not.toContain('sandbox-user-value');
+    expect(serialized).not.toContain('sandbox-password-value');
   });
 });

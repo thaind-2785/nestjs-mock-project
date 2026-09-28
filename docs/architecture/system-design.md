@@ -5,7 +5,7 @@
 - NestJS modular monolith, REST under `/api/v1`, OpenAPI/Swagger.
 - MySQL + TypeORM migrations; Redis for BullMQ and short-lived data.
 - S3-compatible object storage (MinIO locally, cloud bucket in deployed environments).
-- Gmail-backed mail adapter in deployment and Mailpit locally.
+- Gmail-backed mail adapter in deployment, Mailpit locally, and the Mailtrap sandbox for QA.
 - One API process and one worker process from the same image. The queue worker handles
   email and export orchestration; a Node Worker Thread performs only CPU-heavy XLSX
   generation. Network/database work remains in the queue process.

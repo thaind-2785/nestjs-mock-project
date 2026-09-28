@@ -5,7 +5,12 @@ export const nodeEnvironments = ['development', 'test', 'production'] as const;
 
 export type NodeEnvironment = (typeof nodeEnvironments)[number];
 
-export const mailProviders = ['MAILPIT', 'GMAIL_SMTP', 'GMAIL_API'] as const;
+export const mailProviders = [
+  'MAILPIT',
+  'MAILTRAP_SANDBOX',
+  'GMAIL_SMTP',
+  'GMAIL_API',
+] as const;
 /** Providers that authenticate as a Gmail account and need its OAuth2 credentials. */
 export const gmailMailProviders = ['GMAIL_SMTP', 'GMAIL_API'] as const;
 
@@ -101,6 +106,8 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   MAIL_GMAIL_CLIENT_ID?: string;
   MAIL_GMAIL_CLIENT_SECRET?: string;
   MAIL_GMAIL_REFRESH_TOKEN?: string;
+  MAIL_MAILTRAP_USER?: string;
+  MAIL_MAILTRAP_PASSWORD?: string;
   NOTIFICATION_QUEUE_PREFIX: string;
   NOTIFICATION_CLAIM_BATCH_SIZE: number;
   NOTIFICATION_POLL_INTERVAL_MS: number;
@@ -346,10 +353,10 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
   AUTH_REDIS_KEY_PREFIX: Joi.string()
     .pattern(/^[A-Za-z0-9:_-]{1,64}$/)
     .default('hotel:auth'),
-  // Mailpit accepts and discards every message it is given. Selecting it in
-  // production would swallow booking mail silently instead of failing, so the
-  // deployed environment can only select a real transport. GMAIL_API exists for
-  // hosts that block outbound SMTP; it is the same account over HTTPS.
+  // Mailpit and the Mailtrap sandbox both capture every message instead of delivering
+  // it. Selecting either in production would swallow booking mail silently instead of
+  // failing, so the deployed environment can only select a real transport. GMAIL_API
+  // exists for hosts that block outbound SMTP; it is the same account over HTTPS.
   MAIL_PROVIDER: Joi.alternatives().conditional('NODE_ENV', {
     is: 'production',
     then: Joi.string()
@@ -384,9 +391,9 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(1_000)
     .max(60_000)
     .default(15_000),
-  // Gmail host, port, and TLS are implementation constants. Accepting an override
-  // here would let ordinary environment drift point the worker at any SMTP server
-  // while it still believes it holds authorized Gmail credentials.
+  // Gmail and Mailtrap host, port, and TLS are implementation constants. Accepting an
+  // override here would let ordinary environment drift point the worker at any SMTP
+  // server while it still believes it holds authorized provider credentials.
   MAIL_SMTP_HOST: Joi.alternatives().conditional('MAIL_PROVIDER', {
     is: 'MAILPIT',
     then: Joi.string().hostname().default('127.0.0.1'),
@@ -427,6 +434,21 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
       then: Joi.required(),
       otherwise: Joi.optional(),
     }),
+  // One sandbox inbox's SMTP credentials, shown under the inbox's Integration tab.
+  MAIL_MAILTRAP_USER: Joi.string()
+    .trim()
+    .min(1)
+    .max(254)
+    .when('MAIL_PROVIDER', {
+      is: 'MAILTRAP_SANDBOX',
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
+  MAIL_MAILTRAP_PASSWORD: Joi.string().min(8).when('MAIL_PROVIDER', {
+    is: 'MAILTRAP_SANDBOX',
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
   // Required in production for the same reason as the limiter namespace: two
   // deployments sharing one Redis instance must not consume each other's jobs.
   NOTIFICATION_QUEUE_PREFIX: Joi.alternatives().conditional('NODE_ENV', {

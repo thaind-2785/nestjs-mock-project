@@ -65,8 +65,10 @@
 
 ## Residual risk and follow-up
 
-- CI never talks to Mailtrap. The transport options are asserted in unit tests, and the
-  first QA send is the end-to-end check.
+- CI never talks to Mailtrap. The transport options are asserted in unit tests. The
+  end-to-end check was done by hand on 2026-09-28: a local API and worker with
+  `MAIL_PROVIDER=MAILTRAP_SANDBOX` delivered a booking notification that appeared in the
+  Mailtrap sandbox inbox.
 - A Mailtrap throttle fails a delivery permanently rather than retrying it, because the
   classifier does not read provider text. Accepted for QA: redrive recovers it.
 - A hosted QA environment would need Mailtrap's HTTPS API on hosts that drop SMTP; it

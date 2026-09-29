@@ -2,7 +2,7 @@
 
 - Status: Accepted (Phase 5 delivered)
 - Owner: Project owner
-- Last updated: 2026-09-25
+- Last updated: 2026-09-28
 - Scope: Required
 - Related endpoints / ADRs: `EVT-01` through `EVT-04`, `SPEC-006`,
   `ADR-0002`; the Phase 5 delivery decision is recorded in `ADR-0006`
@@ -225,10 +225,16 @@ Mail configuration is discriminated and fail-fast:
   for hosts that block outbound SMTP. Token and send URLs are code constants, the SMTP
   host/port overrides are refused, and one `MAIL_SEND_TIMEOUT_MS` bound covers the
   token refresh plus the send. Production accepts either Gmail mode.
+- QA `MAILTRAP_SANDBOX` (added 2026-09-28, `ADR-0011`): Mailtrap's Email Sandbox, a
+  hosted inbox that captures every message. Fixed `sandbox.smtp.mailtrap.io:2525`
+  endpoint with mandatory STARTTLS, and one inbox's SMTP username/password
+  (`MAIL_MAILTRAP_USER`, `MAIL_MAILTRAP_PASSWORD`); the SMTP host/port overrides are
+  refused. Production refuses it, as it refuses Mailpit.
 
 OAuth client secret and refresh token are environment secrets. They are never
 committed, stored in application tables, included in queue data, returned from an
-endpoint, or logged. CI uses Mailpit and never contacts Gmail.
+endpoint, or logged. The Mailtrap inbox password is handled the same way. CI uses
+Mailpit and never contacts Gmail or Mailtrap.
 
 The API stays available when Gmail or the worker is down because the booking
 transaction already committed its outbox intent. Redis/worker/provider outages grow
@@ -242,9 +248,9 @@ state. Invalid startup configuration fails the worker before it consumes any eve
   and HTML; templates never evaluate code or accept raw HTML fragments.
 - The SMTP envelope uses only the validated recipient snapshot and configured sender;
   outbox data cannot add CC/BCC, override headers, or select an arbitrary sender.
-- Gmail host/port/TLS are implementation constants in Gmail mode, preventing payload
-  or ordinary environment drift from turning the worker into a generic network
-  client. Mailpit overrides are permitted only outside production.
+- Gmail and Mailtrap host/port/TLS are implementation constants in those modes,
+  preventing payload or ordinary environment drift from turning the worker into a
+  generic network client. Mailpit overrides are permitted only outside production.
 - Queue payloads and structured logs contain opaque IDs and stable codes only. They
   omit recipient email, subjects, reasons, bodies, OAuth values, and raw SMTP errors.
 - Provider calls have timeouts and bounded concurrency. Retry/backoff prevents a

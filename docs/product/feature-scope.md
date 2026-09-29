@@ -55,4 +55,5 @@
   refunds, check-in/check-out operations, housekeeping, and multi-currency conversion.
 - The payment provider, cloud vendor, and production deploy target. Their adapters
   must remain replaceable. `SPEC-007` selects the mail transport: Gmail SMTP with
-  OAuth2 when deployed and Mailpit locally, behind one replaceable sender port.
+  OAuth2 when deployed, Mailpit locally, and the Mailtrap sandbox for QA, behind one
+  replaceable sender port.

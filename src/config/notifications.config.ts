@@ -28,6 +28,16 @@ export const gmailApiPort = 443;
 export const gmailApiSendUrl = `https://${gmailApiHost}/gmail/v1/users/me/messages/send`;
 export const googleOAuthTokenUrl = 'https://oauth2.googleapis.com/token';
 
+/**
+ * Mailtrap's Email Sandbox: a hosted inbox that captures every message instead of
+ * delivering it, so QA can read real booking mail without a guest ever receiving one.
+ * Fixed for the same reason as Gmail's endpoint. Port 2525 is the one Mailtrap keeps
+ * open where 25/587 are commonly filtered; it upgrades with STARTTLS, which the adapter
+ * requires, so the inbox credentials never cross the network in plaintext.
+ */
+export const mailtrapSandboxSmtpHost = 'sandbox.smtp.mailtrap.io';
+export const mailtrapSandboxSmtpPort = 2525;
+
 /** One queue per delivery channel; the configured prefix namespaces the deployment. */
 export const notificationQueueName = 'email-delivery';
 
@@ -36,6 +46,16 @@ export interface MailpitTransportConfiguration {
   host: string;
   port: number;
   secure: false;
+}
+
+export interface MailtrapSandboxTransportConfiguration {
+  provider: 'MAILTRAP_SANDBOX';
+  host: typeof mailtrapSandboxSmtpHost;
+  port: typeof mailtrapSandboxSmtpPort;
+  secure: false;
+  requireTls: true;
+  user: string;
+  password: string;
 }
 
 export interface GmailCredentials {
@@ -61,6 +81,7 @@ export interface GmailApiTransportConfiguration extends GmailCredentials {
 
 export type MailTransportConfiguration =
   | MailpitTransportConfiguration
+  | MailtrapSandboxTransportConfiguration
   | GmailTransportConfiguration
   | GmailApiTransportConfiguration;
 
@@ -142,7 +163,8 @@ export function createNotificationsConfiguration(
 /**
  * Startup and operations need to see which transport a worker actually resolved.
  * The summary therefore carries provider, endpoint, and bounds, and never the OAuth
- * values, the sender mailbox, or anything that identifies a recipient.
+ * values, the sandbox credentials, the sender mailbox, or anything that identifies a
+ * recipient.
  */
 export interface NotificationsConfigurationSummary {
   provider: MailProvider;
@@ -196,30 +218,55 @@ export function describeNotificationsConfiguration(
 function createMailTransportConfiguration(
   environment: EnvironmentVariables,
 ): MailTransportConfiguration {
-  if (environment.MAIL_PROVIDER === 'GMAIL_SMTP') {
-    return {
-      provider: 'GMAIL_SMTP',
-      host: gmailSmtpHost,
-      port: gmailSmtpPort,
-      secure: true,
-      ...gmailCredentials(environment),
-    };
+  // Exhaustive by type, so a new provider cannot fall through to Mailpit's endpoint.
+  const provider = environment.MAIL_PROVIDER;
+  switch (provider) {
+    case 'GMAIL_SMTP':
+      return {
+        provider,
+        host: gmailSmtpHost,
+        port: gmailSmtpPort,
+        secure: true,
+        ...gmailCredentials(environment),
+      };
+    case 'GMAIL_API':
+      return {
+        provider,
+        host: gmailApiHost,
+        port: gmailApiPort,
+        secure: true,
+        ...gmailCredentials(environment),
+      };
+    case 'MAILTRAP_SANDBOX':
+      return {
+        provider,
+        host: mailtrapSandboxSmtpHost,
+        port: mailtrapSandboxSmtpPort,
+        secure: false,
+        requireTls: true,
+        user: requireConfigured(
+          environment.MAIL_MAILTRAP_USER,
+          'MAIL_MAILTRAP_USER',
+        ),
+        password: requireConfigured(
+          environment.MAIL_MAILTRAP_PASSWORD,
+          'MAIL_MAILTRAP_PASSWORD',
+        ),
+      };
+    case 'MAILPIT':
+      return {
+        provider,
+        host: requireConfigured(environment.MAIL_SMTP_HOST, 'MAIL_SMTP_HOST'),
+        port: requireConfigured(environment.MAIL_SMTP_PORT, 'MAIL_SMTP_PORT'),
+        secure: false,
+      };
+    default: {
+      const unsupported: never = provider;
+      throw new Error(
+        `Environment validation failed for: MAIL_PROVIDER ${String(unsupported)}`,
+      );
+    }
   }
-  if (environment.MAIL_PROVIDER === 'GMAIL_API') {
-    return {
-      provider: 'GMAIL_API',
-      host: gmailApiHost,
-      port: gmailApiPort,
-      secure: true,
-      ...gmailCredentials(environment),
-    };
-  }
-  return {
-    provider: 'MAILPIT',
-    host: requireConfigured(environment.MAIL_SMTP_HOST, 'MAIL_SMTP_HOST'),
-    port: requireConfigured(environment.MAIL_SMTP_PORT, 'MAIL_SMTP_PORT'),
-    secure: false,
-  };
 }
 
 function gmailCredentials(environment: EnvironmentVariables): GmailCredentials {

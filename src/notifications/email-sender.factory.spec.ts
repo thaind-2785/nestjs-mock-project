@@ -12,6 +12,11 @@ const gmailCredentials = {
   MAIL_GMAIL_REFRESH_TOKEN: 'refresh-token-value',
 };
 
+const mailtrapCredentials = {
+  MAIL_MAILTRAP_USER: 'sandbox-user',
+  MAIL_MAILTRAP_PASSWORD: 'sandbox-password',
+};
+
 function senderFor(environment: Record<string, string>) {
   return createEmailSender(
     createNotificationsConfiguration(validateEnvironment(environment)),
@@ -25,9 +30,16 @@ describe('createEmailSender', () => {
     ).toBeInstanceOf(GmailApiEmailSender);
   });
 
-  it.each(['MAILPIT', 'GMAIL_SMTP'])('keeps %s on SMTP', (provider) => {
-    expect(
-      senderFor({ ...gmailCredentials, MAIL_PROVIDER: provider }),
-    ).toBeInstanceOf(SmtpEmailSender);
-  });
+  it.each(['MAILPIT', 'MAILTRAP_SANDBOX', 'GMAIL_SMTP'])(
+    'keeps %s on SMTP',
+    (provider) => {
+      expect(
+        senderFor({
+          ...gmailCredentials,
+          ...mailtrapCredentials,
+          MAIL_PROVIDER: provider,
+        }),
+      ).toBeInstanceOf(SmtpEmailSender);
+    },
+  );
 });

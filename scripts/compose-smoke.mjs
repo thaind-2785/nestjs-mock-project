@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { composeArguments, resolveComposeCli } from './compose-cli.mjs';
 import { createPersistenceProbe } from './compose-smoke-policy.mjs';
 
-const services = ['mysql', 'redis', 'minio', 'mailpit'];
+const services = ['mysql', 'redis', 'minio', 'mailpit', 'kafka'];
 
 function runCommand(executable, args, { capture = false, failureHint } = {}) {
   const result = spawnSync(executable, args, {

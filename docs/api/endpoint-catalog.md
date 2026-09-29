@@ -103,13 +103,14 @@ date values.
 | EVT-03  | `booking.changed` from `ADMIN-BOOK-05`          | Email owner before/after details; deduplicate by outbox event                                                               | Required           | Mail + domain event            |
 | EVT-04  | `booking.cancelled_by_admin` from ADMIN-BOOK-06 | Email owner the cancellation reason                                                                                         | Required support   | Mail + domain event            |
 | JOB-01  | `room-export.requested` BullMQ job              | Query snapshot, run XLSX generation in Worker Thread, upload output                                                         | Selected           | Worker Thread + cloud file     |
+| EVT-05  | `booking-lifecycle.recorded` outbox event       | Relay publishes to Kafka `hotel.booking-lifecycle.v1`, keyed by booking; consumers build read models (SPEC-012)             | Optional, selected | Kafka + outbox                 |
 | CRON-01 | Daily at configured hotel timezone              | Purge expired sessions/exports and reconcile orphan attachments in bounded batches                                          | Required technique | Cron + distributed lock        |
 | CRON-02 | Last calendar day, configured local time        | Generate prior/current agreed period revenue and email admins once                                                          | Optional           | Cron + mail + run ledger       |
 | CRON-03 | Daily after hotel checkout time                 | Transition eligible `CONFIRMED` stays to `COMPLETED` in bounded batches                                                     | Optional support   | Cron + state machine           |
 | CI-01   | Pull request open/update                        | Install locked deps, lint/check format, unit + integration tests, build                                                     | Required technique | CI — **Delivered**             |
 | CI-02   | Push/merge to `main`                            | Full tests, build/tag/scan container, publish immutable image                                                               | Required technique | CI — **Delivered**             |
 | CD-01   | Published image for `main`                      | Migration as the platform pre-deploy step, deploy API + worker on one digest, readiness/revision check, rollback on failure | Required technique | CD — **Delivered**             |
-| OPS-01  | Docker Compose up                               | Start API, worker, MySQL, Redis, MinIO, Mailpit with healthchecks                                                           | Required technique | Docker Compose — **Delivered** |
+| OPS-01  | Docker Compose up                               | Start API, worker, MySQL, Redis, MinIO, Mailpit, Kafka with healthchecks                                                    | Required technique | Docker Compose — **Delivered** |
 
 ## Response and authorization notes
 

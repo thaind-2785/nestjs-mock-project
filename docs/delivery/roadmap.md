@@ -15,7 +15,7 @@ one platform capability at a time.
 | 6     | Worker Thread export    | **Delivered.** Async room export, outbox-driven queue, XLSX Worker Thread, private result with expiry, crash/concurrency tests                                                                                                                |
 | 7     | Cron and operations     | **Delivered.** Interval-driven daily cleanup, ledger-as-election run record, operator CLI and backlog readings; no month-end email                                                                                                            |
 | 8     | CI/CD                   | **Delivered and deployed.** Required PR gate, multi-architecture image scanned before publish, deploy on merge that waits for the platform, the revision and readiness before moving the worker. Live at `api-production-3c0a.up.railway.app` |
-| 9     | Optional product slices | **Not taken.** The owner closed the project at Phase 8 on 2026-09-23; room export was the one selected optional and shipped in Phase 6                                                                                                        |
+| 9     | Optional product slices | **Reopened 2026-09-29** for booking statistics fed by a Kafka lifecycle stream (`SPEC-012`, `ADR-0012`): `P9-T01` stream and relay, `P9-T02` read model and admin endpoint                                                                    |
 
 ## First implementation plan
 
@@ -41,4 +41,6 @@ one platform capability at a time.
   25 MiB output, 24-hour results. The character cap was added on measured evidence
   during the phase; see `ADR-0007`.
 - Deployment target, migration runner, secret store, and rollback method before Phase 8.
-- Revenue definition and payment provider before optional reporting/payment.
+- Revenue definition and payment provider before optional reporting/payment. **Settled
+  for statistics** on 2026-09-29: projected revenue from the price snapshot of confirmed
+  bookings, because no payment module exists (`SPEC-012`).

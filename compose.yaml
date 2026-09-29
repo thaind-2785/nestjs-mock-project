@@ -85,6 +85,51 @@ services:
       retries: 20
       start_period: 5s
 
+  kafka:
+    # Apache's own image, one node acting as both broker and KRaft controller - no
+    # ZooKeeper. Pinned to 3.9 rather than 4.x: Kafka 4.0 removed protocol versions
+    # (KIP-896) that `kafkajs` still negotiates, and ADR-0012 records the pairing.
+    image: apache/kafka:3.9.1@sha256:4ceccc577f03f51f6af8dbfda55194d0d892f4fa7913ffbded567ce3895622ed
+    restart: unless-stopped
+    environment:
+      # A fixed cluster ID, so the formatted log directory in the volume is accepted on
+      # every restart instead of being refused as belonging to another cluster.
+      CLUSTER_ID: hotel-local-kraft-cluster1
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Two client listeners, because a client is told to reconnect to the address the
+      # broker advertises: `kafka:9092` answers containers on the Compose network, and
+      # `127.0.0.1:9094` answers the host, where tests and `npm run start:worker` run.
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,HOST://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,HOST://127.0.0.1:${KAFKA_PORT:-9094}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # One node, so every internal topic has one replica.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Topics exist because the relay created them with a reviewed partition count and
+      # retention, never because a client misspelled a name.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    ports:
+      - 127.0.0.1:${KAFKA_PORT:-9094}:9094
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server
+          localhost:9092 >/dev/null 2>&1
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
   # --- the application itself -------------------------------------------------
   #
   # Behind a profile, so `docker compose up` keeps meaning what it has meant for seven
@@ -107,7 +152,7 @@ services:
     image: hotel-management:local
     restart: unless-stopped
     env_file:
-      # `.env.example` first, as the floor: it carries all 72 names with values that work
+      # `.env.example` first, as the floor: it carries all 77 names with values that work
       # against these very containers, so a fresh clone brings the stack up without anyone
       # writing a file. `.env` then overrides whatever a developer actually set - it is
       # usually short, because most variables have development defaults, and the image
@@ -128,6 +173,9 @@ services:
       OBJECT_STORAGE_ENDPOINT: http://minio:9000
       MAIL_SMTP_HOST: mailpit
       MAIL_SMTP_PORT: 1025
+      # Set although the API never connects: the value is validated in every process,
+      # and one broker address per network keeps the two containers' summaries equal.
+      KAFKA_BROKERS: kafka:9092
     ports:
       - 127.0.0.1:${API_PORT:-3000}:3000
     depends_on:
@@ -146,7 +194,7 @@ services:
     # two processes" true rather than merely intended.
     command: [node, dist/worker]
     env_file:
-      # `.env.example` first, as the floor: it carries all 72 names with values that work
+      # `.env.example` first, as the floor: it carries all 77 names with values that work
       # against these very containers, so a fresh clone brings the stack up without anyone
       # writing a file. `.env` then overrides whatever a developer actually set - it is
       # usually short, because most variables have development defaults, and the image
@@ -165,6 +213,7 @@ services:
       OBJECT_STORAGE_ENDPOINT: http://minio:9000
       MAIL_SMTP_HOST: mailpit
       MAIL_SMTP_PORT: 1025
+      KAFKA_BROKERS: kafka:9092
     # No healthcheck, and the absence is deliberate rather than overlooked. The worker
     # has no HTTP surface; the only honest check would be "the process is alive", which
     # is what Docker already reports, and inventing a port to probe would be a check that
@@ -175,9 +224,13 @@ services:
       redis: { condition: service_healthy }
       minio: { condition: service_healthy }
       mailpit: { condition: service_healthy }
+      # The worker only: it hosts the relay. The API never talks to the broker, so a
+      # broker that is down must not stop it from starting (ADR-0012).
+      kafka: { condition: service_healthy }
 
 volumes:
   mysql_data:
   redis_data:
   minio_data:
   mailpit_data:
+  kafka_data:

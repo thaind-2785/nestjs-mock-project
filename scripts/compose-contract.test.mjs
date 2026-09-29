@@ -14,6 +14,8 @@ const expectedImages = {
     'ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9',
   mailpit:
     'axllent/mailpit:v1.31.0@sha256:c96991d9bef73594c246d89ca81411d4e916f03e76a7d2d72fa2ab5dd3c9ce24',
+  kafka:
+    'apache/kafka:3.9.1@sha256:4ceccc577f03f51f6af8dbfda55194d0d892f4fa7913ffbded567ce3895622ed',
 };
 
 test('pins every third-party Compose image to a reviewed digest', () => {
@@ -79,6 +81,7 @@ test('keeps the application behind a profile, on one image, waiting for its depe
 
 test('declares persistent volumes and disables external update checks', () => {
   assert.deepEqual(Object.keys(compose.volumes).sort(), [
+    'kafka_data',
     'mailpit_data',
     'minio_data',
     'mysql_data',
@@ -102,8 +105,46 @@ test('declares persistent volumes and disables external update checks', () => {
   );
 });
 
+test('runs Kafka as one KRaft node that refuses implicit topics', () => {
+  const { environment } = compose.services.kafka;
+
+  // No ZooKeeper: one node is both broker and controller.
+  assert.equal(environment.KAFKA_PROCESS_ROLES, 'broker,controller');
+  // The relay creates the topic with a reviewed partition count and retention; a
+  // misspelled topic must fail rather than appear.
+  assert.equal(environment.KAFKA_AUTO_CREATE_TOPICS_ENABLE, 'false');
+  // Containers reach the broker by service name, the host through its loopback port.
+  assert.match(
+    environment.KAFKA_ADVERTISED_LISTENERS,
+    /INTERNAL:\/\/kafka:9092/,
+  );
+  assert.match(
+    environment.KAFKA_ADVERTISED_LISTENERS,
+    /HOST:\/\/127\.0\.0\.1:/,
+  );
+  for (const serviceName of ['api', 'worker']) {
+    assert.equal(
+      compose.services[serviceName].environment.KAFKA_BROKERS,
+      'kafka:9092',
+    );
+  }
+  // Only the worker hosts the relay. The API never talks to the broker, so a broker
+  // that is down must not keep the API from starting.
+  assert.equal(
+    compose.services.worker.depends_on.kafka.condition,
+    'service_healthy',
+  );
+  assert.equal(compose.services.api.depends_on.kafka, undefined);
+});
+
 test('starts every readiness dependency before the CI verification gate', () => {
-  assert.deepEqual(ciReadinessServices, ['mysql', 'redis', 'minio', 'mailpit']);
+  assert.deepEqual(ciReadinessServices, [
+    'mysql',
+    'redis',
+    'minio',
+    'mailpit',
+    'kafka',
+  ]);
   for (const service of ciReadinessServices) {
     assert.ok(compose.services[service].healthcheck?.test);
   }

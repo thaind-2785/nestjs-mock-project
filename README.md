@@ -6,8 +6,9 @@ and CI/CD. All eight phases are delivered: Google JIT identity with rotating ses
 room catalog with typed attachments, booking lifecycle with price snapshots and concurrent
 approval, a transactional outbox relaying mail through BullMQ, asynchronous XLSX export in
 a Worker Thread, daily retention under a ledger that elects one runner, and a pipeline that
-publishes one scanned image and deploys it. Local MySQL, Redis, MinIO and Mailpit are
-managed through Compose; the deployed environment uses managed equivalents.
+publishes one scanned image and deploys it. Phase 9 adds an optional booking lifecycle
+stream on Kafka. Local MySQL, Redis, MinIO, Mailpit and Kafka are managed through
+Compose; the deployed environment uses managed equivalents and keeps the stream off.
 
 ## The deployed environment
 
@@ -181,7 +182,7 @@ standalone `docker-compose` binary. Manual examples below use plugin syntax; rep
 # Validate resolved Compose syntax without printing environment values
 npm run compose:config
 
-# Start all four services, wait for health, and prove Redis persistence across restart
+# Start all five services, wait for health, and prove Redis persistence across restart
 npm run compose:smoke
 
 # Inspect service health
@@ -201,7 +202,8 @@ slices.
 
 Local endpoints are MySQL `127.0.0.1:3306`, Redis `127.0.0.1:6379`, MinIO S3
 `http://127.0.0.1:9000`, MinIO Console `http://127.0.0.1:9001`, Mailpit SMTP
-`127.0.0.1:1025`, and Mailpit UI `http://127.0.0.1:8025`; override their host ports
+`127.0.0.1:1025`, Mailpit UI `http://127.0.0.1:8025`, and Kafka `127.0.0.1:9094`
+(`kafka:9092` from other containers); override their host ports
 through `.env` when necessary. MinIO and Mailpit update checks are disabled, so
 starting the stack does not call real storage or mail providers.
 
@@ -221,7 +223,7 @@ docker compose down
 ```
 
 Never add `--volumes` or run `docker volume rm` as part of normal verification.
-Deleting volumes permanently removes local MySQL, Redis, MinIO, and Mailpit data and
+Deleting volumes permanently removes local MySQL, Redis, MinIO, Mailpit, and Kafka data and
 requires an explicit developer decision. The pinned MinIO Community image is a
 local-only S3 emulator; it is archived and must not be promoted as the production
 object-storage choice.
@@ -426,6 +428,14 @@ The worker logs `room_export_batch_dispatched`, `room_export_generated`, and
 `download.url` it gives you; the same URL without its signature is refused, because the
 bucket is private. [`docs/runbooks/room-export.md`](docs/runbooks/room-export.md) covers
 enabling, draining, reading the backlog sample, and what to do when a job fails.
+
+**Every booking change can be streamed to Kafka for other consumers.** With
+`BOOKING_STREAM_ENABLED=true` on both processes, each booking transaction also writes a
+`booking-lifecycle.recorded` outbox row, and the worker publishes it to topic
+`hotel.booking-lifecycle.v1`, keyed by booking. The booking API never contacts the
+broker, so Kafka being down delays the stream and never fails a booking.
+[`docs/runbooks/booking-stream.md`](docs/runbooks/booking-stream.md) shows how to enable
+it and read the topic.
 
 Redis limiter failure denies booking creation but must never break read endpoints,
 and MySQL overload uses the existing bounded `503`. Neither failure may fall back to

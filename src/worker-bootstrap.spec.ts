@@ -11,6 +11,10 @@ import {
   createRetentionConfiguration,
   retentionConfig,
 } from './config/retention.config';
+import {
+  bookingStreamConfig,
+  createBookingStreamConfiguration,
+} from './config/booking-stream.config';
 import { validateEnvironment } from './config/environment.validation';
 import {
   bootstrapNotificationWorker,
@@ -57,6 +61,7 @@ function createContextDouble(
   const configuration = createNotificationsConfiguration(variables);
   const reports = createReportsConfiguration(variables);
   const retention = createRetentionConfiguration(variables);
+  const bookingStream = createBookingStreamConfiguration(variables);
   const closed = jest.fn(close);
   return {
     closed,
@@ -66,6 +71,7 @@ function createContextDouble(
         if (token === notificationsConfig.KEY) return configuration;
         if (token === reportsConfig.KEY) return reports;
         if (token === retentionConfig.KEY) return retention;
+        if (token === bookingStreamConfig.KEY) return bookingStream;
         return undefined;
       }),
     } as unknown as INestApplicationContext,
@@ -265,6 +271,7 @@ describe('workerDrainMs', () => {
       createNotificationsConfiguration(variables),
       createReportsConfiguration(variables),
       createRetentionConfiguration(variables),
+      createBookingStreamConfiguration(variables),
     ] as const;
   }
 
@@ -275,36 +282,40 @@ describe('workerDrainMs', () => {
     // off, which is the configuration the rollout establishes. Gating the drain on
     // `enabled` left a default deployment draining on the mail bound with a sample in
     // flight, so an ordinary deploy reported `drained:false` and exited non-zero.
-    const [notifications, reports, retention] = configurations({});
+    const [notifications, reports, retention, bookingStream] = configurations(
+      {},
+    );
 
     expect(reports.enabled).toBe(false);
     expect(retention.enabled).toBe(false);
-    expect(workerDrainMs(notifications, reports, retention)).toBe(
-      retention.run.shutdownDrainMs,
-    );
+    expect(
+      workerDrainMs(notifications, reports, retention, bookingStream),
+    ).toBe(retention.run.shutdownDrainMs);
   });
 
   it('takes the larger bound once both families are hosted', () => {
-    const [notifications, reports, retention] = configurations({
+    const [notifications, reports, retention, bookingStream] = configurations({
       REPORT_EXPORT_ENABLED: 'true',
     });
 
-    expect(workerDrainMs(notifications, reports, retention)).toBe(
-      reports.worker.shutdownDrainMs,
-    );
+    expect(
+      workerDrainMs(notifications, reports, retention, bookingStream),
+    ).toBe(reports.worker.shutdownDrainMs);
   });
 
   it('never shortens the mail bound to the export one', () => {
-    const [notifications, reports, retention] = configurations({
+    const [notifications, reports, retention, bookingStream] = configurations({
       REPORT_EXPORT_ENABLED: 'true',
       NOTIFICATION_SHUTDOWN_DRAIN_MS: '120000',
     });
 
-    expect(workerDrainMs(notifications, reports, retention)).toBe(120_000);
+    expect(
+      workerDrainMs(notifications, reports, retention, bookingStream),
+    ).toBe(120_000);
   });
 
   it('covers a retention batch rather than a retention run', () => {
-    const [notifications, reports, retention] = configurations({
+    const [notifications, reports, retention, bookingStream] = configurations({
       RETENTION_ENABLED: 'true',
     });
 
@@ -313,20 +324,51 @@ describe('workerDrainMs', () => {
     expect(retention.run.shutdownDrainMs).toBeLessThan(
       retention.run.runBudgetMs,
     );
-    expect(workerDrainMs(notifications, reports, retention)).toBe(
-      retention.run.shutdownDrainMs,
-    );
+    expect(
+      workerDrainMs(notifications, reports, retention, bookingStream),
+    ).toBe(retention.run.shutdownDrainMs);
   });
 
   it('adds nothing for exports when this process is not hosting them', () => {
     // A switched-off export family registers no consumer and has nothing to drain, and
     // counting it would make every deploy wait for work that cannot be happening.
-    const [notifications, reports, retention] = configurations({
+    const [notifications, reports, retention, bookingStream] = configurations({
       REPORT_EXPORT_ENABLED: 'false',
       NOTIFICATION_SHUTDOWN_DRAIN_MS: '120000',
     });
 
     expect(reports.enabled).toBe(false);
-    expect(workerDrainMs(notifications, reports, retention)).toBe(120_000);
+    expect(
+      workerDrainMs(notifications, reports, retention, bookingStream),
+    ).toBe(120_000);
+  });
+
+  it('covers one bounded lifecycle publish while the stream relay is hosted', () => {
+    const [notifications, reports, retention, bookingStream] = configurations({
+      BOOKING_STREAM_ENABLED: 'true',
+    });
+
+    expect(bookingStream.relay.shutdownDrainMs).toBeGreaterThanOrEqual(
+      bookingStream.client.publishTimeoutMs,
+    );
+    expect(
+      workerDrainMs(notifications, reports, retention, bookingStream),
+    ).toBeGreaterThanOrEqual(bookingStream.relay.shutdownDrainMs);
+  });
+
+  it('adds nothing for the stream when its relay is not hosted', () => {
+    const [notifications, reports, retention, bookingStream] = configurations({
+      NOTIFICATION_SHUTDOWN_DRAIN_MS: '120000',
+    });
+    // Oversized on purpose: a disabled relay must not contribute even a larger bound.
+    const oversized = {
+      ...bookingStream,
+      relay: { ...bookingStream.relay, shutdownDrainMs: 600_000 },
+    };
+
+    expect(bookingStream.enabled).toBe(false);
+    expect(workerDrainMs(notifications, reports, retention, oversized)).toBe(
+      120_000,
+    );
   });
 });

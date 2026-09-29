@@ -9,6 +9,9 @@
 - One API process and one worker process from the same image. The queue worker handles
   email and export orchestration; a Node Worker Thread performs only CPU-heavy XLSX
   generation. Network/database work remains in the queue process.
+- Kafka (one KRaft broker locally) carries the booking lifecycle stream. The worker
+  relays committed `booking-lifecycle.recorded` outbox rows to it; the API never talks
+  to the broker (`ADR-0012`).
 - GitHub Actions-style CI/CD contract; the actual deploy provider is selected before
   implementation.
 
@@ -23,6 +26,7 @@ flowchart LR
     Q --> WT[Worker Thread: XLSX]
     Q --> GM[Gmail adapter]
     Q --> S
+    Q -->|lifecycle relay| K[(Kafka: booking lifecycle)]
     Q --> RET[Retention scheduler: interval tick + run ledger]
     RET --> DB
     RET --> S
@@ -35,7 +39,7 @@ flowchart LR
 | `auth`          | Google identity/JIT provisioning, JWT, rotating refresh sessions, guards        |
 | `users`         | Profile, status, role administration                                            |
 | `rooms`         | Room/type/amenity catalog, bookable windows, search, availability               |
-| `bookings`      | Request lifecycle, concurrency rules, price snapshots/history                   |
+| `bookings`      | Request lifecycle, concurrency rules, price snapshots/history, lifecycle stream |
 | `reviews`       | Optional eligibility and moderation                                             |
 | `payments`      | Optional checkout and verified webhook transitions                              |
 | `files`         | Upload policy, object keys, cloud adapter, attachments                          |
@@ -111,6 +115,6 @@ flowchart LR
 
 ## Local Docker Compose target
 
-Services: `api`, `worker`, `mysql`, `redis`, `minio`, and `mailpit`. Use healthchecks,
+Services: `api`, `worker`, `mysql`, `redis`, `minio`, `mailpit`, and `kafka`. Use healthchecks,
 named volumes, a non-root production image, and separate `.env.example` values. Do
 not bundle secrets into the image or Compose file.

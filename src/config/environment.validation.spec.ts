@@ -416,3 +416,51 @@ describe('validateEnvironment', () => {
     );
   });
 });
+
+describe('booking stream environment', () => {
+  it('ships the stream disabled with the Compose broker as the local default', () => {
+    const environment = validateEnvironment({});
+
+    expect(environment.BOOKING_STREAM_ENABLED).toBe(false);
+    expect(environment.KAFKA_BROKERS).toBe('127.0.0.1:9094');
+  });
+
+  it('accepts a comma-separated host:port list and refuses anything else', () => {
+    expect(
+      validateEnvironment({ KAFKA_BROKERS: 'kafka-1:9092,kafka-2:9092' })
+        .KAFKA_BROKERS,
+    ).toBe('kafka-1:9092,kafka-2:9092');
+    for (const invalid of [
+      'kafka://broker:9092',
+      'broker',
+      'broker:9092,',
+      'broker:9092/path',
+    ]) {
+      expect(() => validateEnvironment({ KAFKA_BROKERS: invalid })).toThrow(
+        'Environment validation failed for: KAFKA_BROKERS',
+      );
+    }
+  });
+
+  it('has no production broker default, and refuses an enabled stream without one', () => {
+    const production = {
+      NODE_ENV: 'production',
+      MYSQL_PASSWORD: 'production-password',
+      OBJECT_STORAGE_ACCESS_KEY: 'production-storage',
+      OBJECT_STORAGE_SECRET_KEY: 'production-storage-secret',
+      ...productionRequiredEnvironment,
+    };
+
+    expect(validateEnvironment(production).KAFKA_BROKERS).toBeUndefined();
+    expect(() =>
+      validateEnvironment({ ...production, BOOKING_STREAM_ENABLED: 'true' }),
+    ).toThrow('Environment validation failed for: KAFKA_BROKERS');
+    expect(
+      validateEnvironment({
+        ...production,
+        BOOKING_STREAM_ENABLED: 'true',
+        KAFKA_BROKERS: 'kafka:9092',
+      }).BOOKING_STREAM_ENABLED,
+    ).toBe(true);
+  });
+});

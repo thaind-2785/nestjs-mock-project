@@ -36,6 +36,7 @@ import { UpdateBookingDto } from './dto/update-booking.dto';
 import { idempotencyKeyPattern } from '../common/idempotency/idempotency.constants';
 import { idempotencyErrors } from '../common/idempotency/idempotency.errors';
 import { IdempotencyRepository } from '../common/idempotency/idempotency.repository';
+import { BookingLifecycleRecorder } from './booking-lifecycle-recorder';
 import { bookingsErrors } from './bookings.errors';
 import { orderedUniqueRoomIds } from './booking-lock-order';
 import {
@@ -113,6 +114,7 @@ export class BookingsService {
     private readonly idempotency: IdempotencyRepository,
     @Inject(bookingsConfig.KEY)
     private readonly configuration: ConfigType<typeof bookingsConfig>,
+    private readonly lifecycle: BookingLifecycleRecorder,
   ) {}
 
   async create(
@@ -230,6 +232,11 @@ export class BookingsService {
           actorUserId,
           reason: null,
         });
+        await this.recordLifecycleByRoomTime(
+          manager,
+          booking,
+          BookingStatus.Pending,
+        );
         return false;
       });
       const response = await this.getOwn(actorUserId, bookingPublicId);
@@ -421,7 +428,7 @@ export class BookingsService {
           select: {
             id: true,
             roomId: true,
-            room: { id: true, roomNumber: true },
+            room: { id: true, roomNumber: true, roomTypeId: true },
           },
         });
         await this.appendTransitionAndOutbox(
@@ -567,6 +574,19 @@ export class BookingsService {
           toCheckOut: checkOut,
           reason: input.body.reason,
         });
+        const sourceRoom = rooms.get(snapshot.roomTime.roomId);
+        if (!sourceRoom) throw bookingsErrors.stateChanged();
+        await this.lifecycle.record(manager, {
+          booking: saved,
+          room: destinationRoom,
+          fromStatus: saved.status,
+          previousStay: {
+            roomId: before.roomId,
+            roomTypeId: sourceRoom.roomTypeId,
+            checkIn: before.checkIn,
+            checkOut: before.checkOut,
+          },
+        });
         await this.insertOutbox(
           manager,
           saved,
@@ -640,7 +660,7 @@ export class BookingsService {
           select: {
             id: true,
             roomId: true,
-            room: { id: true, roomNumber: true },
+            room: { id: true, roomNumber: true, roomTypeId: true },
           },
         });
         await manager.insert(BookingStatusHistory, {
@@ -650,6 +670,11 @@ export class BookingsService {
           actorType: BookingActorType.Admin,
           actorUserId: input.actorUserId,
           reason: input.reason,
+        });
+        await this.lifecycle.record(manager, {
+          booking: saved,
+          room: roomTime.room,
+          fromStatus,
         });
         await this.insertOutbox(
           manager,
@@ -895,7 +920,7 @@ export class BookingsService {
     actorUserId: string,
     reason: string | null,
     eventType: 'booking.confirmed' | 'booking.rejected',
-    room: Pick<LockedRoom, 'id' | 'roomNumber'>,
+    room: Pick<LockedRoom, 'id' | 'roomNumber' | 'roomTypeId'>,
   ): Promise<void> {
     await manager.insert(BookingStatusHistory, {
       bookingId: booking.id,
@@ -905,7 +930,35 @@ export class BookingsService {
       actorUserId,
       reason,
     });
+    await this.lifecycle.record(manager, {
+      booking,
+      room,
+      fromStatus: BookingStatus.Pending,
+    });
     await this.insertOutbox(manager, booking, eventType, room, { reason });
+  }
+
+  /**
+   * For the one transition that has not already read its room. The room read is a
+   * plain one - the booking row lock the caller holds is what serializes the change -
+   * and it happens only when the stream is on, so a disabled deployment pays nothing.
+   */
+  private async recordLifecycleByRoomTime(
+    manager: EntityManager,
+    booking: Booking,
+    fromStatus: BookingStatus,
+  ): Promise<void> {
+    if (!this.lifecycle.enabled) return;
+    const roomTime = await manager.findOneOrFail(RoomTime, {
+      where: { id: booking.roomTimeId },
+      relations: { room: true },
+      select: { id: true, roomId: true, room: { id: true, roomTypeId: true } },
+    });
+    await this.lifecycle.record(manager, {
+      booking,
+      room: roomTime.room,
+      fromStatus,
+    });
   }
 
   private logAdminTransition(
@@ -984,6 +1037,7 @@ export class BookingsService {
       priceAmount,
       room.currency,
     );
+    await this.lifecycle.record(manager, { booking, room, fromStatus: null });
     const roomType = await this.findResponseRoomType(manager, room.roomTypeId);
     const response = toCreateResponse(booking, room, roomType, nights);
     await this.idempotency.complete(manager, idempotency.id, {

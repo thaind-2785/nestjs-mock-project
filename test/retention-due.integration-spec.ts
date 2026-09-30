@@ -8,6 +8,7 @@ import {
   createRetentionConfiguration,
   type RetentionWindowConfiguration,
 } from '../src/config/retention.config';
+import { bookingLifecycleEventTypes } from '../src/bookings/booking-lifecycle-event.constants';
 import { notificationEventTypes } from '../src/notifications/notification-event';
 import { roomExportEventTypes } from '../src/reports/room-export.constants';
 import { createTypeOrmOptions } from '../src/database/database.options';
@@ -261,6 +262,11 @@ describe('Phase 7 due work', () => {
       await insertOutboxEvent(
         OutboxEventStatus.Processed,
         'NOW(6) - INTERVAL 60 DAY',
+      );
+      await insertOutboxEvent(
+        OutboxEventStatus.Processed,
+        'NOW(6) - INTERVAL 60 DAY',
+        bookingLifecycleEventTypes[0],
       );
       await insertExportJob(
         ExportJobStatus.Completed,

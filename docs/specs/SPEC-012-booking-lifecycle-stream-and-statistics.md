@@ -1,10 +1,10 @@
 # SPEC-012: Booking lifecycle stream and booking statistics
 
-- Status: Accepted; `P9-T01` implemented (`REVIEW-048`), `P9-T02` pending
+- Status: Implemented; `P9-T01` (`REVIEW-048`) and `P9-T02` (`REVIEW-049`)
 - Owner: Project owner
-- Last updated: 2026-09-29
+- Last updated: 2026-09-30
 - Scope: Optional ("Booking/revenue statistics" in `feature-scope.md`)
-- Related endpoints / ADRs: `EVT-05`, `ADMIN-RPT-01` (planned), `ADR-0006`,
+- Related endpoints / ADRs: `EVT-05`, `JOB-02`, `ADMIN-RPT-01`, `ADR-0006`,
   [`ADR-0012`](../decisions/ADR-0012-kafka-booking-lifecycle-stream.md)
 
 ## Problem and outcome
@@ -92,10 +92,61 @@ toStatus` and carries `previousStay` (`roomId`, `roomTypeId`, `checkIn`, `checkO
   that needs identity must read it from the API under its own authorization.
 - A breaking change is a new topic (`.v2`), never a reinterpretation of `.v1`.
 
-`ADMIN-RPT-01` (`GET /api/v1/admin/reports/booking-stats`) is specified in full by
-`P9-T02` before implementation; its intended shape is a date range over stay check-in
-dates, an optional room-type filter, counts per current status, and projected revenue
-per currency.
+`P9-T02` adds `ADMIN-RPT-01`, `GET /api/v1/admin/reports/booking-stats`:
+
+- Admin only (JWT plus the `ADMIN` role, deny-by-default like every `/admin` route).
+  An anonymous caller gets `401`, a user `403`.
+- Query: `from` and `to` (hotel dates, `to` exclusive, `from < to`, at most 366 days
+  apart), optional `roomTypeId`, optional `groupBy` = `day` | `month`. A range that is
+  empty, inverted or too long is `400 BOOKING_STATS_RANGE_INVALID`; malformed values
+  are `400 VALIDATION_FAILED`.
+- A booking belongs to the range when its **stay check-in date** is inside it (owner
+  decision of 2026-09-30): the report answers "what does the hotel expect for these
+  nights", not "how many requests arrived".
+- `503 BOOKING_STATS_DISABLED` while the API process has the stream flag off, so a
+  deployment without the stream cannot serve numbers nothing maintains.
+- `Cache-Control: no-store`: the numbers move with every booking change.
+
+```json
+{
+  "from": "2026-10-01",
+  "to": "2026-11-01",
+  "roomTypeId": null,
+  "groupBy": "month",
+  "asOf": "2026-09-30T08:15:30.123Z",
+  "totals": {
+    "bookings": 12,
+    "byStatus": {
+      "PENDING": 3,
+      "CONFIRMED": 6,
+      "REJECTED": 1,
+      "CANCELLED_BY_USER": 1,
+      "CANCELLED_BY_ADMIN": 1,
+      "COMPLETED": 0
+    },
+    "projectedRevenue": [{ "currency": "VND", "amount": 14400000 }]
+  },
+  "buckets": [
+    {
+      "period": "2026-10-01",
+      "bookings": 12,
+      "byStatus": { "PENDING": 3, "CONFIRMED": 6, "...": 0 },
+      "projectedRevenue": [{ "currency": "VND", "amount": 14400000 }]
+    }
+  ]
+}
+```
+
+- `byStatus` always lists every status, zeros included, so a client never has to tell
+  "absent" from "none". `buckets` lists only periods that have bookings, ascending; it
+  is empty without `groupBy`. A `month` period is the first day of that month.
+- `projectedRevenue` sums the price snapshot of bookings whose latest state is
+  `CONFIRMED` or `COMPLETED`, one entry per currency, never converted.
+- `asOf` is the `occurredAt` of the newest event the read model has applied, or `null`
+  before the first. The report is eventually consistent: a change is visible once the
+  relay has published it and the consumer has applied it, normally within seconds.
+- Only changes made while the stream was enabled are counted. There is no backfill of
+  earlier bookings (owner decision of 2026-09-30).
 
 ## Business rules and state transitions
 
@@ -118,6 +169,25 @@ per currency.
   after creation (`feature-scope.md` invariant 4).
 
 ## Data and migration impact
+
+`P9-T02` adds one table through migration `CreateBookingStatsSchema`:
+
+- `booking_stats_facts`: one row per booking - its latest known version, status, room,
+  room type, stay, price snapshot, and the ID and `occurredAt` of the event that set
+  it. Primary key `booking_public_id`. No foreign key to `bookings`: the table is a
+  projection of the stream, rebuilt from the topic, and must not constrain or lock the
+  transactional tables.
+- `idx_booking_stats_facts_stay (check_in, room_type_id, status, currency,
+price_amount)` covers the report query, so a range is an index range scan that never
+  reads the table rows. `idx_booking_stats_facts_occurred (last_occurred_at)` answers
+  `asOf` as one index lookup. Both cost one index write per applied event.
+- A row per booking, never per event, so the table grows with bookings, not changes;
+  it has no retention of its own.
+
+The retention scheduler gains a sixth task, `booking-lifecycle-events`: `PROCESSED`
+lifecycle rows whose `available_at` is more than 30 days old, deleted in bounded
+batches on `idx_outbox_events_claim_by_type`. Their durable copy is the topic. `FAILED`
+and `PENDING` rows are never collected, as for mail.
 
 `P9-T01` needs no migration. The family reuses `outbox_events` with its existing
 lifecycle, claim index `idx_outbox_events_claim_by_type` (which leads on `event_type`),
@@ -148,6 +218,37 @@ row per booking change, which is accepted for the interval between the two PRs.
   deleted under a live worker is recreated on the next cycle. The broker refuses
   auto-creation, so a typo cannot create a stray topic.
 
+Consumer (`JOB-02`, `P9-T02`):
+
+- Consumer group `booking-stats` in the worker, started only while the flag is on. A
+  new group starts from the beginning of the topic.
+- Each fetched batch is parsed with the same strict contract the relay publishes with,
+  then applied in one MySQL transaction as a version-guarded upsert: a row changes only
+  when the incoming `bookingVersion` is greater than the stored one. Offsets are
+  committed only after that transaction commits.
+- That makes redelivery and reordering harmless without a processed-event table: a
+  duplicate or older event matches the stored version and changes nothing, and every
+  event carries the booking's whole state, so a skipped older one loses nothing.
+- A message that fails the contract is skipped with a structured log and its offset is
+  committed, so one bad message cannot block its partition. The contract includes what
+  the read model can store - an identifier within `BIGINT UNSIGNED`, an `occurredAt`
+  within `DATETIME` - so a message that parses on shape but could never be written is
+  skipped the same way instead of failing its batch forever.
+- MySQL unavailable: the batch throws, nothing is committed, the client retries it
+  (five tries, one to ten seconds apart) and then restarts the consumer; the broker keeps
+  the messages. A crash the client will not restart, and a broker unavailable at
+  startup, are both retried by the adapter every five seconds, so the worker never runs
+  without its consumer. A stop lets the batch in flight finish and commit.
+- Rows of one statement are sorted by booking ID, so concurrent statements lock rows in
+  one order.
+
+Replay (`P9-T02`):
+
+- `npm run reports:booking-stats:rebuild` refuses while the group has members (stop
+  the worker first), resets the group's offsets to the earliest, then empties
+  `booking_stats_facts`, then checks that no consumer joined meanwhile. The next worker start replays the topic and rebuilds the table.
+  It is the way to apply a changed statistic definition to history.
+
 ## Security, privacy, and abuse cases
 
 - The payload is an explicit allowlist with no identity or free text, so the topic is
@@ -166,6 +267,11 @@ row per booking change, which is accepted for the interval between the two PRs.
 - The worker startup summary reports the flag, topic, partitions, and bounds.
 - The runbook `docs/runbooks/booking-stream.md` explains how to enable the stream,
   read the topic, and interpret the backlog.
+- `P9-T02`: `booking_stats_batch_applied` (`received`, `applied`, `skipped`,
+  `partition`, `durationMs`), `booking_stats_message_skipped` (partition, offset,
+  error code - never the value), `booking_stats_consumer_error`,
+  `booking_stats_rebuilt`. Consumer lag is read with `kafka-consumer-groups.sh`, which
+  the runbook shows.
 
 ## Acceptance criteria
 
@@ -187,7 +293,22 @@ row per booking change, which is accepted for the interval between the two PRs.
 - [x] Given mail and export events in the outbox, then the relay never claims them and
       the mail and export dispatchers never claim lifecycle rows.
 
-`P9-T02` acceptance criteria are added when that slice is planned.
+`P9-T02`:
+
+- [x] Given lifecycle events on the topic, when the consumer applies them, then
+      `booking_stats_facts` holds one row per booking with its latest version's state.
+- [x] Given a duplicate or older event for a booking, then the stored row is unchanged.
+- [x] Given a message that fails the contract, then it is skipped, logged, and later
+      messages of its partition are still applied.
+- [x] Given facts in the range, when an admin requests `ADMIN-RPT-01`, then counts per
+      status and projected revenue per currency match the latest states, bucketed by
+      check-in date; a user gets `403` and an anonymous caller `401`.
+- [x] Given an invalid range, then `400 BOOKING_STATS_RANGE_INVALID`; given the flag
+      off, then `503 BOOKING_STATS_DISABLED`.
+- [x] Given a stopped worker, when the rebuild command runs, then the facts are emptied,
+      the offsets reset, and the next consumer run restores the same numbers.
+- [x] Given `PROCESSED` lifecycle rows older than 30 days, when retention runs, then
+      they are deleted in bounded batches and no other family's row is touched.
 
 ## Test strategy
 
@@ -198,6 +319,12 @@ row per booking change, which is accepted for the interval between the two PRs.
   in their transaction; the relay publishes and a test consumer reads the message with
   key, headers and value; broker failure releases the batch; family isolation.
 - No E2E in `P9-T01`: it has no HTTP surface. `P9-T02` adds the admin journey.
+- `P9-T02` unit: message parsing, fact mapping, the report aggregation and range rules,
+  the consumer's skip/apply decisions. Integration: version-guarded upsert against
+  MySQL, the consumer against the real broker end to end (relay -> topic -> facts),
+  redelivery, a poison message, replay through the rebuild command, `EXPLAIN` of the
+  report query, and the retention task. E2E: the admin statistics journey and its RBAC
+  refusals over HTTP.
 
 ## Assumptions and open questions
 
@@ -205,15 +332,15 @@ row per booking change, which is accepted for the interval between the two PRs.
   A durable deployment needs three brokers and `min.insync.replicas=2`.
 - Assumption: topic retention is unlimited (`retention.ms=-1`) so the read model can
   be rebuilt from the beginning; at ~1 KB per event this is megabytes, not gigabytes.
-- Open for `P9-T02`: bucket statistics by stay check-in date (proposed) or by
-  transition date.
+- Settled 2026-09-30 by the owner: statistics bucket by stay check-in date, and there is
+  no backfill of bookings changed before the stream was enabled.
 
 ## Rollout and rollback
 
 1. Deploy the code with the flag off everywhere: behavior is unchanged.
-2. Turn the flag on in the worker, then in the API. Only changes after that moment
-   are streamed; `P9-T02` decides whether a one-off backfill from
-   `booking_status_history` is needed.
+2. Run the `P9-T02` migration, then turn the flag on in the worker, then in the API.
+   Only changes after that moment are streamed and counted; there is no backfill.
 3. Rollback: turn the flag off in the API first (no new rows), then in the worker.
-   Pending rows stay in MySQL and are published when the flag returns. No schema
-   change is involved.
+   Pending rows stay in MySQL and are published when the flag returns. The
+   `booking_stats_facts` migration can stay applied: nothing reads it while the flag is
+   off, and its `down` drops a projection that a replay can rebuild.

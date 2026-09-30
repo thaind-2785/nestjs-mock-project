@@ -157,6 +157,23 @@ describe('parseBookingLifecyclePayload', () => {
     });
   });
 
+  it('refuses an identifier the database column could not store', () => {
+    // Twenty digits pass the decimal pattern; this one is past BIGINT UNSIGNED.
+    rejects((payload) => {
+      (payload.booking as Record<string, unknown>).roomId =
+        '18446744073709551616';
+    });
+    rejects((payload) => {
+      (payload.booking as Record<string, unknown>).roomTypeId =
+        '99999999999999999999';
+    });
+    // The maximum itself is storable.
+    const payload = valid();
+    (payload.booking as Record<string, unknown>).roomId =
+      '18446744073709551615';
+    expect(() => parseBookingLifecyclePayload(payload)).not.toThrow();
+  });
+
   it('refuses an impossible stay, price, or currency', () => {
     rejects((payload) => {
       (payload.booking as Record<string, unknown>).checkOut = '2026-10-10';

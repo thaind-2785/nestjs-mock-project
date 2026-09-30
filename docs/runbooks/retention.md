@@ -75,8 +75,8 @@ npm run ops:retention -- --delete --task export-results --batch-size 100
 ```
 
 Valid names: `auth-sessions`, `idempotency-keys`, `storage-tasks`,
-`notification-events`, `export-results`. An unrecognised name is refused rather than
-silently reported as all five.
+`notification-events`, `export-results`, `booking-lifecycle-events`. An unrecognised name
+is refused rather than silently reported as all of them.
 
 Exactly one mode has to be named. The bare form is refused: for the part that cannot be
 undone the safe default is no default.
@@ -123,17 +123,19 @@ excluded by their error code. One genuine stale claim is ordinary; a rising coun
 
 ## What each task collects, and what it never touches
 
-| Task                  | Collects                                  | Never touches                                                                       |
-| --------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------- |
-| `auth-sessions`       | Sessions 24h past refresh expiry          | A session still refreshable, whatever its age                                       |
-| `idempotency-keys`    | Keys past their own `expires_at`          | A key whose response has not been stored                                            |
-| `storage-tasks`       | Due cleanup tasks not currently claimed   | A safeguard still protecting an in-flight upload                                    |
-| `notification-events` | Processed booking events 30 days old      | `PENDING`, `PROCESSING` or `FAILED` events — a failed event is what a redrive needs |
-| `export-results`      | Terminal export jobs 8 days past terminal | A job still `QUEUED` or `RUNNING`, whatever its age                                 |
+| Task                       | Collects                                  | Never touches                                                                                           |
+| -------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `auth-sessions`            | Sessions 24h past refresh expiry          | A session still refreshable, whatever its age                                                           |
+| `idempotency-keys`         | Keys past their own `expires_at`          | A key whose response has not been stored                                                                |
+| `storage-tasks`            | Due cleanup tasks not currently claimed   | A safeguard still protecting an in-flight upload                                                        |
+| `notification-events`      | Processed booking events 30 days old      | `PENDING`, `PROCESSING` or `FAILED` events — a failed event is what a redrive needs                     |
+| `export-results`           | Terminal export jobs 8 days past terminal | A job still `QUEUED` or `RUNNING`, whatever its age                                                     |
+| `booking-lifecycle-events` | Relayed lifecycle events 30 days old      | `PENDING` or `FAILED` lifecycle events — one is still owed a publish, the other is a redrive's evidence |
 
 `notification-events` is scoped to the booking event family. An export's outbox event
 belongs to `export-results`, which deletes it with the job an `ON DELETE RESTRICT` ties
-it to.
+it to. `booking-lifecycle-events` (Phase 9) is scoped to `booking-lifecycle.recorded`;
+nothing references those rows, and their durable copy is the Kafka topic.
 
 ## The run ledger
 

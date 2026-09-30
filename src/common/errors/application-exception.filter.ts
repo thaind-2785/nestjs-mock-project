@@ -30,6 +30,9 @@ interface ErrorTranslations {
     bookingNotFound: string;
     bookingPriceOutOfRange: string;
     bookingStateChanged: string;
+    bookingStatsAmountOutOfRange: string;
+    bookingStatsDisabled: string;
+    bookingStatsRangeInvalid: string;
     bookingStayInvalid: string;
     bookingStatusConflict: string;
     bookingWindowUnavailable: string;

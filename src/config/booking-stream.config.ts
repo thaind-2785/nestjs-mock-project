@@ -75,6 +75,40 @@ const backoffMaxMs = 60_000;
 /** One bounded publish plus the finalize statement. */
 const shutdownDrainMs = 30_000;
 
+/**
+ * The statistics read model's consumer group. Deliberately one stable name: a changed
+ * projection is rebuilt in place by the replay command, not by a new group that would
+ * start from the beginning beside the old one and double the work.
+ */
+const statsGroupId = 'booking-stats';
+
+/**
+ * How long the broker waits for a heartbeat before it hands the group's partitions to
+ * another member. One applied batch is a few bounded upserts, far below it.
+ */
+const consumerSessionTimeoutMs = 30_000;
+
+/** A third of the session, the client's own recommendation. */
+const consumerHeartbeatIntervalMs = 10_000;
+
+/**
+ * How long a consumer that could not connect waits before it tries again. The worker
+ * starts regardless of the broker, and this is how the consumer catches up with it.
+ */
+const consumerReconnectDelayMs = 5_000;
+
+/**
+ * How long a failing batch is retried before the consumer is torn down and restarted:
+ * five tries, backing off from one second to at most ten. Long enough to ride out a
+ * MySQL failover without a restart per second, short enough that a real outage shows up
+ * as `booking_stats_consumer_error` within a minute.
+ */
+const consumerRetries = 5;
+
+const consumerInitialRetryTimeMs = 1_000;
+
+const consumerMaxRetryTimeMs = 10_000;
+
 /** The lease must outlive a publish that used its whole timeout, plus the finalize. */
 const leaseSafetyMarginMs = 10_000;
 
@@ -101,6 +135,16 @@ export interface BookingStreamRelayConfiguration {
   shutdownDrainMs: number;
 }
 
+export interface BookingStreamConsumerConfiguration {
+  statsGroupId: string;
+  sessionTimeoutMs: number;
+  heartbeatIntervalMs: number;
+  reconnectDelayMs: number;
+  retries: number;
+  initialRetryTimeMs: number;
+  maxRetryTimeMs: number;
+}
+
 export interface BookingStreamConfiguration {
   /**
    * Read per process. In the API it decides whether booking transactions write
@@ -110,6 +154,7 @@ export interface BookingStreamConfiguration {
   topic: BookingStreamTopicConfiguration;
   client: BookingStreamClientConfiguration;
   relay: BookingStreamRelayConfiguration;
+  consumer: BookingStreamConsumerConfiguration;
 }
 
 export function createBookingStreamConfiguration(
@@ -140,6 +185,15 @@ export function createBookingStreamConfiguration(
       backoffMaxMs,
       shutdownDrainMs,
     },
+    consumer: {
+      statsGroupId,
+      sessionTimeoutMs: consumerSessionTimeoutMs,
+      heartbeatIntervalMs: consumerHeartbeatIntervalMs,
+      reconnectDelayMs: consumerReconnectDelayMs,
+      retries: consumerRetries,
+      initialRetryTimeMs: consumerInitialRetryTimeMs,
+      maxRetryTimeMs: consumerMaxRetryTimeMs,
+    },
   };
   assertBookingStreamBounds(configuration);
   return configuration;
@@ -159,7 +213,7 @@ function parseBrokers(value: string | undefined): string[] {
 export function assertBookingStreamBounds(
   configuration: BookingStreamConfiguration,
 ): void {
-  const { client, relay } = configuration;
+  const { client, relay, consumer } = configuration;
   const unbounded: string[] = [];
   // The client's own worst case must fit inside the relay's timeout, or the timeout
   // would routinely fire while the client was still about to succeed. The adapter
@@ -177,6 +231,19 @@ export function assertBookingStreamBounds(
   }
   if (relay.shutdownDrainMs < client.publishTimeoutMs + finalizeMarginMs) {
     unbounded.push('relay.shutdownDrainMs');
+  }
+  // The broker declares a member dead after one session without a heartbeat, so the
+  // interval must leave room for several missed beats rather than one.
+  if (consumer.heartbeatIntervalMs * 3 > consumer.sessionTimeoutMs) {
+    unbounded.push('consumer.heartbeatIntervalMs');
+  }
+  // The client heartbeats only between tries, so one wait longer than a session would
+  // get the member evicted mid-retry and turn a slow database into a rebalance loop.
+  if (
+    consumer.maxRetryTimeMs >= consumer.sessionTimeoutMs ||
+    consumer.initialRetryTimeMs > consumer.maxRetryTimeMs
+  ) {
+    unbounded.push('consumer.maxRetryTimeMs');
   }
   if (relay.backoffMaxMs < relay.backoffInitialMs) {
     unbounded.push('relay.backoffMaxMs');
@@ -208,6 +275,7 @@ export interface BookingStreamConfigurationSummary {
   backoffInitialMs: number;
   backoffMaxMs: number;
   shutdownDrainMs: number;
+  statsGroupId: string;
 }
 
 export function describeBookingStreamConfiguration(
@@ -226,6 +294,7 @@ export function describeBookingStreamConfiguration(
     backoffInitialMs: relay.backoffInitialMs,
     backoffMaxMs: relay.backoffMaxMs,
     shutdownDrainMs: relay.shutdownDrainMs,
+    statsGroupId: configuration.consumer.statsGroupId,
   };
 }
 

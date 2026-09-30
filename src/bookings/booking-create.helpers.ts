@@ -1,3 +1,4 @@
+import { millisecondsPerDay } from '../common/constants/hotel-date.constants';
 import { createHash, randomBytes } from 'node:crypto';
 import { BookingCreateInput } from './booking-create.types';
 
@@ -56,7 +57,7 @@ export function assertBookingDates(
   if (checkIn === null || checkOut === null || checkIn >= checkOut) return 0;
   const today = hotelDateToday(hotelTimezone);
   if (input.checkIn < today) return 0;
-  return Math.round((checkOut - checkIn) / 86_400_000);
+  return Math.round((checkOut - checkIn) / millisecondsPerDay);
 }
 
 function parseHotelDate(value: string): number | null {

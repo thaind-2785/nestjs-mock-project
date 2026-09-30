@@ -34,7 +34,10 @@ describe('RetentionOperationsModule wiring', () => {
   it('names every table it deletes from in one place', () => {
     // The predicates are the only list of tables retention touches. Nothing here should
     // ever name a business record: this phase removes operational exhaust.
-    const tables = retentionDuePredicates.map((predicate) => predicate.table);
+    // Distinct tables: two tasks collect different families of `outbox_events`.
+    const tables = [
+      ...new Set(retentionDuePredicates.map((predicate) => predicate.table)),
+    ];
     expect(tables.sort()).toEqual([
       'auth_sessions',
       'export_jobs',

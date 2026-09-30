@@ -1,5 +1,8 @@
 import { isISO4217CurrencyCode } from 'class-validator';
-import { decimalIdPattern } from '../common/constants/identifier.constants';
+import {
+  decimalIdPattern,
+  maxUnsignedBigint,
+} from '../common/constants/identifier.constants';
 import {
   bookingLifecycleErrorCodes,
   bookingLifecycleEventSchemaVersion,
@@ -159,15 +162,22 @@ function requireStay(input: unknown, path: string): BookingLifecycleStay {
   const checkOut = requireHotelDate(value.checkOut, `${path}.checkOut`);
   if (checkIn >= checkOut) invalid(`${path}.checkOut`);
   return {
-    roomId: requireString(value.roomId, `${path}.roomId`, decimalIdPattern),
-    roomTypeId: requireString(
-      value.roomTypeId,
-      `${path}.roomTypeId`,
-      decimalIdPattern,
-    ),
+    roomId: requireStoredId(value.roomId, `${path}.roomId`),
+    roomTypeId: requireStoredId(value.roomTypeId, `${path}.roomTypeId`),
     checkIn,
     checkOut,
   };
+}
+
+/**
+ * A decimal ID a MySQL `BIGINT UNSIGNED` can hold. The pattern alone admits twenty-digit
+ * values past the column's maximum, which a consumer would otherwise accept and then
+ * fail to store - a message that parses but can never be applied, holding its partition.
+ */
+function requireStoredId(value: unknown, path: string): string {
+  const id = requireString(value, path, decimalIdPattern);
+  if (BigInt(id) > maxUnsignedBigint) invalid(path);
+  return id;
 }
 
 function requireRecord(

@@ -91,8 +91,10 @@ describe('Phase 6 export persistence and event-family isolation', () => {
         await indexExists('outbox_events', 'idx_outbox_events_claim'),
       ).toBe(true);
 
-      // The Phase 7 run ledger sits above this one and comes off first. It guards
-      // nothing here - this suite never writes a scheduled run - so it always reverts.
+      // The Phase 9 statistics read model and the Phase 7 run ledger sit above this one
+      // and come off first. Neither guards anything here - this suite writes no fact and
+      // no scheduled run - so both always revert.
+      await dataSource.undoLastMigration();
       await dataSource.undoLastMigration();
       await dataSource.undoLastMigration();
       expect(await tableExists('export_jobs')).toBe(false);

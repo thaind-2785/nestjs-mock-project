@@ -434,8 +434,12 @@ enabling, draining, reading the backlog sample, and what to do when a job fails.
 `booking-lifecycle.recorded` outbox row, and the worker publishes it to topic
 `hotel.booking-lifecycle.v1`, keyed by booking. The booking API never contacts the
 broker, so Kafka being down delays the stream and never fails a booking.
+The worker's `booking-stats` consumer reads the topic back into a read model, and
+`GET /api/v1/admin/reports/booking-stats?from=2026-10-01&to=2026-11-01&groupBy=month`
+answers counts per status and projected revenue (confirmed price snapshots) by stay
+check-in date. `npm run reports:booking-stats:rebuild` replays the topic into it.
 [`docs/runbooks/booking-stream.md`](docs/runbooks/booking-stream.md) shows how to enable
-it and read the topic.
+it, read the topic, check consumer lag, and rebuild.
 
 Redis limiter failure denies booking creation but must never break read endpoints,
 and MySQL overload uses the existing bounded `503`. Neither failure may fall back to

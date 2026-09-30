@@ -3,6 +3,7 @@ import { BookingLifecycleStreamModule } from './bookings/booking-lifecycle-strea
 import { AppConfigModule } from './config/app-config.module';
 import { DatabaseModule } from './database/database.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { BookingStatsWorkerModule } from './reports/booking-stats-worker.module';
 import { ReportsWorkerModule } from './reports/reports-worker.module';
 import { RetentionWorkerModule } from './retention/retention-worker.module';
 
@@ -24,8 +25,9 @@ import { RetentionWorkerModule } from './retention/retention-worker.module';
  * of them.
  *
  * The booking lifecycle relay is the fourth (`ADR-0012`): a third outbox family, with
- * its own allowlist and its own transport, Kafka rather than BullMQ. It exists only
- * while `BOOKING_STREAM_ENABLED` is on.
+ * its own allowlist and its own transport, Kafka rather than BullMQ. The statistics
+ * consumer reads what it publishes back from the topic into the read model. Both exist
+ * only while `BOOKING_STREAM_ENABLED` is on, and their drain is the stream family's.
  */
 @Module({
   imports: [
@@ -35,6 +37,7 @@ import { RetentionWorkerModule } from './retention/retention-worker.module';
     ReportsWorkerModule,
     RetentionWorkerModule,
     BookingLifecycleStreamModule,
+    BookingStatsWorkerModule,
   ],
 })
 export class WorkerModule {}

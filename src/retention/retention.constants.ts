@@ -1,5 +1,6 @@
 /**
- * The five tasks, named once.
+ * The six tasks, named once. Appended, never reordered: `booking-lifecycle-events`
+ * joined with Phase 9.
  *
  * These strings are stored in `scheduled_runs.task_name` and are therefore part of the
  * ledger's durable shape: renaming one would orphan its history and let the renamed
@@ -12,6 +13,7 @@ export const retentionTaskNames = [
   'storage-tasks',
   'notification-events',
   'export-results',
+  'booking-lifecycle-events',
 ] as const;
 
 export type RetentionTaskName = (typeof retentionTaskNames)[number];

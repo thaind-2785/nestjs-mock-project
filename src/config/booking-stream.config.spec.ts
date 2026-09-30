@@ -40,6 +40,15 @@ describe('createBookingStreamConfiguration', () => {
         backoffMaxMs: 60_000,
         shutdownDrainMs: 30_000,
       },
+      consumer: {
+        statsGroupId: 'booking-stats',
+        sessionTimeoutMs: 30_000,
+        heartbeatIntervalMs: 10_000,
+        reconnectDelayMs: 5_000,
+        retries: 5,
+        initialRetryTimeMs: 1_000,
+        maxRetryTimeMs: 10_000,
+      },
     });
     expect(bookingLifecycleTopic).toBe('hotel.booking-lifecycle.v1');
   });
@@ -85,6 +94,22 @@ describe('assertBookingStreamBounds', () => {
     ).toThrow('relay.shutdownDrainMs');
   });
 
+  it('refuses a heartbeat that leaves no room for a missed beat', () => {
+    expect(
+      withChanges((configuration) => {
+        configuration.consumer.heartbeatIntervalMs = 15_000;
+      }),
+    ).toThrow('consumer.heartbeatIntervalMs');
+  });
+
+  it('refuses a consumer retry wait that outlives a session', () => {
+    expect(
+      withChanges((configuration) => {
+        configuration.consumer.maxRetryTimeMs = 30_000;
+      }),
+    ).toThrow('consumer.maxRetryTimeMs');
+  });
+
   it('refuses an inverted backoff and an enabled stream with no broker', () => {
     expect(
       withChanges((configuration) => {
@@ -114,6 +139,7 @@ describe('describeBookingStreamConfiguration', () => {
       backoffInitialMs: 1_000,
       backoffMaxMs: 60_000,
       shutdownDrainMs: 30_000,
+      statsGroupId: 'booking-stats',
     });
   });
 });

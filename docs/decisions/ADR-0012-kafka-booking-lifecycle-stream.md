@@ -84,6 +84,16 @@ only on a loopback port and a private Compose network. The Railway deployment ke
 cluster (replication 3, `min.insync.replicas=2`) and TLS with SASL in the client
 configuration.
 
+**The statistics consumer applies state, not deltas (`P9-T02`, 2026-09-30).** Every event
+carries the booking's whole state after the change, so the read model stores one row per
+booking and a version-guarded upsert replaces it only with a newer version. Redelivery
+and reordering then need no processed-event table: a duplicate or an older event
+matches the stored version and changes nothing, and a lost intermediate event loses
+nothing because the next one carries the full state. Offsets are committed by hand after
+the MySQL transaction commits. A replay is a reset of the group to the earliest offset
+after the table has been emptied; the rebuild command refuses while the group has live
+members, because a reset under them would be overwritten by their next commit.
+
 ## Consequences
 
 - A third outbox family shares `outbox_events`. Isolation holds because every

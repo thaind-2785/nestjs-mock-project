@@ -28,6 +28,7 @@
     "notifications:redrive-failed": "ts-node -r tsconfig-paths/register src/cli/redrive-failed.ts",
     "ops:retention": "ts-node -r tsconfig-paths/register src/cli/retention.ts",
     "ops:retention:prod": "node dist/cli/retention.js",
+    "reports:booking-stats:rebuild": "ts-node -r tsconfig-paths/register src/cli/rebuild-booking-stats.ts",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.mjs\" \"docs/**/*.md\" \".agents/skills/**/*.md\" \".github/**/*.yml\" \".harness/*.yaml\" \".harness/*.json\" \"*.md\"",
     "start": "nest start",

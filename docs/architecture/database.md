@@ -442,6 +442,35 @@ first export job exists. After activation it would destroy the rows that prove w
 object belongs to whom, so the documented rollback is a schema-compatible application
 version or a forward fix.
 
+## Phase 9 booking statistics read model
+
+`booking_stats_facts` is the Kafka consumer's projection of `hotel.booking-lifecycle.v1`
+(`SPEC-012`, `ADR-0012`): one row per booking, keyed by `booking_public_id`, holding the
+newest `booking_version` applied and the state that version described - status, room,
+room type, stay and price snapshot - plus the event ID and `occurredAt` that set it.
+
+It has no foreign key to `bookings`, deliberately. The table is derived from the stream,
+not from the transactional tables: the consumer must never take a lock the booking
+invariants rely on, and the rebuild command empties it and replays the topic without
+touching anything else. A booking missing here is a lag or a pre-enablement booking,
+not an integrity fault.
+
+The upsert is version-guarded - a column takes the incoming value only when the incoming
+version is greater, and `booking_version` is assigned last - so redelivery and
+out-of-order arrival are no-ops without a processed-event table. Each statement's rows
+are sorted by booking ID, which fixes the lock order between concurrent statements.
+
+`idx_booking_stats_facts_stay (check_in, room_type_id, status, currency, price_amount)`
+covers the report query, which is therefore an index range scan on `check_in` that reads
+no table row (`Using index`, asserted in the integration suite).
+`idx_booking_stats_facts_occurred (last_occurred_at)` answers `asOf` with one lookup at
+the end of the index. The table grows with bookings, not with changes, and has no
+retention of its own.
+
+Relayed `booking-lifecycle.recorded` rows in `outbox_events` are collected by the
+retention task `booking-lifecycle-events` after 30 days; their durable copy is the
+topic.
+
 ## Connection and concurrency bounds
 
 `MYSQL_POOL_SIZE` (default `10`) sets the mysql2 pool's `connectionLimit`. Every

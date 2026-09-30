@@ -27,6 +27,7 @@ flowchart LR
     Q --> GM[Gmail adapter]
     Q --> S
     Q -->|lifecycle relay| K[(Kafka: booking lifecycle)]
+    K -->|booking-stats consumer| Q
     Q --> RET[Retention scheduler: interval tick + run ledger]
     RET --> DB
     RET --> S
@@ -44,7 +45,7 @@ flowchart LR
 | `payments`      | Optional checkout and verified webhook transitions                              |
 | `files`         | Upload policy, object keys, cloud adapter, attachments                          |
 | `notifications` | Outbox relay, templates, email deliveries/retries                               |
-| `reports`       | Queries, export jobs, Worker Thread bridge                                      |
+| `reports`       | Queries, export jobs, Worker Thread bridge, booking statistics read model       |
 | `retention`     | Daily deletion windows, the run ledger that elects one runner, backlog readings |
 | `health`        | Liveness/readiness for deploy gates                                             |
 

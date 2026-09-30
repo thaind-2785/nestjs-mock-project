@@ -15,6 +15,7 @@ import { OutboxEventStatus } from '../src/common/outbox/outbox.enums';
 import { ExportJobStatus } from '../src/reports/entities/export-job.enums';
 import { ObjectStorageProvider } from '../src/common/storage/object-storage.provider';
 import { StorageCleanupService } from '../src/files/storage-cleanup.service';
+import { bookingLifecycleEventTypes } from '../src/bookings/booking-lifecycle-event.constants';
 import { notificationEventTypes } from '../src/notifications/notification-event';
 import { roomExportEventTypes } from '../src/reports/room-export.constants';
 import { RetentionDeleteRepository } from '../src/retention/retention-delete.repository';
@@ -264,6 +265,57 @@ describe('Phase 7 deletions', () => {
     });
   });
 
+  describe('the booking lifecycle family', () => {
+    it('collects relayed rows past their window and nothing else', async () => {
+      const lifecycle = bookingLifecycleEventTypes[0];
+      const due = await insertOutboxEvent(
+        OutboxEventStatus.Processed,
+        oldEnough(windows.bookingLifecycleEventHours),
+        lifecycle,
+      );
+      // Too young, still owed a publish, or the evidence behind a redrive: all kept.
+      const young = await insertOutboxEvent(
+        OutboxEventStatus.Processed,
+        'NOW(6)',
+        lifecycle,
+      );
+      const pending = await insertOutboxEvent(
+        OutboxEventStatus.Pending,
+        oldEnough(windows.bookingLifecycleEventHours),
+        lifecycle,
+      );
+      const failed = await insertOutboxEvent(
+        OutboxEventStatus.Failed,
+        oldEnough(windows.bookingLifecycleEventHours),
+        lifecycle,
+      );
+      // Another family's processed row of the same age belongs to its own task.
+      const mail = await insertOutboxEvent(
+        OutboxEventStatus.Processed,
+        oldEnough(windows.bookingLifecycleEventHours),
+      );
+
+      const outcome = await tasks.runBatch(
+        dataSource,
+        'booking-lifecycle-events',
+        10,
+        farFuture,
+      );
+
+      expect(outcome).toEqual({
+        counts: { outbox_events: 1 },
+        moreWaiting: false,
+      });
+      const remaining: Array<{ id: string }> = await dataSource.query(
+        'SELECT id FROM outbox_events',
+      );
+      expect(remaining.map((row) => row.id).sort()).toEqual(
+        [young, pending, failed, mail].sort(),
+      );
+      expect(remaining.map((row) => row.id)).not.toContain(due);
+    });
+  });
+
   describe('the export chain', () => {
     it('removes the object before the rows that name it', async () => {
       const jobId = await insertTerminalExportJob('exports/rooms/a.xlsx');
@@ -445,12 +497,17 @@ describe('Phase 7 deletions', () => {
       await insertStorageTask(oldEnough(0));
       await insertDueNotificationEvent();
       await insertTerminalExportJob(`exports/rooms/${randomUUID()}.xlsx`);
+      await insertOutboxEvent(
+        OutboxEventStatus.Processed,
+        oldEnough(windows.bookingLifecycleEventHours),
+        bookingLifecycleEventTypes[0],
+      );
 
       const before = await countEach();
       const reports = await context.get(RetentionReportService).report();
 
       expect(await countEach()).toEqual(before);
-      // And it really did look: a report of five zeroes would pass the assertion above
+      // And it really did look: a report of zeroes would pass the assertion above
       // without reading a row.
       expect(reports).toHaveLength(retentionDuePredicates.length);
       for (const report of reports) {

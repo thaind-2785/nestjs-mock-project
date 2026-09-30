@@ -50,3 +50,10 @@ export interface BookingLifecycleChange {
   fromStatus: BookingStatus | null;
   previousStay?: BookingLifecycleStay;
 }
+
+/** A published message after the consumer side has checked it against `.v1`. */
+export interface ReceivedBookingLifecycleEvent {
+  eventId: string;
+  occurredAt: Date;
+  payload: BookingLifecyclePayload;
+}

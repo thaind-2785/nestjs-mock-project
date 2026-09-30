@@ -97,6 +97,10 @@ describe('Phase 7 run ledger and singleton claim', () => {
       // the code that reads it.
       expect(await tableExists('export_jobs')).toBe(true);
 
+      // The Phase 9 statistics read model sits above the ledger and guards nothing, so
+      // it comes off first.
+      await dataSource.undoLastMigration();
+      expect(await tableExists('booking_stats_facts')).toBe(false);
       await dataSource.undoLastMigration();
       expect(await tableExists('scheduled_runs')).toBe(false);
       expect(await tableExists('export_jobs')).toBe(true);

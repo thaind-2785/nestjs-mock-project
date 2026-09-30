@@ -3,6 +3,7 @@ import { Partitioners, type Kafka, type Producer } from 'kafkajs';
 import { createKafkaClient } from '../common/kafka/kafka-client';
 import type { BookingStreamConfiguration } from '../config/booking-stream.config';
 import { bookingLifecyclePublishTimeoutName } from './booking-lifecycle-event.constants';
+import { ensureBookingLifecycleTopic } from './booking-lifecycle-topic';
 import type { BookingLifecyclePublisher } from './booking-lifecycle-publisher';
 import type { BookingLifecycleMessage } from './booking-lifecycle-relay.types';
 
@@ -100,42 +101,12 @@ export class KafkaBookingLifecyclePublisher implements BookingLifecyclePublisher
   }
 
   private async connect(): Promise<void> {
-    await this.ensureTopic();
+    await ensureBookingLifecycleTopic(
+      this.kafka,
+      this.configuration,
+      this.logger,
+    );
     await this.producer.connect();
-  }
-
-  /**
-   * Idempotent: `createTopics` answers `false` for a topic that already exists. The
-   * broker refuses auto-creation, so this is the only way the topic comes to exist and
-   * a misspelled name fails loudly instead of creating a stray topic.
-   */
-  private async ensureTopic(): Promise<void> {
-    const { topic, client } = this.configuration;
-    const admin = this.kafka.admin();
-    await admin.connect();
-    try {
-      const created = await admin.createTopics({
-        waitForLeaders: true,
-        timeout: client.requestTimeoutMs,
-        topics: [
-          {
-            topic: topic.name,
-            numPartitions: topic.partitions,
-            replicationFactor: topic.replicationFactor,
-            configEntries: [
-              { name: 'retention.ms', value: String(topic.retentionMs) },
-            ],
-          },
-        ],
-      });
-      this.logger.log({
-        event: 'booking_lifecycle_topic_ensured',
-        topic: topic.name,
-        created,
-      });
-    } finally {
-      await admin.disconnect();
-    }
   }
 }
 

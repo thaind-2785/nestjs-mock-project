@@ -2,8 +2,10 @@
 
 Every booking change - creation, cancellation, approval, rejection, an admin room/date
 change, an admin cancellation - is published to Kafka topic
-`hotel.booking-lifecycle.v1`. Consumers (the booking statistics read model from
-`P9-T02`) read the topic independently and can replay it from the beginning.
+`hotel.booking-lifecycle.v1`. The worker's `booking-stats` consumer reads it back into
+the `booking_stats_facts` read model behind `GET /api/v1/admin/reports/booking-stats`,
+and any later consumer can read the topic independently and replay it from the
+beginning.
 
 Read [`SPEC-012`](../specs/SPEC-012-booking-lifecycle-stream-and-statistics.md) for
 the event contract and
@@ -24,7 +26,13 @@ booking transaction                      lifecycle relay (polls every second)
                                    Kafka topic hotel.booking-lifecycle.v1
                                    3 partitions, key = booking public ID
                                                   |
-                                   consumer groups (P9-T02: booking-stats)
+                                   consumer group booking-stats (worker)
+                                     one transaction per fetched batch:
+                                     version-guarded upsert, then offset commit
+                                                  |
+                                   booking_stats_facts (one row per booking)
+                                                  |
+                                   GET /admin/reports/booking-stats (API)
 ```
 
 MySQL is the source of truth. The booking API never contacts Kafka, so a broker outage
@@ -107,6 +115,61 @@ SET status = 'PENDING', failed_at = NULL, last_error_code = NULL,
 WHERE event_type = 'booking-lifecycle.recorded' AND status = 'FAILED' AND id = ?;
 ```
 
+## Booking statistics
+
+The same flag starts the `booking-stats` consumer group in the worker; it logs
+`booking_stats_consumer_started`, and one `booking_stats_batch_applied` per fetched
+batch. Ask for the report as an administrator:
+
+```bash
+curl -s "http://localhost:3000/api/v1/admin/reports/booking-stats?from=2026-10-01&to=2026-12-01&groupBy=month" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+Bookings count by **stay check-in date** in `[from, to)`; `projectedRevenue` sums the
+price snapshots of `CONFIRMED` and `COMPLETED` bookings per currency. `asOf` is when the
+newest applied change happened - the report is eventually consistent, normally seconds
+behind a booking change.
+
+### Consumer lag
+
+```bash
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server localhost:9092 --describe --group booking-stats
+```
+
+`LAG` per partition is how many events the read model has not applied yet.
+
+| What you see                                              | What it means                                                                           | What to do                                                                                                                           |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `LAG` growing, `booking_stats_consumer_error` in the log  | Applying batches fails - usually MySQL                                                  | Read `cause` and `code` in that line and fix the database. The consumer retries, restarts itself, and the broker keeps every message |
+| `booking_stats_consumer_connect_failed` every few seconds | The broker is unreachable from the worker                                               | Check `KAFKA_BROKERS` and `docker compose ps kafka`; the consumer reconnects on its own                                              |
+| `booking_stats_message_skipped`                           | A message broke the `.v1` contract, or held a value MySQL cannot store, and was skipped | Read partition and offset from the log; nothing waits behind it                                                                      |
+| Report is `503 BOOKING_STATS_DISABLED`                    | The API process has the stream flag off                                                 | Turn it on in the API once the worker's consumer is running                                                                          |
+| `asOf` far behind the newest booking change               | The relay or the consumer is behind                                                     | Read the outbox backlog above, then the consumer lag                                                                                 |
+
+### Rebuilding the read model
+
+A plain replay changes nothing - the upsert keeps the newest version already stored - so
+a changed statistic definition is applied to history by emptying the table and
+replaying:
+
+```bash
+# 1. stop the worker (its consumer is a group member; a reset under it is ignored)
+# 2. rewind the group to the earliest offset, then empty booking_stats_facts
+npm run reports:booking-stats:rebuild
+# 3. start the worker; the consumer replays the whole topic
+```
+
+It refuses with `BOOKING_STATS_CONSUMER_ACTIVE` while any member is in the group, and
+with `BOOKING_STATS_TOPIC_MISSING` when there is nothing to replay. A worker that was
+killed rather than stopped stays a member until its 30-second session times out, so
+wait that long before running it. It fails with `BOOKING_STATS_CONSUMER_JOINED` if a
+consumer joined while the table was being emptied; stop that worker and run it again. The group is rewound
+before the table is emptied, so a failure part-way leaves either the old numbers or a
+table the next run refills - never an empty table nobody refills. While the replay runs,
+the report shows partial numbers and an old `asOf`.
+
 ## Disabling it
 
 Turn the flag off in the API first (no new rows), then in the worker. Rows already
@@ -129,4 +192,5 @@ WHERE event_type = 'booking-lifecycle.recorded' AND status = 'PENDING';
 
 - A remote or managed broker: the client has no TLS or SASL configuration. The Railway
   deployment keeps the flag off (`ADR-0012`).
-- Retention of `PROCESSED` lifecycle rows: added with `P9-T02`.
+- Backfill: bookings changed before the stream was enabled are not in the topic and are
+  not counted (owner decision, `SPEC-012`).

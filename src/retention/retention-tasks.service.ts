@@ -56,6 +56,7 @@ export class RetentionTasksService {
     switch (taskName) {
       case 'auth-sessions':
       case 'idempotency-keys':
+      case 'booking-lifecycle-events':
         return this.purge(dataSource, taskName, batchSize);
       case 'storage-tasks':
         return this.drainStorageTasks(interrupted);

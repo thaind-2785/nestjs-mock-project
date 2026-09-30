@@ -1,6 +1,7 @@
 import type { RetentionWindowConfiguration } from '../config/retention.config';
 import { ExportJobStatus } from '../reports/entities/export-job.enums';
 import { OutboxEventStatus } from '../common/outbox/outbox.enums';
+import { bookingLifecycleEventTypes } from '../bookings/booking-lifecycle-event.constants';
 import { notificationEventTypes } from '../notifications/notification-event';
 import type { RetentionTaskName } from './retention.constants';
 
@@ -138,6 +139,31 @@ export const retentionDuePredicates: readonly RetentionDuePredicate[] = [
     identityColumn: 'id',
     windowHours: (windows) => windows.exportTerminalHours,
     expectedIndex: 'idx_export_jobs_operations',
+  },
+  {
+    taskName: 'booking-lifecycle-events',
+    table: 'outbox_events',
+    anchorColumn: 'available_at',
+    // The lifecycle family only, for the reason the mail predicate gives: the outbox is
+    // shared, and each family's rows belong to the task that knows their dependents.
+    // These have none - nothing references a lifecycle row - so one bounded delete is
+    // the whole task.
+    //
+    // PROCESSED only. A PENDING row is a publish still owed and a FAILED one is the
+    // evidence behind a redrive; neither is ever collected. Anchored on `available_at`
+    // for the mail predicate's reason, which for a processed row is never later than
+    // when it was processed.
+    where: `event_type IN (${bookingLifecycleEventTypes.map(() => '?').join(', ')})
+            AND status = ?
+            AND available_at <= NOW(6) - INTERVAL ? HOUR`,
+    parameters: (windows) => [
+      ...bookingLifecycleEventTypes,
+      OutboxEventStatus.Processed,
+      windows.bookingLifecycleEventHours,
+    ],
+    identityColumn: 'id',
+    windowHours: (windows) => windows.bookingLifecycleEventHours,
+    expectedIndex: 'idx_outbox_events_claim_by_type',
   },
 ];
 

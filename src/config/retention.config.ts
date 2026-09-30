@@ -119,6 +119,13 @@ const maxAttempts = 3;
 const notificationEventRetentionDays = 30;
 
 /**
+ * Relayed booking lifecycle rows. Once `PROCESSED`, their durable copy is the Kafka
+ * topic, which keeps everything (`ADR-0012`); the outbox row only has to outlive an
+ * investigation into what the relay did, which is the mail family's horizon too.
+ */
+const bookingLifecycleEventRetentionDays = 30;
+
+/**
  * How long a terminal export job's row survives after it stopped changing.
  *
  * The result lives 24 hours, and the metadata is kept a week past that, so a requester
@@ -163,6 +170,7 @@ export interface RetentionWindowConfiguration {
   /** Where a day begins. A window is a local calendar date, not a fixed interval. */
   timeZone: string;
   notificationEventHours: number;
+  bookingLifecycleEventHours: number;
   exportTerminalHours: number;
   sessionHours: number;
 }
@@ -197,6 +205,8 @@ export function createRetentionConfiguration(
     windows: {
       timeZone: environment.HOTEL_TIMEZONE,
       notificationEventHours: notificationEventRetentionDays * hoursPerDay,
+      bookingLifecycleEventHours:
+        bookingLifecycleEventRetentionDays * hoursPerDay,
       exportTerminalHours: exportTerminalRetentionHours,
       sessionHours: sessionRetentionHours,
     },

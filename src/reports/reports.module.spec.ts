@@ -11,6 +11,7 @@ import { validateEnvironment } from '../config/environment.validation';
 import { notificationEventTypes } from '../notifications/notification-event';
 import { roomExportEventTypes } from './room-export.constants';
 import { ReportsApiModule } from './reports-api.module';
+import { BookingStatsWorkerModule } from './booking-stats-worker.module';
 import { ReportsWorkerModule } from './reports-worker.module';
 import { RoomExportDispatcherService } from './room-export-dispatcher.service';
 import { ROOM_EXPORT_QUEUE, ROOM_EXPORT_QUEUE_CLIENT } from './report.tokens';
@@ -72,7 +73,37 @@ describe('report export module boundaries', () => {
       (Reflect.getMetadata('controllers', ReportsApiModule) as unknown[]).map(
         (controller) => (controller as { name: string }).name,
       ),
-    ).toEqual(['AdminExportsController']);
+    ).toEqual(['AdminExportsController', 'AdminBookingStatsController']);
+  });
+
+  it('keeps Kafka out of the API and HTTP out of the statistics consumer', () => {
+    // The API reads the read model and nothing else: a Kafka client there would couple
+    // request handling to the broker, which ADR-0012 keeps downstream of MySQL.
+    // Class providers by name, and object providers by their token and, for a class
+    // provider, the class behind it - `String()` of an object would read as
+    // "[object Object]" and prove nothing.
+    const apiProviders = providersOf(ReportsApiModule).flatMap((provider) => {
+      if (typeof provider === 'function') return [provider.name];
+      const { provide, useClass } = provider as {
+        provide?: unknown;
+        useClass?: { name: string };
+      };
+      return [String(provide), useClass?.name ?? ''];
+    });
+    expect(apiProviders).toContain('BookingStatsReportService');
+    expect(apiProviders.join(' ')).not.toMatch(/Kafka|CONSUMER|OFFSETS/);
+    const workerProviders = providersOf(BookingStatsWorkerModule).map(
+      (provider) =>
+        typeof provider === 'function'
+          ? provider.name
+          : String((provider as { provide?: unknown }).provide),
+    );
+    // The same reading is live on the worker side, where the token is expected.
+    expect(workerProviders).toContain('Symbol(BOOKING_STATS_CONSUMER)');
+    expect(importsOf(WorkerModule)).toContain(BookingStatsWorkerModule);
+    expect(
+      Reflect.getMetadata('controllers', BookingStatsWorkerModule),
+    ).toBeUndefined();
   });
 
   it('gives exports their own queue rather than the notification one', () => {

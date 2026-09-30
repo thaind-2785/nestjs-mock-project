@@ -1,9 +1,10 @@
 # PLAN-015: Booking lifecycle stream and booking statistics
 
 - Spec: `SPEC-012`; decision `ADR-0012`
-- Status: In progress (`P9-T01` complete, `P9-T02` pending)
+- Status: Complete (`P9-T01`, `P9-T02`)
 - Owner: Project owner
-- Reviewer (must be independent): independent review agent, `REVIEW-048` for `P9-T01`
+- Reviewer (must be independent): independent review agents, `REVIEW-048` for `P9-T01`,
+  `REVIEW-049` for `P9-T02`
 
 ## Constraints and risks
 
@@ -19,10 +20,10 @@
 
 ## Vertical slices
 
-| Slice    | Observable outcome                                                                                       | Files/modules                                                                                                                                                      | Migration | Tests                                                                                                                                              | Status   |
-| -------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `P9-T01` | With the flag on, every booking change reaches `hotel.booking-lifecycle.v1` through the outbox and relay | `compose.yaml`, CI readiness, `config/booking-stream.config.ts`, `bookings/booking-lifecycle-*`, `common/kafka/*`, `worker.module.ts`, `worker-bootstrap.ts`, docs | None      | Unit: payload, parser, message, relay, config, drain. Integration: service writes in transaction; relay publishes to real Kafka; outage; isolation | Complete |
-| `P9-T02` | `ADMIN-RPT-01` answers counts and projected revenue from a Kafka-fed read model; replay rebuilds it      | `reports/booking-stats-*`, migration for the read model, retention task, CLI, locales, OpenAPI                                                                     | Yes       | Unit: reducer, version guard. Integration: consumer dedupe/offset commit, replay. E2E: admin statistics journey                                    | Pending  |
+| Slice    | Observable outcome                                                                                       | Files/modules                                                                                                                                                      | Migration                  | Tests                                                                                                                                                                                               | Status   |
+| -------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `P9-T01` | With the flag on, every booking change reaches `hotel.booking-lifecycle.v1` through the outbox and relay | `compose.yaml`, CI readiness, `config/booking-stream.config.ts`, `bookings/booking-lifecycle-*`, `common/kafka/*`, `worker.module.ts`, `worker-bootstrap.ts`, docs | None                       | Unit: payload, parser, message, relay, config, drain. Integration: service writes in transaction; relay publishes to real Kafka; outage; isolation                                                  | Complete |
+| `P9-T02` | `ADMIN-RPT-01` answers counts and projected revenue from a Kafka-fed read model; replay rebuilds it      | `reports/booking-stats-*`, `reports/kafka-booking-stats-*`, `cli/rebuild-booking-stats.ts`, retention task, locales, docs                                          | `CreateBookingStatsSchema` | Unit: parser, aggregation, report rules, projection, rebuild order. Integration: version guard, relay -> topic -> facts, poison message, rebuild, `EXPLAIN`, retention. E2E: admin journey and RBAC | Active   |
 
 ## Mentor-feedback sweep (`P9-T01`)
 
@@ -44,13 +45,43 @@
 - Observability: batch, failure, invalid-event, topic and startup events are
   structured and carry no payload values.
 
+## Mentor-feedback sweep (`P9-T02`)
+
+- Constants and contracts: range cap, chunk sizes, revenue statuses, groupings and
+  rebuild codes in `booking-stats.constants.ts`; row, message, report and handler types
+  in `booking-stats.types.ts`; ports in `booking-stats-consumer.ts` and
+  `booking-stats-offsets.ts`; consumer bounds named in `booking-stream.config.ts` and
+  checked by `assertBookingStreamBounds`. The consumer's parser lives with the
+  producer's contract (`booking-lifecycle-message.ts`) rather than being redeclared.
+- Query shape: the report selects only `period, status, currency, COUNT, SUM` over
+  `idx_booking_stats_facts_stay`, asserted `Using index` by `EXPLAIN` in the
+  integration suite; `asOf` is `MAX` over `idx_booking_stats_facts_occurred`. The write
+  cost is one entry per index per applied event.
+- Batching: one transaction per fetched batch, deduplicated to the newest version per
+  booking, multi-row upserts of 500; the rebuild deletes in bounded batches. No per-row
+  statements.
+- Responsibility and reuse: the controller only maps the query; the service owns the
+  flag and range rules; aggregation is a pure helper; the topic-ensure helper is shared
+  by relay and consumer; retention reuses the generic `purge` path.
+- Locks: rows of every upsert are sorted by booking ID; the read model has no foreign
+  key, so the consumer never locks a transactional table.
+- Observability: `booking_stats_batch_applied`, `booking_stats_message_skipped`
+  (position and code only), `booking_stats_consumer_error`,
+  `booking_stats_consumer_connect_failed`, `booking_stats_rebuilt`.
+
 ## Verification commands
 
 - Focused: `npx jest src/bookings src/config src/common/kafka src/worker`
-- Focused integration: `npx jest --config test/jest-integration.json booking-lifecycle`
+- Focused integration: `npx jest --config test/jest-integration.json booking-lifecycle booking-stats retention`
+- Focused e2e: `npx jest --config test/jest-e2e.json booking-stats retention-worker`
 - Handoff: `npm run verify` (CI starts Kafka through `npm run compose:ci`)
 
 ## Documentation / OpenAPI impact
+
+`P9-T02`: `ADMIN-RPT-01` appears in Swagger under "Admin reports" through its DTOs;
+English and Vietnamese messages for its three error codes; `database.md`, the Draw.io
+operations page, the retention runbook, and the statistics sections of the stream
+runbook.
 
 `P9-T01`: no OpenAPI change. `SPEC-012`, `ADR-0012`, this plan, roadmap Phase 9,
 feature scope, endpoint catalog `EVT-05`, system design, runbook
@@ -75,3 +106,7 @@ and API. Rollback: flag off in the API, then in the worker; rows stay durable in
 - The parser validates against an explicit `.v1` transition set (`REVIEW-048` R48-09).
 - The API container does not wait for Kafka in Compose; only the worker does
   (`REVIEW-048` R48-07).
+- `P9-T02` buckets by stay check-in date and does not backfill (owner decision,
+  2026-09-30).
+- The consumer applies state with a version guard instead of recording processed event
+  IDs (`ADR-0012` addendum).

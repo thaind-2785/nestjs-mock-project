@@ -6,9 +6,13 @@ import { OutboxEvent } from '../common/outbox/outbox-event.entity';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
 import { bookingsConfig } from '../config/bookings.config';
+import { bookingStreamConfig } from '../config/booking-stream.config';
 import { reportsConfig } from '../config/reports.config';
 import { DatabaseModule } from '../database/database.module';
+import { AdminBookingStatsController } from './admin-booking-stats.controller';
 import { AdminExportsController } from './admin-exports.controller';
+import { BookingStatsQueryRepository } from './booking-stats-query.repository';
+import { BookingStatsReportService } from './booking-stats-report.service';
 import { ExportJob } from './entities/export-job.entity';
 import { ExportJobRepository } from './export-job.repository';
 import { RoomExportCreateRateLimitGuard } from './room-export-create-rate-limit.guard';
@@ -36,13 +40,15 @@ import { RoomExportViewService } from './room-export-view.service';
     // booking configuration already owns; a second value would let one operation
     // expire a key the other still considers claimable.
     ConfigModule.forFeature(bookingsConfig),
+    // Gates the statistics endpoint: without the stream nothing maintains the read model.
+    ConfigModule.forFeature(bookingStreamConfig),
     DatabaseModule,
     IdempotencyModule,
     ObjectStorageModule,
     RateLimitModule,
     TypeOrmModule.forFeature([ExportJob, OutboxEvent, IdempotencyKey]),
   ],
-  controllers: [AdminExportsController],
+  controllers: [AdminExportsController, AdminBookingStatsController],
   providers: [
     RoomExportService,
     ExportJobRepository,
@@ -52,6 +58,9 @@ import { RoomExportViewService } from './room-export-view.service';
     // Presign only. The API never uploads, deletes, or reads an export object; it
     // signs a short-lived GET for a result the worker already published.
     RoomExportStorageService,
+    // Reads the Kafka-fed read model only; the API holds no Kafka client.
+    BookingStatsQueryRepository,
+    BookingStatsReportService,
   ],
   exports: [ConfigModule],
 })

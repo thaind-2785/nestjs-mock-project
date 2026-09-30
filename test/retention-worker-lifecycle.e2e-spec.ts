@@ -11,9 +11,15 @@ import { createTypeOrmOptions } from '../src/database/database.options';
 import { ExportJobStatus } from '../src/reports/entities/export-job.enums';
 import { OutboxEventStatus } from '../src/common/outbox/outbox.enums';
 import { roomExportEventTypes } from '../src/reports/room-export.constants';
-import { retentionErrorCodes } from '../src/retention/retention.constants';
+import {
+  retentionErrorCodes,
+  retentionTaskNames,
+} from '../src/retention/retention.constants';
 import { localDayStart } from '../src/retention/retention-window';
 import { applicationMigrations } from './fixtures/application-migrations';
+
+/** One run per task per window; counted from the list so a new task cannot drift. */
+const taskCount = retentionTaskNames.length;
 
 jest.setTimeout(180_000);
 
@@ -148,15 +154,17 @@ describe('P7-T04 retention scheduler as a process', () => {
     // reaches five while the last task is still working, and asserting every row is
     // `SUCCEEDED` there fails intermittently on the test that proves the singleton.
     await waitFor(
-      async () => (await countRunsWithStatus('SUCCEEDED')) === 5,
+      async () => (await countRunsWithStatus('SUCCEEDED')) === taskCount,
       60_000,
     );
 
     const rows = await readRuns();
-    // Five tasks, five windows, one row each - whichever process won. Two rows for one
+    // Every task, one window each, one row each - whichever process won. Two rows for one
     // task would mean two processes deleting from the same table at once.
-    expect(rows).toHaveLength(5);
-    expect(new Set(rows.map((row) => String(row.task_name))).size).toBe(5);
+    expect(rows).toHaveLength(taskCount);
+    expect(new Set(rows.map((row) => String(row.task_name))).size).toBe(
+      taskCount,
+    );
     expect(await count('auth_sessions')).toBe(0);
   });
 
@@ -168,7 +176,7 @@ describe('P7-T04 retention scheduler as a process', () => {
     const worker = startWorker();
     await waitForLog(worker, 'retention_scheduler_started', 60_000);
     await waitFor(
-      async () => (await countRunsWithStatus('SUCCEEDED')) === 5,
+      async () => (await countRunsWithStatus('SUCCEEDED')) === taskCount,
       60_000,
     );
 
@@ -200,7 +208,7 @@ describe('P7-T04 retention scheduler as a process', () => {
     // Every task named, each with the pair that separates a busy night from a stopped
     // one - and nothing that would leak: no object key, no email, no row content.
     const tasks = (sample as { tasks: Array<Record<string, unknown>> }).tasks;
-    expect(tasks).toHaveLength(5);
+    expect(tasks).toHaveLength(taskCount);
     for (const task of tasks) {
       expect(task).toHaveProperty('due');
       expect(task).toHaveProperty('oldestOverdueMs');
@@ -270,7 +278,7 @@ describe('P7-T04 retention scheduler as a process', () => {
     // signals it individually.
     startWorker();
     await waitFor(
-      async () => (await countRunsWithStatus('SUCCEEDED')) === 5,
+      async () => (await countRunsWithStatus('SUCCEEDED')) === taskCount,
       120_000,
     );
 
@@ -279,7 +287,7 @@ describe('P7-T04 retention scheduler as a process', () => {
     // again beside the first, which is the difference between recovery and two workers
     // deleting from one table at once.
     expect(Number(recovered.attempts)).toBe(2);
-    expect(await countRuns()).toBe(5);
+    expect(await countRuns()).toBe(taskCount);
     // And the job is gone exactly once. The ledger accumulates across attempts, so a
     // second deletion of the same row - or a replayed window - would read as two here
     // even though the table can only ever reach zero.

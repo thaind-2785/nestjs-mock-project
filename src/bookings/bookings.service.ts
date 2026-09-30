@@ -15,6 +15,7 @@ import { RoomTime } from '../rooms/entities/room-time.entity';
 import { RoomType } from '../rooms/entities/room-type.entity';
 import { lockRoom, type LockedRoom } from '../rooms/room-lock';
 import { bookingsConfig } from '../config/bookings.config';
+import { hotelDateSpanDays } from '../common/dates/hotel-date-span';
 import { ApplicationException } from '../common/errors/application.exception';
 import { BookingActorType, BookingStatus } from './entities/booking.enums';
 import { BookingStatusHistory } from './entities/booking-status-history.entity';
@@ -1152,11 +1153,7 @@ function toUserBookingResponse(booking: Booking): UserBookingResponse {
     },
     checkIn: booking.checkIn,
     checkOut: booking.checkOut,
-    nights: Math.round(
-      (Date.parse(`${booking.checkOut}T00:00:00Z`) -
-        Date.parse(`${booking.checkIn}T00:00:00Z`)) /
-        86_400_000,
-    ),
+    nights: hotelDateSpanDays(booking.checkIn, booking.checkOut),
     status: booking.status,
     price: { amount: Number(booking.priceAmount), currency: booking.currency },
     rejectionReason: booking.rejectionReason,

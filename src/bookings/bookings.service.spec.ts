@@ -1,7 +1,16 @@
 import { DataSource, EntityManager } from 'typeorm';
 import { IdempotencyKeyStatus } from '../common/idempotency/idempotency.enums';
 import { IdempotencyRepository } from '../common/idempotency/idempotency.repository';
+import { createBookingStreamConfiguration } from '../config/booking-stream.config';
+import { validateEnvironment } from '../config/environment.validation';
+import { BookingLifecycleRecorder } from './booking-lifecycle-recorder';
 import { BookingsService } from './bookings.service';
+
+function disabledLifecycle(): BookingLifecycleRecorder {
+  return new BookingLifecycleRecorder(
+    createBookingStreamConfiguration(validateEnvironment({})),
+  );
+}
 
 describe('BookingsService', () => {
   it('replays a completed request before applying today-date policy again', async () => {
@@ -41,6 +50,7 @@ describe('BookingsService', () => {
         hotelTimezone: 'Asia/Ho_Chi_Minh',
         createRateLimit: { max: 10, windowSeconds: 60 },
       },
+      disabledLifecycle(),
     );
     const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();
 
@@ -89,6 +99,7 @@ describe('BookingsService', () => {
         hotelTimezone: 'Asia/Ho_Chi_Minh',
         createRateLimit: { max: 10, windowSeconds: 60 },
       },
+      disabledLifecycle(),
     );
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
 

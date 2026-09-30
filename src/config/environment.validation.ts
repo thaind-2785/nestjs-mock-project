@@ -28,6 +28,10 @@ export type MailLocale = (typeof mailLocales)[number];
  */
 export const notificationLeaseSafetyMarginMs = 5_000;
 
+/** One or more `host:port` entries separated by commas, with no scheme or path. */
+const kafkaBrokerListPattern =
+  /^[A-Za-z0-9.-]{1,253}:[0-9]{1,5}(?:,[A-Za-z0-9.-]{1,253}:[0-9]{1,5})*$/;
+
 // Renamed variables fail closed with their replacement rather than being ignored,
 // so a stale deployment cannot silently fall back to a default.
 const obsoleteVariableReplacements: Readonly<Record<string, string>> = {
@@ -123,6 +127,8 @@ export interface EnvironmentVariables extends Record<string, unknown> {
   REPORT_EXPORT_QUEUE_PREFIX: string;
   REPORT_EXPORT_CREATE_RATE_LIMIT_MAX: number;
   REPORT_EXPORT_CREATE_RATE_LIMIT_WINDOW_SECONDS: number;
+  BOOKING_STREAM_ENABLED: boolean;
+  KAFKA_BROKERS?: string;
 }
 
 const environmentSchema = Joi.object<EnvironmentVariables>({
@@ -543,6 +549,28 @@ const environmentSchema = Joi.object<EnvironmentVariables>({
     .min(60)
     .max(3_600)
     .default(3_600),
+  // The booking lifecycle stream is optional scope and ships disabled. Read per process,
+  // like the export flag: the API writes lifecycle outbox rows only while it is on, and
+  // the worker opens a Kafka connection only while it is on, so the rollout enables the
+  // worker first and the API second.
+  BOOKING_STREAM_ENABLED: Joi.boolean().default(false),
+  // A comma-separated `host:port` bootstrap list. It carries no credential: the broker
+  // this slice supports is the unauthenticated Compose one, and ADR-0012 records that a
+  // remote broker needs TLS and SASL first. No production default, so a deployment that
+  // enables the stream must say where the broker is; `checkCrossFieldBounds` requires it.
+  KAFKA_BROKERS: Joi.alternatives().conditional('NODE_ENV', {
+    is: 'production',
+    then: Joi.string()
+      .trim()
+      .max(1_024)
+      .pattern(kafkaBrokerListPattern)
+      .optional(),
+    otherwise: Joi.string()
+      .trim()
+      .max(1_024)
+      .pattern(kafkaBrokerListPattern)
+      .default('127.0.0.1:9094'),
+  }),
 }).unknown(true);
 
 export function validateEnvironment(
@@ -644,6 +672,11 @@ function checkCrossFieldBounds(environment: EnvironmentVariables): string[] {
     environment.NOTIFICATION_BACKOFF_INITIAL_MS
   ) {
     unbounded.push('NOTIFICATION_BACKOFF_MAX_MS');
+  }
+  // A stream switched on with nowhere to publish would leave the relay retrying a
+  // broker that was never configured, which reads as an outage rather than a mistake.
+  if (environment.BOOKING_STREAM_ENABLED && !environment.KAFKA_BROKERS) {
+    unbounded.push('KAFKA_BROKERS');
   }
   return unbounded;
 }

@@ -1,6 +1,10 @@
 import { INestApplicationContext, Logger, LoggerService } from '@nestjs/common';
 import { ConfigType } from '@nestjs/config';
 import {
+  bookingStreamConfig,
+  describeBookingStreamConfiguration,
+} from './config/booking-stream.config';
+import {
   describeNotificationsConfiguration,
   notificationsConfig,
 } from './config/notifications.config';
@@ -41,10 +45,14 @@ export async function bootstrapNotificationWorker(
   const configuration = context.get<ConfigType<typeof notificationsConfig>>(
     notificationsConfig.KEY,
   );
+  const bookingStream = context.get<ConfigType<typeof bookingStreamConfig>>(
+    bookingStreamConfig.KEY,
+  );
   const drainMs = workerDrainMs(
     configuration,
     context.get<ConfigType<typeof reportsConfig>>(reportsConfig.KEY),
     context.get<ConfigType<typeof retentionConfig>>(retentionConfig.KEY),
+    bookingStream,
   );
 
   let stopping = false;
@@ -82,6 +90,10 @@ export async function bootstrapNotificationWorker(
     // above, which is one input to it rather than the bound the process will use.
     processDrainMs: drainMs,
   });
+  logger.log({
+    event: 'booking_lifecycle_relay_configured',
+    ...describeBookingStreamConfiguration(bookingStream),
+  });
   return context;
 }
 
@@ -112,6 +124,7 @@ export function workerDrainMs(
   notifications: ConfigType<typeof notificationsConfig>,
   reports: ConfigType<typeof reportsConfig>,
   retention: ConfigType<typeof retentionConfig>,
+  bookingStream: ConfigType<typeof bookingStreamConfig>,
 ): number {
   // The maximum across the families this process actually hosts. A family that is
   // switched off contributes nothing, because it has no work to drain - and including it
@@ -129,6 +142,8 @@ export function workerDrainMs(
     notifications.worker.shutdownDrainMs,
     reports.enabled ? reports.worker.shutdownDrainMs : 0,
     retention.run.shutdownDrainMs,
+    // One bounded publish plus its finalize, and only while the relay exists.
+    bookingStream.enabled ? bookingStream.relay.shutdownDrainMs : 0,
   );
 }
 

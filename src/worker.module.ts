@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BookingLifecycleStreamModule } from './bookings/booking-lifecycle-stream.module';
 import { AppConfigModule } from './config/app-config.module';
 import { DatabaseModule } from './database/database.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -20,7 +21,11 @@ import { RetentionWorkerModule } from './retention/retention-worker.module';
  * row to ask for it, so it starts because a clock says the day turned rather than because
  * something happened. It shares the same rule as the other two - its own window, its own
  * lease, its own failure budget - and the drain bound below is the maximum across all
- * three.
+ * of them.
+ *
+ * The booking lifecycle relay is the fourth (`ADR-0012`): a third outbox family, with
+ * its own allowlist and its own transport, Kafka rather than BullMQ. It exists only
+ * while `BOOKING_STREAM_ENABLED` is on.
  */
 @Module({
   imports: [
@@ -29,6 +34,7 @@ import { RetentionWorkerModule } from './retention/retention-worker.module';
     NotificationsModule,
     ReportsWorkerModule,
     RetentionWorkerModule,
+    BookingLifecycleStreamModule,
   ],
 })
 export class WorkerModule {}

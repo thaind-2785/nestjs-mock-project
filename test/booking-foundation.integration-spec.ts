@@ -14,6 +14,8 @@ import { Booking } from '../src/bookings/entities/booking.entity';
 import { IdempotencyKey } from '../src/common/idempotency/idempotency-key.entity';
 import { OutboxEvent } from '../src/common/outbox/outbox-event.entity';
 import { BookingsService } from '../src/bookings/bookings.service';
+import { BookingLifecycleRecorder } from '../src/bookings/booking-lifecycle-recorder';
+import { createBookingStreamConfiguration } from '../src/config/booking-stream.config';
 import { BookingRoomTimeUsageRepository } from '../src/bookings/room-time-usage.repository';
 import { BookingCreateResponse } from '../src/bookings/booking-create.types';
 import { createBookingsConfiguration } from '../src/config/bookings.config';
@@ -90,6 +92,14 @@ describe('Phase 4 booking foundation persistence', () => {
       dataSource,
       new IdempotencyRepository(createIdempotencyConfiguration(environment)),
       createBookingsConfiguration(environment),
+      // The stream is off here whatever a developer's `.env` says: these cases count
+      // outbox rows, and the lifecycle family has its own suite.
+      new BookingLifecycleRecorder(
+        createBookingStreamConfiguration({
+          ...environment,
+          BOOKING_STREAM_ENABLED: false,
+        }),
+      ),
     );
     usage = new BookingRoomTimeUsageRepository();
     roomTimes = new RoomTimesService(

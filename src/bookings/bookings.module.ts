@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
+import { bookingStreamConfig } from '../config/booking-stream.config';
 import { bookingsConfig } from '../config/bookings.config';
 import { DatabaseModule } from '../database/database.module';
 import { BookingChangeHistory } from './entities/booking-change-history.entity';
@@ -13,12 +14,14 @@ import { OutboxEvent } from '../common/outbox/outbox-event.entity';
 import { BookingCreateRateLimitGuard } from './booking-create-rate-limit.guard';
 import { BookingsController } from './bookings.controller';
 import { AdminBookingsController } from './admin-bookings.controller';
+import { BookingLifecycleRecorder } from './booking-lifecycle-recorder';
 import { BookingsService } from './bookings.service';
 
 /** P4-T02 exposes the first booking mutation after P4-T01 established its schema. */
 @Module({
   imports: [
     ConfigModule.forFeature(bookingsConfig),
+    ConfigModule.forFeature(bookingStreamConfig),
     DatabaseModule,
     IdempotencyModule,
     RateLimitModule,
@@ -31,6 +34,10 @@ import { BookingsService } from './bookings.service';
     ]),
   ],
   controllers: [BookingsController, AdminBookingsController],
-  providers: [BookingsService, BookingCreateRateLimitGuard],
+  providers: [
+    BookingsService,
+    BookingLifecycleRecorder,
+    BookingCreateRateLimitGuard,
+  ],
 })
 export class BookingsModule {}
